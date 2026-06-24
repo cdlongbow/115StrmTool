@@ -25,6 +25,7 @@ wheels/
 !plugins.v2/p115strmhelper/wheels/
 !plugins.v2/p123strmhelper/wheels/
 !plugins.v2/p123disk/wheels/
+!combined/wheels/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
@@ -168,7 +169,10 @@ test_pluguns/
 # MacOS
 .DS_Store
 
-# AI
+# Runtime files
+combined/config.json
+combined/data/
+combined/logs/
 CLAUDE.md
 !/CLAUDE.md
 .claude/

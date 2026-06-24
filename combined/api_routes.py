@@ -1,0 +1,274 @@
+import json
+import threading
+from pathlib import Path
+from typing import Any, Dict, List
+from urllib.parse import urlparse
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+import httpx
+
+from logger import logger
+from config_manager import config_manager
+from database import db
+from p115_client_wrapper import P115ClientWrapper
+
+router = APIRouter(prefix="/api")
+
+_client: P115ClientWrapper = None
+
+
+def set_client(client: P115ClientWrapper):
+    global _client
+    _client = client
+
+
+def get_client() -> P115ClientWrapper:
+    if _client is None:
+        raise HTTPException(status_code=503, detail="115 客户端未初始化，请先配置 Cookie")
+    if not _client.is_ready():
+        raise HTTPException(status_code=503, detail="115 客户端未就绪，请检查 Cookie 配置")
+    return _client
+
+
+# ── 配置 ──
+
+
+@router.get("/config")
+async def get_config() -> Dict[str, Any]:
+    return config_manager.get()
+
+
+class UpdateConfigRequest(BaseModel):
+    admin_host: str = None
+    admin_port: int = None
+    redirect_host: str = None
+    redirect_port: int = None
+    strm_url_prefix: str = None
+    cookie: str = None
+    open_api: Dict = None
+    paths: List[Dict] = None
+    sync_cron: str = None
+    sync_thread_count: int = None
+    database_path: str = None
+
+
+@router.post("/config")
+async def update_config(req: UpdateConfigRequest) -> Dict[str, Any]:
+    updates = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
+    if "cookie" in updates and updates["cookie"]:
+        get_client().update_cookie(updates["cookie"])
+    if updates:
+        config_manager.update(updates)
+        logger.info("配置已更新")
+    return config_manager.get()
+
+
+# ── 状态 ──
+
+
+@router.get("/status")
+async def get_status() -> Dict[str, Any]:
+    stats = db.get_stats()
+    config = config_manager.get()
+    client_ready = _client is not None and _client.is_ready()
+    user_info = None
+    storage = None
+    if client_ready:
+        try:
+            user_info = _client.get_user_info()
+            storage = _client.get_storage_info()
+        except Exception:
+            pass
+    return {
+        "client_ready": client_ready,
+        "stats": stats,
+        "user_info": user_info,
+        "storage": storage,
+        "config": config,
+    }
+
+
+# ── 浏览目录 ──
+
+
+@router.get("/browse")
+async def browse_directory(pid: str = "0", path: str = ""):
+    client = get_client()
+    try:
+        if path:
+            fs = client.get_filesystem()
+            if fs:
+                entries = fs.list(path)
+            else:
+                entries = client.list_files(pid)
+        else:
+            entries = client.list_files(pid)
+        items = []
+        if isinstance(entries, list):
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                items.append(
+                    {
+                        "id": e.get("id") or e.get("pid", ""),
+                        "name": e.get("n") or e.get("name", ""),
+                        "is_dir": e.get("ico") == 1 or e.get("is_dir", False),
+                        "size": e.get("s") or e.get("size", 0),
+                        "pickcode": e.get("pc") or e.get("pickcode", ""),
+                        "updated_at": e.get("te") or e.get("updated_at", ""),
+                    }
+                )
+        return {"items": items, "path": path or "/"}
+    except Exception as e:
+        logger.error("浏览目录失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"浏览目录失败: {e}")
+
+
+# ── 同步 ──
+
+
+_sync_in_progress = False
+
+
+@router.post("/sync/start")
+async def start_full_sync() -> Dict[str, Any]:
+    global _sync_in_progress
+    if _sync_in_progress:
+        return {"status": "error", "message": "同步正在进行中"}
+    _sync_in_progress = True
+    try:
+        config = config_manager.get()
+        from strm_generator import get_strm_generator
+        gen = get_strm_generator(_client, config.get("strm_url_prefix", ""))
+        result = gen.full_sync(config.get("paths", []))
+        return {"status": "completed", **result}
+    except Exception as e:
+        logger.error("同步异常: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}
+    finally:
+        _sync_in_progress = False
+
+
+@router.post("/sync/cancel")
+async def cancel_sync() -> Dict[str, Any]:
+    from strm_generator import get_strm_generator
+    gen = get_strm_generator(_client)
+    gen.cancel()
+    return {"status": "cancelled"}
+
+
+@router.get("/sync/history")
+async def get_sync_history(limit: int = 20) -> List[Dict]:
+    return db.get_sync_history(limit)
+
+
+# ── STRM 管理 ──
+
+
+@router.get("/strm/list")
+async def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
+    offset = (page - 1) * page_size
+    cursor = db.conn.execute(
+        "SELECT * FROM files WHERE status='active' ORDER BY id DESC LIMIT ? OFFSET ?",
+        (page_size, offset),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    total = db.count_active_files()
+    return {"items": rows, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/strm/count")
+async def count_strm_files() -> Dict:
+    return {"total": db.count_active_files()}
+
+
+# ── 分享转存 ──
+
+
+class ShareTransferRequest(BaseModel):
+    share_url: str
+    target_path: str = "/"
+
+
+@router.post("/share/transfer")
+async def share_transfer(req: ShareTransferRequest) -> Dict:
+    client = get_client()
+    try:
+        db.add_share_transfer(req.share_url, req.target_path)
+        logger.info("分享转存请求已记录: %s -> %s", req.share_url, req.target_path)
+        return {"status": "added", "share_url": req.share_url, "target_path": req.target_path}
+    except Exception as e:
+        logger.error("添加分享转存失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 离线下载 ──
+
+
+class OfflineTaskRequest(BaseModel):
+    url: str
+    name: str = ""
+    save_path: str = "/"
+
+
+@router.get("/offline/list")
+async def get_offline_tasks() -> List[Dict]:
+    cursor = db.conn.execute(
+        "SELECT * FROM offline_tasks ORDER BY id DESC LIMIT 50"
+    )
+    return [dict(r) for r in cursor.fetchall()]
+
+
+@router.post("/offline/add")
+async def add_offline_task(req: OfflineTaskRequest) -> Dict:
+    try:
+        db.add_offline_task(req.url, req.name, req.save_path)
+        logger.info("离线任务已添加: %s (%s)", req.name or req.url, req.save_path)
+        return {"status": "added", "url": req.url}
+    except Exception as e:
+        logger.error("添加离线任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 二维码登录 ──
+
+
+@router.get("/qrcode")
+async def get_qrcode() -> Dict:
+    client = get_client()
+    try:
+        result = client.get_qrcode()
+        if result:
+            return result
+        raise HTTPException(status_code=500, detail="获取二维码失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qrcode/check")
+async def check_qrcode(uid: str) -> Dict:
+    client = get_client()
+    try:
+        result = client.check_qrcode(uid)
+        if result:
+            return result
+        return {"status": "pending"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── 日志 ──
+
+
+@router.get("/logs")
+async def get_logs(lines: int = 200) -> Dict:
+    log_path = Path("logs/p115-strm-helper.log")
+    if not log_path.exists():
+        return {"logs": []}
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+        log_lines = content.strip().split("\n")
+        return {"logs": log_lines[-lines:]}
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"读取日志失败: {e}")

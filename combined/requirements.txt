@@ -1,0 +1,7 @@
+fastapi>=0.110.0
+uvicorn>=0.27.0
+httpx[http2]
+httpx>=0.27.0
+websockets>=12.0
+# p115client (Python 3.12+): pip install wheels/*.whl
+# Windows 系统托盘: pip install pystray Pillow (打包 exe 时自动包含)

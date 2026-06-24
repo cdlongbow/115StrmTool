@@ -1,0 +1,47 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install core dependencies
+        run: |
+          pip install -U pip
+          pip install fastapi uvicorn httpx websockets pywin32
+
+      - name: Install p115client from local wheels
+        run: |
+          pip install .\combined\wheels\*.whl
+        continue-on-error: true
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build executable
+        run: python combined/build_exe.py
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaServiceHub-Windows
+          path: dist/MediaServiceHub.exe
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/MediaServiceHub.exe
+          generate_release_notes: true

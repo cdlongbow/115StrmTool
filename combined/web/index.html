@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>媒体服务综合管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;color:#333}
+.nav{background:#1a73e8;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.nav h1{font-size:18px;font-weight:500;margin-right:16px}
+.nav a{color:#fff;text-decoration:none;font-size:13px;opacity:.8;cursor:pointer;padding:4px 10px;border-radius:4px}
+.nav a:hover,.nav a.active{opacity:1;background:rgba(255,255,255,.15)}
+.container{max-width:1100px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);padding:24px;margin-bottom:16px}
+.card h2{font-size:16px;margin-bottom:16px;color:#1a73e8}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:#555}
+.form-group .hint{font-size:12px;color:#999;margin-top:2px}
+.form-group input,.form-group textarea{width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:4px;font-size:14px;outline:none}
+.form-group input:focus,.form-group textarea:focus{border-color:#1a73e8}
+.form-group textarea{min-height:60px;font-family:"Courier New",monospace;font-size:13px}
+.form-row{display:flex;gap:12px}
+.form-row .form-group{flex:1}
+.btn{padding:8px 20px;border:none;border-radius:4px;font-size:14px;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.btn-primary{background:#1a73e8;color:#fff}
+.btn-success{background:#34a853;color:#fff}
+.btn-danger{background:#ea4335;color:#fff}
+.btn-outline{background:transparent;border:1px solid #ddd;color:#555}
+.btn-sm{padding:6px 10px;font-size:12px;border:none;border-radius:3px;cursor:pointer;white-space:nowrap}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.stat-card{text-align:center;padding:20px;border-radius:8px;background:#f8f9fa}
+.stat-card .num{font-size:26px;font-weight:700;color:#1a73e8}
+.stat-card .label{font-size:13px;color:#666;margin-top:4px}
+.stat-card .sub{font-size:11px;color:#999;margin-top:2px}
+.log-box{background:#1e1e1e;color:#e0e0e0;font-family:"Courier New",monospace;font-size:12px;padding:16px;border-radius:4px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.log-box .info{color:#89d185}
+.log-box .warning{color:#ffd54f}
+.log-box .error{color:#f28b82}
+.switch-group{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.switch{position:relative;display:inline-block;width:44px;height:24px}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;transition:.3s;border-radius:24px}
+.switch .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;transition:.3s;border-radius:50%}
+.switch input:checked+.slider{background:#1a73e8}
+.switch input:checked+.slider:before{transform:translateX(20px)}
+.status-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:12px;font-size:13px}
+.status-tag.running{background:#e6f4ea;color:#1e7e34}
+.status-tag.stopped{background:#fce8e6;color:#c5221f}
+.status-tag .dot{width:8px;height:8px;border-radius:50%}
+.status-tag.running .dot{background:#34a853}
+.status-tag.stopped .dot{background:#ea4335}
+.service-bar{display:flex;gap:24px;align-items:center;padding:16px;border-radius:8px;margin-bottom:16px;background:#f8f9fa}
+.path-entry{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+.path-entry .path-wrap{flex:1;display:flex;gap:4px}
+.path-entry input{flex:1;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid #eee}
+th{background:#f8f9fa;font-weight:600;color:#555}
+tr:hover{background:#f5f5f5}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 24px;border-radius:6px;color:#fff;font-size:14px;z-index:9999;opacity:0;transform:translateY(20px);transition:all .3s}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{background:#34a853}
+.toast.error{background:#ea4335}
+.toast.info{background:#1a73e8}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>媒体服务综合管理</h1>
+  <a class="active" data-tab="dashboard">概览</a>
+  <a data-tab="emby-config">Emby 配置</a>
+  <a data-tab="p115-config">P115 配置</a>
+  <a data-tab="sync">同步</a>
+  <a data-tab="strm">STRM</a>
+  <a data-tab="logs">日志</a>
+</div>
+
+<div class="container">
+
+<!-- 概览 -->
+<div id="tab-dashboard" class="tab-content active">
+  <div class="grid-3">
+    <div class="stat-card"><div class="num" id="svcEmby">-</div><div class="label">Emby 代理</div><div class="sub" id="svcEmbySub">检测中...</div></div>
+    <div class="stat-card"><div class="num" id="svcP115">-</div><div class="label">P115 302 跳转</div><div class="sub" id="svcP115Sub">检测中...</div></div>
+    <div class="stat-card"><div class="num" id="svcStrmFiles">-</div><div class="label">STRM 文件数</div><div class="sub" id="svcStrmSub">-</div></div>
+  </div>
+</div>
+
+<!-- Emby 配置 -->
+<div id="tab-emby-config" class="tab-content">
+  <div class="card">
+    <div class="switch-group">
+      <label class="switch"><input type="checkbox" id="emby_enabled"><span class="slider"></span></label>
+      <span class="switch-label">启用 Emby 302 反向代理</span>
+    </div>
+    <div class="form-group">
+      <label>Emby 服务器地址</label>
+      <input type="text" id="emby_host" placeholder="http://192.168.2.100:8096">
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>监听地址</label><input type="text" id="emby_proxy_host" placeholder="0.0.0.0"></div>
+      <div class="form-group"><label>监听端口</label><input type="number" id="emby_proxy_port" placeholder="8097"></div>
+    </div>
+    <div class="form-group">
+      <label>顶置路径规则</label>
+      <textarea id="emby_pin_rules" rows="3" placeholder="每行一条：路径前缀 => 目标URL"></textarea>
+    </div>
+    <div class="switch-group">
+      <label class="switch"><input type="checkbox" id="emby_external_player_url"><span class="slider"></span></label>
+      <span class="switch-label">启用外部播放器</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary" onclick="saveEmbyConfig()">保存配置</button>
+      <button class="btn btn-success" onclick="restartEmby()">重启 Emby 代理</button>
+    </div>
+  </div>
+</div>
+
+<!-- P115 配置 -->
+<div id="tab-p115-config" class="tab-content">
+  <div class="card">
+    <div class="switch-group">
+      <label class="switch"><input type="checkbox" id="p115_enabled"><span class="slider"></span></label>
+      <span class="switch-label">启用 P115 STRM 助手</span>
+    </div>
+    <div class="form-group">
+      <label>115 Cookie</label>
+      <textarea id="p115_cookie" rows="2" placeholder="粘贴 115 Cookie">你的115cookie填写在这里</textarea>
+      <div class="hint">登录 115 网页版后，从浏览器开发者工具中复制 Cookie</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>302 跳转地址</label><input type="text" id="p115_redirect_host" placeholder="0.0.0.0"></div>
+      <div class="form-group"><label>302 跳转端口</label><input type="number" id="p115_redirect_port" placeholder="3333"></div>
+    </div>
+    <div class="form-group">
+      <label>STRM URL 前缀</label>
+      <input type="text" id="p115_strm_url_prefix" placeholder="http://localhost:3333">
+      <div class="hint">STRM 文件中写入的访问地址，需要能被 Emby 等播放器访问</div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>路径映射</h2>
+    <div id="p115_pathMappings"></div>
+    <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
+  </div>
+  <div class="card" style="display:flex;gap:8px">
+    <button class="btn btn-primary" onclick="saveP115Config()">保存配置</button>
+  </div>
+</div>
+
+<!-- 同步 -->
+<div id="tab-sync" class="tab-content">
+  <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-success" onclick="startFullSync()">启动全量同步</button>
+    <button class="btn btn-danger" onclick="cancelSync()">取消同步</button>
+  </div>
+  <div class="card"><h2>同步记录</h2><div id="syncHistory"><p>加载中...</p></div></div>
+</div>
+
+<!-- STRM -->
+<div id="tab-strm" class="tab-content">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">STRM 文件列表</h2>
+      <span id="strmCount"></span>
+    </div>
+    <div class="table-wrap" id="strmTable"><p>加载中...</p></div>
+  </div>
+</div>
+
+<!-- 日志 -->
+<div id="tab-logs" class="tab-content">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">运行日志</h2>
+      <button class="btn btn-outline" onclick="refreshLogs()">刷新</button>
+    </div>
+    <div class="log-box" id="logBox">加载中...</div>
+  </div>
+</div>
+
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+let currentConfig = {};
+let p115Paths = [];
+
+document.querySelectorAll('.nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(d => d.classList.remove('active'));
+    document.getElementById('tab-' + a.dataset.tab).classList.add('active');
+    if (a.dataset.tab === 'logs') refreshLogs();
+    if (a.dataset.tab === 'sync') document.getElementById('syncHistory').innerHTML = '<p>加载中...</p>';
+    if (a.dataset.tab === 'strm') listStrmFiles();
+  });
+});
+
+function loadConfig() {
+  fetch('/admin/api/config').then(r => r.json()).then(config => {
+    currentConfig = config;
+    loadEmbyConfig(config.emby || {});
+    loadP115Config(config.p115 || {});
+    updateDashboard();
+  }).catch(err => showToast('加载失败: ' + err.message, 'error'));
+}
+
+function updateDashboard() {
+  fetch('/admin/api/status').then(r => r.json()).then(s => {
+    document.getElementById('svcEmby').textContent = s.emby.running ? '运行中' : '已停止';
+    document.getElementById('svcEmbySub').textContent = s.emby.enabled ? '(已启用)' : '(未启用)';
+    document.getElementById('svcP115').textContent = s.p115.running ? '运行中' : '已停止';
+    document.getElementById('svcP115Sub').textContent = s.p115.enabled ? '(已启用)' : '(未启用)';
+  }).catch(() => {});
+  fetch('/admin/api/p115/status').then(r => r.json()).then(s => {
+    const n = (s.stats && s.stats.total_files) || 0;
+    document.getElementById('svcStrmFiles').textContent = n;
+    document.getElementById('svcStrmSub').textContent = s.client_ready ? '115 已连接' : '未连接 115';
+  }).catch(() => {});
+}
+
+// ── Emby 配置 ──
+function loadEmbyConfig(c) {
+  document.getElementById('emby_enabled').checked = c.enabled || false;
+  document.getElementById('emby_host').value = c.emby_host || 'http://192.168.2.100:8096';
+  document.getElementById('emby_proxy_host').value = c.proxy_host || '0.0.0.0';
+  document.getElementById('emby_proxy_port').value = c.proxy_port || 8097;
+  document.getElementById('emby_pin_rules').value = c.pin_rules || '';
+  document.getElementById('emby_external_player_url').checked = c.external_player_url || false;
+}
+
+async function saveEmbyConfig() {
+  const c = {
+    enabled: document.getElementById('emby_enabled').checked,
+    emby_host: document.getElementById('emby_host').value.trim(),
+    proxy_host: document.getElementById('emby_proxy_host').value.trim() || '0.0.0.0',
+    proxy_port: parseInt(document.getElementById('emby_proxy_port').value) || 8097,
+    pin_rules: document.getElementById('emby_pin_rules').value,
+    external_player_url: document.getElementById('emby_external_player_url').checked,
+    external_player_list: [],
+  };
+  try {
+    const r = await fetch('/admin/api/emby/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});
+    if (!r.ok) throw new Error(await r.text());
+    showToast('Emby 配置已保存', 'success');
+    updateDashboard();
+  } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+async function restartEmby() {
+  await saveEmbyConfig();
+  try {
+    await fetch('/admin/api/emby/restart', {method:'POST'});
+    showToast('Emby 代理已重启', 'success');
+  } catch(err) { showToast('重启失败: ' + err.message, 'error'); }
+}
+
+// ── P115 配置 ──
+function loadP115Config(c) {
+  document.getElementById('p115_enabled').checked = c.enabled || false;
+  document.getElementById('p115_cookie').value = c.cookie || '';
+  document.getElementById('p115_redirect_host').value = c.redirect_host || '0.0.0.0';
+  document.getElementById('p115_redirect_port').value = c.redirect_port || 3333;
+  document.getElementById('p115_strm_url_prefix').value = c.strm_url_prefix || 'http://192.168.2.100:3333';
+  p115Paths = (c.paths || []).map(p => ({...p}));
+  renderPathMappings();
+}
+
+function renderPathMappings() {
+  const container = document.getElementById('p115_pathMappings');
+  container.innerHTML = '';
+  p115Paths.forEach((m, i) => {
+    const div = document.createElement('div'); div.className = 'path-entry';
+    div.innerHTML = `
+      <div class="path-wrap"><input class="path-from" value="${esc(m.from)}" placeholder="115 路径，如 /电影"></div>
+      <div class="path-wrap"><input class="path-to" value="${esc(m.to)}" placeholder="本地路径，如 D:/strm/电影"></div>
+      <button class="btn-sm btn-danger" onclick="removePathMapping(${i})">&times;</button>`;
+    container.appendChild(div);
+  });
+}
+function addPathMapping() { p115Paths.push({from:'',to:''}); renderPathMappings(); }
+function removePathMapping(i) { p115Paths.splice(i,1); renderPathMappings(); }
+function collectPaths() {
+  return Array.from(document.querySelectorAll('#p115_pathMappings .path-entry')).map(e => ({
+    from: e.querySelector('.path-from').value.trim(),
+    to: e.querySelector('.path-to').value.trim(),
+  })).filter(m => m.from && m.to);
+}
+
+async function saveP115Config() {
+  const c = {
+    enabled: document.getElementById('p115_enabled').checked,
+    cookie: document.getElementById('p115_cookie').value.trim(),
+    redirect_host: document.getElementById('p115_redirect_host').value.trim() || '0.0.0.0',
+    redirect_port: parseInt(document.getElementById('p115_redirect_port').value) || 8080,
+    strm_url_prefix: document.getElementById('p115_strm_url_prefix').value.trim() || 'http://localhost:8080',
+    paths: collectPaths(),
+  };
+  try {
+    const r = await fetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p115:c})});
+    if (!r.ok) throw new Error(await r.text());
+    showToast('P115 配置已保存', 'success');
+    updateDashboard();
+  } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+// ── 同步 ──
+async function startFullSync() {
+  try {
+    const r = await fetch('/api/sync/start', {method:'POST'});
+    const d = await r.json();
+    showToast('同步结果: ' + JSON.stringify(d), d.status==='completed'?'success':'info');
+    updateDashboard();
+  } catch(err) { showToast('同步失败: ' + err.message, 'error'); }
+}
+async function cancelSync() {
+  try { await fetch('/api/sync/cancel', {method:'POST'}); showToast('已取消', 'info'); } catch(e) {}
+}
+
+// ── STRM ──
+async function listStrmFiles(page=1) {
+  try {
+    const r = await fetch(`/api/strm/list?page=${page}&page_size=20`);
+    const d = await r.json();
+    document.getElementById('strmCount').textContent = '共 ' + d.total + ' 个文件';
+    const tbl = document.getElementById('strmTable');
+    if (!d.items.length) { tbl.innerHTML = '<p style="color:#999">暂无 STRM 文件</p>'; return; }
+    let html = '<table><thead><tr><th>文件名</th><th>大小</th><th>类型</th><th>创建时间</th></tr></thead><tbody>';
+    d.items.forEach(f => { html += `<tr><td>${esc(f.file_name)}</td><td>${fmtSize(f.file_size)}</td><td>${f.file_type}</td><td>${f.created_at||'-'}</td></tr>`; });
+    html += '</tbody></table>';
+    if (d.total > 20) html += `<div style="margin-top:8px"><button class="btn btn-outline" onclick="listStrmFiles(${page+1})">下一页</button></div>`;
+    tbl.innerHTML = html;
+  } catch(e) { document.getElementById('strmTable').innerHTML = '<p>加载失败</p>'; }
+}
+
+// ── 工具 ──
+function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]}
+
+let tt=null;
+function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
+
+loadConfig();
+setInterval(updateDashboard, 10000);
+</script>
+</body>
+</html>

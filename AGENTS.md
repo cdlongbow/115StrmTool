@@ -1,6 +1,6 @@
 This file provides guidance to AI coding agents when working with code in this repository.
 
-# MoviePilot-Plugins Project Conventions
+# MediaServiceHub Project Conventions
 
 ## 1. Commit Conventions
 
