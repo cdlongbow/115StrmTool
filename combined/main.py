@@ -155,7 +155,7 @@ def _start_p115():
 
 
 def create_admin_app() -> FastAPI:
-    app = FastAPI(title="综合管理面板")
+    app = FastAPI(title="115网盘STRM生成与302工具")
 
     # 挂载 P115 API 路由
     from api_routes import router as p115_router
@@ -178,7 +178,7 @@ def create_admin_app() -> FastAPI:
             if index_path.exists():
                 content = index_path.read_text(encoding="utf-8")
                 return HTMLResponse(content=content)
-            return HTMLResponse(content="<h1>综合管理面板</h1><p>Web UI 未构建</p>")
+            return HTMLResponse(content="<h1>115网盘STRM生成与302工具</h1><p>Web UI 未构建</p>")
 
     return app
 
@@ -198,15 +198,15 @@ def _run_admin():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Emby 反向代理 + P115 STRM 助手 综合版")
-    parser.add_argument("--tray", action="store_true", help="以系统托盘模式运行")
+    parser = argparse.ArgumentParser(description="115网盘STRM生成与302工具")
+    parser.add_argument("--no-tray", action="store_true", help="以控制台模式运行（不启动托盘）")
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     logger.info("=" * 56)
-    logger.info("  Emby 302 反向代理 + P115 STRM 助手  综合版")
+    logger.info("  115网盘STRM生成与302工具")
     logger.info("=" * 56)
 
     config = config_manager.get()
@@ -220,14 +220,14 @@ def main():
     # 启动 P115 服务
     _start_p115()
 
-    use_tray = sys.platform == "win32" or args.tray
+    use_tray = not args.no_tray if sys.platform == "win32" else False
 
     if use_tray:
         admin_thread = threading.Thread(target=_run_admin, daemon=True)
         admin_thread.start()
         from windows_tray import run_tray
         run_tray(
-            app_name="媒体服务综合管理",
+            app_name="115网盘STRM生成与302工具",
             admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/",
             icon_char="M",
             on_exit=lambda: (_stop_emby(), _stop_p115_redirect()),
