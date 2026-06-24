@@ -15,7 +15,7 @@ class P115ClientWrapper:
             return
         try:
             from p115client import P115Client
-            self._client = P115Client(cookie=self._cookie)
+            self._client = P115Client(cookies=self._cookie)
             logger.info("115 客户端初始化成功")
         except ImportError:
             logger.error("p115client 库未安装，请执行: pip install p115client==0.0.8.10")
