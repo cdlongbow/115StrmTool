@@ -90,6 +90,10 @@ tr:hover{background:#f5f5f5}
     <div class="stat-card"><div class="num" id="svcP115">-</div><div class="label">P115 302 跳转</div><div class="sub" id="svcP115Sub">检测中...</div></div>
     <div class="stat-card"><div class="num" id="svcStrmFiles">-</div><div class="label">STRM 文件数</div><div class="sub" id="svcStrmSub">-</div></div>
   </div>
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 24px">
+    <label class="switch"><input type="checkbox" id="p115_autostart" onchange="saveAutostart()"><span class="slider"></span></label>
+    <span>开机自动启动（后台运行）</span>
+  </div>
 </div>
 
 <!-- Emby 配置 -->
@@ -131,7 +135,7 @@ tr:hover{background:#f5f5f5}
     </div>
     <div class="form-group">
       <label>115 Cookie</label>
-      <textarea id="p115_cookie" rows="2" placeholder="粘贴 115 Cookie">你的115cookie填写在这里</textarea>
+      <textarea id="p115_cookie" rows="2" placeholder="UID=123456789; CID=123456789; SEID=123456789"></textarea>
       <div class="hint">登录 115 网页版后，从浏览器开发者工具中复制 Cookie</div>
     </div>
     <div class="form-row">
@@ -149,11 +153,7 @@ tr:hover{background:#f5f5f5}
     <div id="p115_pathMappings"></div>
     <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
   </div>
-  <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <div class="switch-group" style="margin:0;flex:1">
-      <label class="switch"><input type="checkbox" id="p115_autostart"><span class="slider"></span></label>
-      <span class="switch-label">开机自动启动（后台运行）</span>
-    </div>
+  <div class="card" style="display:flex;gap:8px">
     <button class="btn btn-primary" onclick="saveP115Config()">保存配置</button>
   </div>
 </div>
@@ -330,10 +330,17 @@ async function saveP115Config() {
   try {
     const r = await fetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p115:c})});
     if (!r.ok) throw new Error(await r.text());
-    await fetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('p115_autostart').checked})});
     showToast('P115 配置已保存', 'success');
     updateDashboard();
   } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+async function saveAutostart() {
+  const enabled = document.getElementById('p115_autostart').checked;
+  try {
+    await fetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    showToast(enabled ? '已开启开机自启' : '已关闭开机自启', 'success');
+  } catch(err) { showToast('设置失败: ' + err.message, 'error'); }
 }
 
 // ── 同步 ──
