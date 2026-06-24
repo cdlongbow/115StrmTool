@@ -102,29 +102,10 @@ def _open_browser(url: str):
 
 def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
     """使用 pywebview 原生窗口 + 系统托盘"""
-    window_ref = {"instance": None}
     exit_flag = threading.Event()
 
-    def create_window():
-        w = webview.create_window(
-            title=app_name,
-            url=admin_url,
-            width=1100,
-            height=750,
-            resizable=True,
-            min_size=(800, 600),
-            easy_drag=False,
-        )
-        window_ref["instance"] = w
-        webview.start(debug=False, private_mode=False)
-
     def show_window(icon, item):
-        if window_ref["instance"]:
-            try:
-                window_ref["instance"].show()
-                window_ref["instance"].restore()
-            except Exception:
-                pass
+        pass
 
     def quit_app(icon, item):
         icon.stop()
@@ -141,12 +122,21 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
 
     icon = pystray.Icon(app_name, icon_image, app_name, menu)
 
-    # 在后台线程启动 pywebview
-    webview_thread = threading.Thread(target=create_window, daemon=True)
-    webview_thread.start()
+    # pystray 在后台线程运行
+    tray_thread = threading.Thread(target=icon.run, daemon=True)
+    tray_thread.start()
 
-    # 在主线程运行托盘
-    icon.run()
+    # pywebview 必须在主线程
+    w = webview.create_window(
+        title=app_name,
+        url=admin_url,
+        width=1100,
+        height=750,
+        resizable=True,
+        min_size=(800, 600),
+        easy_drag=False,
+    )
+    webview.start(debug=False, private_mode=False)
 
 
 def _run_with_browser(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
