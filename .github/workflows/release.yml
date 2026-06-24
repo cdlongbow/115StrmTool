@@ -34,7 +34,8 @@ jobs:
         run: pip install pyinstaller
 
       - name: Build executable
-        run: python combined/build_exe.py
+        working-directory: combined
+        run: python build_exe.py
         env:
           PYTHONIOENCODING: utf-8
 
