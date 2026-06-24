@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+from base64 import b64encode
 
 from logger import logger
 
@@ -91,15 +92,42 @@ class P115ClientWrapper:
     def get_qrcode(self) -> Optional[Dict]:
         try:
             from p115client import P115Client
-            return P115Client.qrcode_login()
+            token_resp = P115Client.login_qrcode_token()
+            if not token_resp or not token_resp.get("data"):
+                return None
+            uid = str(token_resp["data"]["uid"])
+            qr_bytes = P115Client.login_qrcode(uid)
+            if not isinstance(qr_bytes, (bytes, bytearray)):
+                return None
+            return {
+                "uid": uid,
+                "qrcode": f"data:image/png;base64,{b64encode(qr_bytes).decode()}",
+            }
         except Exception as e:
             logger.error("获取二维码失败: %s", e, exc_info=True)
             return None
 
     def check_qrcode(self, uid: str) -> Optional[Dict]:
         try:
-            from p115client import P115Client
-            return P115Client.qrcode_login_check(uid=uid, app="pc")
+            if not self._client:
+                return {"status": "waiting"}
+            from p115client import check_response
+            resp = self._client.login_qrcode_scan_status(uid)
+            data = resp.get("data", {})
+            if data.get("status") == 1 and "cookie" in data:
+                cookie_dict = data["cookie"]
+                if isinstance(cookie_dict, dict):
+                    cookie_str = "; ".join(
+                        f"{k}={v}" for k, v in cookie_dict.items() if k and v
+                    )
+                else:
+                    cookie_str = str(cookie_dict)
+                self._cookie = cookie_str
+                self._init_client()
+                return {"status": "success", "cookie": cookie_str}
+            if data.get("status") == 2:
+                return {"status": "expired"}
+            return {"status": "waiting"}
         except Exception as e:
             logger.error("检查二维码状态失败: %s", e, exc_info=True)
-            return None
+            return {"status": "error", "message": str(e)}
