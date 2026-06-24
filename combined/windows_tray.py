@@ -98,21 +98,17 @@ def _open_browser(url: str):
 
 
 def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
-    """使用 pywebview 原生窗口 + 系统托盘"""
-    window_ref = {"instance": None}
-    keep_alive = threading.Event()
+    """使用 pywebview 原生窗口 + 系统托盘，关闭窗口不退出，托盘可重新打开"""
+    reopen = threading.Event()
+    quit_flag = threading.Event()
 
     def show_window(icon, item):
-        if window_ref["instance"] is not None:
-            try:
-                window_ref["instance"].show()
-                window_ref["instance"].restore()
-            except Exception:
-                pass
+        reopen.set()
 
     def quit_app(icon, item):
+        quit_flag.set()
+        reopen.set()
         icon.stop()
-        keep_alive.set()
         if on_exit:
             on_exit()
 
@@ -127,20 +123,21 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
     tray_thread = threading.Thread(target=icon.run, daemon=True)
     tray_thread.start()
 
-    w = webview.create_window(
-        title=app_name,
-        url=admin_url,
-        width=1100,
-        height=750,
-        resizable=True,
-        min_size=(800, 600),
-        easy_drag=False,
-    )
-    window_ref["instance"] = w
-    webview.start(debug=False, private_mode=False)
-
-    # 窗口被关闭（X）后不退出，保持托盘运行
-    keep_alive.wait()
+    # 主线程循环：窗口关闭后等待重新打开信号
+    while not quit_flag.is_set():
+        w = webview.create_window(
+            title=app_name,
+            url=admin_url,
+            width=1100,
+            height=750,
+            resizable=True,
+            min_size=(800, 600),
+        )
+        webview.start(debug=False, private_mode=False)
+        if quit_flag.is_set():
+            break
+        reopen.clear()
+        reopen.wait()
 
 
 def _run_with_browser(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
