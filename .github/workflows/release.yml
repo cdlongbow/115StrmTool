@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -17,10 +20,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install core dependencies
+      - name: Install dependencies
         run: |
           pip install -U pip
-          pip install fastapi uvicorn httpx websockets pywin32
+          pip install pystray Pillow fastapi uvicorn httpx websockets pywin32
 
       - name: Install p115client from local wheels
         run: |
@@ -33,7 +36,7 @@ jobs:
       - name: Build executable
         run: python combined/build_exe.py
 
-      - name: Upload executable
+      - name: Upload executable (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: MediaServiceHub-Windows
