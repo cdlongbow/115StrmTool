@@ -5,7 +5,7 @@ import sys
 def main():
     args = [
         "pyinstaller",
-        "--name", "MediaServiceHub",
+        "--name", "115网盘STRM生成与302工具",
         "--onefile",
         "--add-data", "web:web",
         "--add-data", "admin_api.py:.",
@@ -34,10 +34,10 @@ def main():
         "--noconfirm",
         "main.py",
     ]
-    print("Building MediaServiceHub ...")
+    print("Building ...")
     result = subprocess.run(args, capture_output=False)
     if result.returncode == 0:
-        print("Build successful! Output: dist/MediaServiceHub.exe")
+        print("Build successful!")
     else:
         print("Build failed!")
         sys.exit(1)

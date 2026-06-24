@@ -41,12 +41,12 @@ jobs:
       - name: Upload executable (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: MediaServiceHub-Windows
-          path: combined/dist/MediaServiceHub.exe
+          name: 115StrmTool-Windows
+          path: combined/dist/115网盘STRM生成与302工具.exe
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: combined/dist/MediaServiceHub.exe
+          files: combined/dist/115网盘STRM生成与302工具.exe
           generate_release_notes: true
