@@ -31,6 +31,7 @@ def main():
         "--hidden-import", "webview",
         "--collect-all", "fastapi",
         "--collect-all", "starlette",
+        "--noconsole",
         "--noconfirm",
         "main.py",
     ]

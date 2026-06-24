@@ -83,7 +83,7 @@ class P115ClientWrapper:
         if not self._client:
             return None
         try:
-            return self._client.user_quota()
+            return self._client.fs_storage_info()
         except Exception as e:
             logger.error("获取存储信息失败: %s", e, exc_info=True)
             return None
