@@ -92,8 +92,7 @@ tr:hover{background:#f5f5f5}
   </div>
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 24px">
     <label class="switch"><input type="checkbox" id="p115_autostart" onchange="saveAutostart()"><span class="slider"></span></label>
-    <span style="flex:1">开机自动启动（后台运行）</span>
-    <button class="btn btn-outline" onclick="shutdownApp()" style="color:#ea4335">退出程序</button>
+    <span>开机自动启动（后台运行）</span>
   </div>
 </div>
 
@@ -391,14 +390,6 @@ function confirmBrowser() {
 
 function closeBrowser() {
   document.getElementById('browserModal').style.display = 'none';
-}
-
-async function shutdownApp() {
-  if (!confirm('确定退出程序？')) return;
-  try {
-    await fetch('/admin/api/shutdown', {method:'POST'});
-    showToast('正在退出...', 'info');
-  } catch {}
 }
 
 async function saveP115Config() {

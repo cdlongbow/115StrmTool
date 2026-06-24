@@ -206,14 +206,3 @@ class AutostartRequest(BaseModel):
 async def set_autostart(req: AutostartRequest) -> Dict:
     _set_autostart(req.enabled)
     return {"enabled": _get_autostart()}
-
-
-# ── 退出程序 ──
-
-
-@router.post("/shutdown")
-async def shutdown() -> Dict:
-    logger.info("收到退出请求，正在关闭...")
-    import threading
-    threading.Thread(target=lambda: __import__('os')._exit(0), daemon=True).start()
-    return {"status": "ok"}

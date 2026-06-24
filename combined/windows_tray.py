@@ -99,16 +99,22 @@ def _open_browser(url: str):
 
 def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
     """使用 pywebview 原生窗口 + 系统托盘"""
-    exit_flag = threading.Event()
+    window_ref = {"instance": None}
+    keep_alive = threading.Event()
 
     def show_window(icon, item):
-        pass
+        if window_ref["instance"] is not None:
+            try:
+                window_ref["instance"].show()
+                window_ref["instance"].restore()
+            except Exception:
+                pass
 
     def quit_app(icon, item):
         icon.stop()
+        keep_alive.set()
         if on_exit:
             on_exit()
-        os._exit(0)
 
     icon_image = _create_text_icon(icon_char)
     menu = (
@@ -118,12 +124,9 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
     )
 
     icon = pystray.Icon(app_name, icon_image, app_name, menu)
-
-    # pystray 在后台线程运行
     tray_thread = threading.Thread(target=icon.run, daemon=True)
     tray_thread.start()
 
-    # pywebview 必须在主线程
     w = webview.create_window(
         title=app_name,
         url=admin_url,
@@ -133,7 +136,11 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
         min_size=(800, 600),
         easy_drag=False,
     )
+    window_ref["instance"] = w
     webview.start(debug=False, private_mode=False)
+
+    # 窗口被关闭（X）后不退出，保持托盘运行
+    keep_alive.wait()
 
 
 def _run_with_browser(app_name: str, admin_url: str, icon_char: str, on_exit: callable):
