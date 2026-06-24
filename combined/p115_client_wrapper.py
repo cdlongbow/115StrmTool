@@ -97,9 +97,12 @@ class P115ClientWrapper:
                 return None
             payload = token_resp["data"]
             uid = str(payload["uid"])
-            qr_bytes = P115Client.login_qrcode(uid, app=app)
-            if not isinstance(qr_bytes, (bytes, bytearray)):
-                return None
+            # p115client.login_qrcode has a bug: payload not passed to request
+            # build URL manually and download via httpx
+            import httpx
+            qr_url = f"https://qrcodeapi.115.com/api/1.0/{app}/1.0/qrcode?uid={uid}"
+            qr_resp = httpx.get(qr_url, follow_redirects=True)
+            qr_bytes = qr_resp.content
             return {
                 "uid": uid,
                 "payload": payload,
