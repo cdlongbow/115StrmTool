@@ -97,7 +97,7 @@ class P115ClientWrapper:
                 return None
             payload = token_resp["data"]
             uid = str(payload["uid"])
-            qr_bytes = P115Client.login_qrcode(uid)
+            qr_bytes = P115Client.login_qrcode(uid, app=app)
             if not isinstance(qr_bytes, (bytes, bytearray)):
                 return None
             return {
