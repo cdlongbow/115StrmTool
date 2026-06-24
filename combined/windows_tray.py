@@ -102,6 +102,19 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
     reopen = threading.Event()
     quit_flag = threading.Event()
 
+    class _Api:
+        def selectDirectory(self) -> str:
+            try:
+                import tkinter
+                from tkinter import filedialog
+                root = tkinter.Tk()
+                root.withdraw()
+                path = filedialog.askdirectory(title="选择 STRM 输出目录")
+                root.destroy()
+                return path or ""
+            except Exception:
+                return ""
+
     def show_window(icon, item):
         reopen.set()
 
@@ -123,6 +136,8 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
     tray_thread = threading.Thread(target=icon.run, daemon=True)
     tray_thread.start()
 
+    api = _Api()
+
     # 主线程循环：窗口关闭后等待重新打开信号
     while not quit_flag.is_set():
         w = webview.create_window(
@@ -132,6 +147,7 @@ def _run_with_webview(app_name: str, admin_url: str, icon_char: str, on_exit: ca
             height=750,
             resizable=True,
             min_size=(800, 600),
+            js_api=api,
         )
         webview.start(debug=False, private_mode=False)
         if quit_flag.is_set():

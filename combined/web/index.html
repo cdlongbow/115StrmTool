@@ -351,7 +351,15 @@ async function browse115Path(i) {
   if (path) { p115Paths[i].from = path; renderPathMappings(); }
 }
 async function browseLocalPath(i) {
-  const path = prompt('请输入本地 STRM 输出目录的完整路径（如 D:/strm/电影）:', p115Paths[i].to || '');
+  let path = '';
+  try {
+    if (window.pywebview && window.pywebview.api) {
+      path = await window.pywebview.api.selectDirectory();
+    }
+  } catch {}
+  if (!path) {
+    path = prompt('请输入本地 STRM 输出目录的完整路径（如 D:/strm/电影）:', p115Paths[i].to || '');
+  }
   if (path) { p115Paths[i].to = path.replace(/\\/g, '/'); renderPathMappings(); }
 }
 
