@@ -95,23 +95,24 @@ class P115ClientWrapper:
             token_resp = P115Client.login_qrcode_token(app=app)
             if not token_resp or not token_resp.get("data"):
                 return None
-            uid = str(token_resp["data"]["uid"])
+            payload = token_resp["data"]
+            uid = str(payload["uid"])
             qr_bytes = P115Client.login_qrcode(uid)
             if not isinstance(qr_bytes, (bytes, bytearray)):
                 return None
             return {
                 "uid": uid,
+                "payload": payload,
                 "qrcode": f"data:image/png;base64,{b64encode(qr_bytes).decode()}",
             }
         except Exception as e:
             logger.error("获取二维码失败: %s", e, exc_info=True)
             return None
 
-    def check_qrcode(self, uid: str) -> Optional[Dict]:
+    def check_qrcode(self, payload: dict) -> Optional[Dict]:
         try:
             from p115client import P115Client
-            temp = P115Client()
-            resp = temp.login_qrcode_scan_status(uid)
+            resp = P115Client.login_qrcode_scan_status(payload)
             data = resp.get("data", {})
             if data.get("status") == 1 and "cookie" in data:
                 cookie_dict = data["cookie"]

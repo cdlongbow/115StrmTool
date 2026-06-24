@@ -207,11 +207,11 @@ async def get_qrcode(app: str = "alipaymini") -> Dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/qrcode/check")
-async def check_qrcode(uid: str) -> Dict:
+@router.post("/qrcode/check")
+async def check_qrcode(payload: dict) -> Dict:
     client = get_client()
     try:
-        result = client.check_qrcode(uid)
+        result = client.check_qrcode(payload)
         if result:
             return result
         return {"status": "pending"}

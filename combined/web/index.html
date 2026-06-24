@@ -453,11 +453,13 @@ async function saveAutostart() {
 
 // ── 扫码登录 ──
 let _qrcodeTimer = null;
+let _qrcodePayload = null;
 
 async function showQrcodeLogin() {
   document.getElementById('qrcodeModal').style.display = 'flex';
   document.getElementById('qrcodeImage').innerHTML = '获取中...';
   document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
+  _qrcodePayload = null;
   const app = document.getElementById('qrcodeAppType').value;
   try {
     const r = await fetch(`/api/qrcode?app=${app}`);
@@ -465,16 +467,18 @@ async function showQrcodeLogin() {
     if (!d.qrcode) { throw new Error('获取二维码失败'); }
     document.getElementById('qrcodeImage').innerHTML = `<img src="${d.qrcode}" style="width:200px;height:200px">`;
     document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
-    _qrcodeTimer = setInterval(() => pollQrcode(d.uid), 2000);
+    _qrcodePayload = d.payload;
+    _qrcodeTimer = setInterval(pollQrcode, 2000);
   } catch(e) {
     document.getElementById('qrcodeImage').innerHTML = '获取失败';
     document.getElementById('qrcodeStatus').textContent = e.message;
   }
 }
 
-async function pollQrcode(uid) {
+async function pollQrcode() {
+  if (!_qrcodePayload) return;
   try {
-    const r = await fetch(`/api/qrcode/check?uid=${uid}`);
+    const r = await fetch('/api/qrcode/check', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_qrcodePayload)});
     const d = await r.json();
     if (d.status === 'success' && d.cookie) {
       clearInterval(_qrcodeTimer);
