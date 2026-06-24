@@ -196,10 +196,10 @@ async def add_offline_task(req: OfflineTaskRequest) -> Dict:
 
 
 @router.get("/qrcode")
-async def get_qrcode() -> Dict:
+async def get_qrcode(app: str = "alipaymini") -> Dict:
     client = get_client()
     try:
-        result = client.get_qrcode()
+        result = client.get_qrcode(app)
         if result:
             return result
         raise HTTPException(status_code=500, detail="获取二维码失败")

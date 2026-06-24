@@ -199,6 +199,15 @@ tr:hover{background:#f5f5f5}
 <div id="qrcodeModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:99998;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:8px;padding:24px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.2)">
     <h3 style="margin-bottom:12px">115 扫码登录</h3>
+    <div style="margin-bottom:12px">
+      <select id="qrcodeAppType" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+        <option value="alipaymini">支付宝小程序</option>
+        <option value="wechatmini">微信小程序</option>
+        <option value="web">网页</option>
+        <option value="android">Android</option>
+        <option value="ios">iOS</option>
+      </select>
+    </div>
     <div id="qrcodeImage" style="width:200px;height:200px;margin:0 auto;background:#f5f5f5;display:flex;align-items:center;justify-content:center;color:#999;font-size:14px">获取中...</div>
     <p id="qrcodeStatus" style="margin-top:12px;font-size:13px;color:#666">请使用 115 客户端扫描二维码</p>
     <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
@@ -439,8 +448,9 @@ async function showQrcodeLogin() {
   document.getElementById('qrcodeModal').style.display = 'flex';
   document.getElementById('qrcodeImage').innerHTML = '获取中...';
   document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
+  const app = document.getElementById('qrcodeAppType').value;
   try {
-    const r = await fetch('/api/qrcode');
+    const r = await fetch(`/api/qrcode?app=${app}`);
     const d = await r.json();
     if (!d.qrcode) { throw new Error('获取二维码失败'); }
     document.getElementById('qrcodeImage').innerHTML = `<img src="${d.qrcode}" style="width:200px;height:200px">`;

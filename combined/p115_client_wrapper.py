@@ -89,10 +89,10 @@ class P115ClientWrapper:
             logger.error("获取存储信息失败: %s", e, exc_info=True)
             return None
 
-    def get_qrcode(self) -> Optional[Dict]:
+    def get_qrcode(self, app: str = "alipaymini") -> Optional[Dict]:
         try:
             from p115client import P115Client
-            token_resp = P115Client.login_qrcode_token()
+            token_resp = P115Client.login_qrcode_token(app=app)
             if not token_resp or not token_resp.get("data"):
                 return None
             uid = str(token_resp["data"]["uid"])
