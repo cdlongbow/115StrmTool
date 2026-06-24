@@ -26,8 +26,8 @@ jobs:
           pip install pystray Pillow fastapi uvicorn httpx websockets pywin32
 
       - name: Install p115client from local wheels
-        run: |
-          pip install .\combined\wheels\*.whl
+        shell: cmd
+        run: pip install combined\wheels\*.whl
         continue-on-error: true
 
       - name: Install PyInstaller
