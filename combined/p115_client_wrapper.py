@@ -91,17 +91,18 @@ class P115ClientWrapper:
 
     def get_qrcode(self, app: str = "alipaymini") -> Optional[Dict]:
         try:
-            from p115client import P115Client
-            token_resp = P115Client.login_qrcode_token(app=app)
-            if not token_resp or not token_resp.get("data"):
-                return None
-            payload = token_resp["data"]
-            uid = str(payload["uid"])
-            # p115client.login_qrcode has a bug: payload not passed to request
-            # build URL manually and download via httpx
             import httpx
+            # 获取 QR code token
+            token_url = f"https://qrcodeapi.115.com/api/1.0/{app}/1.0/token/"
+            token_resp = httpx.get(token_url, headers={"User-Agent": "Mozilla/5.0"})
+            token_data = token_resp.json()
+            if not token_data or not token_data.get("data"):
+                return None
+            payload = token_data["data"]
+            uid = str(payload["uid"])
+            # 下载二维码图片
             qr_url = f"https://qrcodeapi.115.com/api/1.0/{app}/1.0/qrcode?uid={uid}"
-            qr_resp = httpx.get(qr_url, follow_redirects=True)
+            qr_resp = httpx.get(qr_url, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
             qr_bytes = qr_resp.content
             return {
                 "uid": uid,
@@ -114,8 +115,10 @@ class P115ClientWrapper:
 
     def check_qrcode(self, payload: dict) -> Optional[Dict]:
         try:
-            from p115client import P115Client
-            resp = P115Client.login_qrcode_scan_status(payload)
+            import httpx
+            status_url = "https://qrcodeapi.115.com/get/status/"
+            status_resp = httpx.get(status_url, params=payload, headers={"User-Agent": "Mozilla/5.0"})
+            resp = status_resp.json()
             data = resp.get("data", {})
             if data.get("status") == 1 and "cookie" in data:
                 cookie_dict = data["cookie"]
