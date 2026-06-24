@@ -33,12 +33,12 @@ def main():
         "--noconfirm",
         "main.py",
     ]
-    print("正在打包 MediaServiceHub ...")
+    print("Building MediaServiceHub ...")
     result = subprocess.run(args, capture_output=False)
     if result.returncode == 0:
-        print("打包成功！输出: dist/MediaServiceHub.exe")
+        print("Build successful! Output: dist/MediaServiceHub.exe")
     else:
-        print("打包失败！")
+        print("Build failed!")
         sys.exit(1)
 
 
