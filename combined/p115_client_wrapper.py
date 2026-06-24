@@ -109,10 +109,9 @@ class P115ClientWrapper:
 
     def check_qrcode(self, uid: str) -> Optional[Dict]:
         try:
-            if not self._client:
-                return {"status": "waiting"}
-            from p115client import check_response
-            resp = self._client.login_qrcode_scan_status(uid)
+            from p115client import P115Client
+            temp = P115Client()
+            resp = temp.login_qrcode_scan_status(uid)
             data = resp.get("data", {})
             if data.get("status") == 1 and "cookie" in data:
                 cookie_dict = data["cookie"]
