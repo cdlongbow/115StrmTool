@@ -220,7 +220,7 @@ def main():
     # 启动 P115 服务
     _start_p115()
 
-    use_tray = args.tray or (sys.platform == "win32" and "--tray" in sys.argv)
+    use_tray = sys.platform == "win32" or args.tray
 
     if use_tray:
         admin_thread = threading.Thread(target=_run_admin, daemon=True)

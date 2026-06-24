@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install pystray Pillow fastapi uvicorn httpx websockets pywin32
+          pip install pystray Pillow pywebview fastapi uvicorn httpx websockets pywin32
 
       - name: Install p115client from local wheels
         run: python -c "import subprocess, pathlib; [subprocess.run(['pip', 'install', str(f)], check=True) for f in sorted(pathlib.Path('combined/wheels').glob('*.whl'))]"

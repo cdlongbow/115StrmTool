@@ -28,6 +28,7 @@ def main():
         "--hidden-import", "p115rsacipher",
         "--hidden-import", "pystray",
         "--hidden-import", "PIL",
+        "--hidden-import", "webview",
         "--collect-all", "fastapi",
         "--collect-all", "starlette",
         "--noconfirm",
