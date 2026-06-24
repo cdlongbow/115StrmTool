@@ -149,7 +149,11 @@ tr:hover{background:#f5f5f5}
     <div id="p115_pathMappings"></div>
     <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
   </div>
-  <div class="card" style="display:flex;gap:8px">
+  <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div class="switch-group" style="margin:0;flex:1">
+      <label class="switch"><input type="checkbox" id="p115_autostart"><span class="slider"></span></label>
+      <span class="switch-label">开机自动启动（后台运行）</span>
+    </div>
     <button class="btn btn-primary" onclick="saveP115Config()">保存配置</button>
   </div>
 </div>
@@ -212,6 +216,9 @@ function loadConfig() {
     loadP115Config(config.p115 || {});
     updateDashboard();
   }).catch(err => showToast('加载失败: ' + err.message, 'error'));
+  fetch('/admin/api/autostart').then(r => r.json()).then(d => {
+    document.getElementById('p115_autostart').checked = d.enabled;
+  }).catch(() => {});
 }
 
 function updateDashboard() {
@@ -281,8 +288,8 @@ function renderPathMappings() {
   p115Paths.forEach((m, i) => {
     const div = document.createElement('div'); div.className = 'path-entry';
     div.innerHTML = `
-      <div class="path-wrap"><input class="path-from" value="${esc(m.from)}" placeholder="115 路径，如 /电影"></div>
-      <div class="path-wrap"><input class="path-to" value="${esc(m.to)}" placeholder="本地路径，如 D:/strm/电影"></div>
+      <div class="path-wrap"><input class="path-from" value="${esc(m.from)}" placeholder="115 路径，如 /电影"><button class="btn-sm btn-outline" onclick="browse115Path(${i})">浏览</button></div>
+      <div class="path-wrap"><input class="path-to" value="${esc(m.to)}" placeholder="本地路径，如 D:/strm/电影"><button class="btn-sm btn-outline" onclick="browseLocalPath(${i})">浏览</button></div>
       <button class="btn-sm btn-danger" onclick="removePathMapping(${i})">&times;</button>`;
     container.appendChild(div);
   });
@@ -294,6 +301,21 @@ function collectPaths() {
     from: e.querySelector('.path-from').value.trim(),
     to: e.querySelector('.path-to').value.trim(),
   })).filter(m => m.from && m.to);
+}
+
+async function browse115Path(i) {
+  const path = prompt('请输入 115 目录路径（如 /电影）:', p115Paths[i].from || '/');
+  if (path) { p115Paths[i].from = path; renderPathMappings(); }
+}
+async function browseLocalPath(i) {
+  try {
+    const handle = await window.showDirectoryPicker();
+    p115Paths[i].to = handle.name;
+    renderPathMappings();
+  } catch {
+    const path = prompt('请输入本地目录路径:', p115Paths[i].to || 'D:/strm/电影');
+    if (path) { p115Paths[i].to = path; renderPathMappings(); }
+  }
 }
 
 async function saveP115Config() {
@@ -308,6 +330,7 @@ async function saveP115Config() {
   try {
     const r = await fetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p115:c})});
     if (!r.ok) throw new Error(await r.text());
+    await fetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('p115_autostart').checked})});
     showToast('P115 配置已保存', 'success');
     updateDashboard();
   } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
@@ -360,6 +383,7 @@ async function listStrmFiles(page=1) {
 function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]}
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+let tt;
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
 
 async function refreshLogs() {

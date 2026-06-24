@@ -1,3 +1,4 @@
+import sys
 from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 
@@ -147,3 +148,61 @@ async def get_logs(lines: int = 200) -> Dict:
         return {"logs": log_lines[-lines:]}
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"读取日志失败: {e}")
+
+
+# ── 系统自动启动 ──
+
+
+if sys.platform == "win32":
+    import winreg as _winreg
+
+    _AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    _AUTOSTART_NAME = "115StrmTool"
+
+
+def _get_autostart() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY, 0, _winreg.KEY_READ)
+        try:
+            _winreg.QueryValueEx(key, _AUTOSTART_NAME)
+            return True
+        except FileNotFoundError:
+            return False
+        finally:
+            _winreg.CloseKey(key)
+    except Exception:
+        return False
+
+
+def _set_autostart(enable: bool):
+    if sys.platform != "win32":
+        return
+    try:
+        key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY, 0, _winreg.KEY_SET_VALUE)
+        if enable:
+            _winreg.SetValueEx(key, _AUTOSTART_NAME, 0, _winreg.REG_SZ, sys.executable)
+        else:
+            try:
+                _winreg.DeleteValue(key, _AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+        _winreg.CloseKey(key)
+    except Exception as e:
+        logger.error("设置自动启动失败: %s", e)
+
+
+@router.get("/autostart")
+async def get_autostart() -> Dict:
+    return {"enabled": _get_autostart()}
+
+
+class AutostartRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/autostart")
+async def set_autostart(req: AutostartRequest) -> Dict:
+    _set_autostart(req.enabled)
+    return {"enabled": _get_autostart()}
