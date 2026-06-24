@@ -345,7 +345,7 @@ async function listStrmFiles(page=1) {
 // ── 工具 ──
 function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]}
 
-let tt=null;
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
 
 loadConfig();

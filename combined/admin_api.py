@@ -9,8 +9,34 @@ from logger import logger
 
 router = APIRouter(prefix="/admin/api")
 
+# 全局配置模型
+class ConfigUpdateRequest(BaseModel):
+    emby: Optional[Dict[str, Any]] = None
+    p115: Optional[Dict[str, Any]] = None
+
 _restart_emby_callback: Callable = None
 _emby_status = {"running": False}
+
+
+# ── 全局配置 ──
+
+
+@router.get("/config")
+async def get_config() -> Dict[str, Any]:
+    return config_manager.get()
+
+
+@router.post("/config")
+async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
+    updates = {}
+    if req.emby is not None:
+        updates["emby"] = {k: v for k, v in req.emby.items() if v is not None}
+    if req.p115 is not None:
+        updates["p115"] = {k: v for k, v in req.p115.items() if v is not None}
+    if updates:
+        config_manager.update(updates)
+        logger.info("配置已更新: %s", updates)
+    return config_manager.get()
 
 
 def set_emby_restart_callback(cb: Callable):
