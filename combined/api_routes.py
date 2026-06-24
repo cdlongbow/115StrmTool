@@ -1,12 +1,6 @@
-import json
-import threading
-from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import urlparse
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-import httpx
 
 from logger import logger
 from config_manager import config_manager
@@ -31,40 +25,7 @@ def get_client() -> P115ClientWrapper:
     return _client
 
 
-# ── 配置 ──
-
-
-@router.get("/config")
-async def get_config() -> Dict[str, Any]:
-    return config_manager.get()
-
-
-class UpdateConfigRequest(BaseModel):
-    admin_host: str = None
-    admin_port: int = None
-    redirect_host: str = None
-    redirect_port: int = None
-    strm_url_prefix: str = None
-    cookie: str = None
-    open_api: Dict = None
-    paths: List[Dict] = None
-    sync_cron: str = None
-    sync_thread_count: int = None
-    database_path: str = None
-
-
-@router.post("/config")
-async def update_config(req: UpdateConfigRequest) -> Dict[str, Any]:
-    updates = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
-    if "cookie" in updates and updates["cookie"]:
-        get_client().update_cookie(updates["cookie"])
-    if updates:
-        config_manager.update(updates)
-        logger.info("配置已更新")
-    return config_manager.get()
-
-
-# ── 状态 ──
+# ── 浏览目录 ──
 
 
 @router.get("/status")
@@ -258,17 +219,4 @@ async def check_qrcode(uid: str) -> Dict:
         return {"status": "error", "message": str(e)}
 
 
-# ── 日志 ──
-
-
-@router.get("/logs")
-async def get_logs(lines: int = 200) -> Dict:
-    log_path = Path("logs/p115-strm-helper.log")
-    if not log_path.exists():
-        return {"logs": []}
-    try:
-        content = log_path.read_text(encoding="utf-8", errors="replace")
-        log_lines = content.strip().split("\n")
-        return {"logs": log_lines[-lines:]}
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"读取日志失败: {e}")
+# ── 二维码登录 ──

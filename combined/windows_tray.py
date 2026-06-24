@@ -7,12 +7,9 @@ Windows 系统托盘 + 原生窗口集成模块
 - 托盘图标右键菜单：打开窗口 / 退出
 """
 
-import atexit
-import io
 import os
 import sys
 import threading
-from pathlib import Path
 
 from logger import logger
 

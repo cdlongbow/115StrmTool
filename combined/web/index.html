@@ -200,7 +200,7 @@ document.querySelectorAll('.nav a').forEach(a => {
     document.querySelectorAll('.tab-content').forEach(d => d.classList.remove('active'));
     document.getElementById('tab-' + a.dataset.tab).classList.add('active');
     if (a.dataset.tab === 'logs') refreshLogs();
-    if (a.dataset.tab === 'sync') document.getElementById('syncHistory').innerHTML = '<p>加载中...</p>';
+    if (a.dataset.tab === 'sync') loadSyncHistory();
     if (a.dataset.tab === 'strm') listStrmFiles();
   });
 });
@@ -325,6 +325,20 @@ async function startFullSync() {
 async function cancelSync() {
   try { await fetch('/api/sync/cancel', {method:'POST'}); showToast('已取消', 'info'); } catch(e) {}
 }
+async function loadSyncHistory() {
+  try {
+    const r = await fetch('/api/sync/history');
+    const items = await r.json();
+    const el = document.getElementById('syncHistory');
+    if (!items.length) { el.innerHTML = '<p style="color:#999">暂无同步记录</p>'; return; }
+    let html = '<table><thead><tr><th>时间</th><th>类型</th><th>文件数</th><th>状态</th></tr></thead><tbody>';
+    items.forEach(h => {
+      html += `<tr><td>${h.start_time||'-'}</td><td>${h.sync_type}</td><td>${h.total_files||0}</td><td>${h.status}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) { document.getElementById('syncHistory').innerHTML = '<p>加载失败</p>'; }
+}
 
 // ── STRM ──
 async function listStrmFiles(page=1) {
@@ -347,6 +361,16 @@ function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB',
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
+
+async function refreshLogs() {
+  try {
+    const r = await fetch('/admin/api/logs');
+    const d = await r.json();
+    document.getElementById('logBox').textContent = (d.logs||[]).join('\n') || '暂无日志';
+  } catch(e) {
+    document.getElementById('logBox').textContent = '加载日志失败';
+  }
+}
 
 loadConfig();
 setInterval(updateDashboard, 10000);
