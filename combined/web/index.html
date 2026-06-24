@@ -210,8 +210,10 @@ tr:hover{background:#f5f5f5}
     </div>
     <div id="qrcodeImage" style="width:200px;height:200px;margin:0 auto;background:#f5f5f5;display:flex;align-items:center;justify-content:center;color:#999;font-size:14px">获取中...</div>
     <p id="qrcodeStatus" style="margin-top:12px;font-size:13px;color:#666">请使用 115 客户端扫描二维码</p>
+    <input id="qrcodeCookie" type="hidden">
     <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
-      <button class="btn btn-outline" onclick="closeQrcode()">取消</button>
+      <button id="qrcodeCopyBtn" class="btn btn-outline" onclick="copyQrcodeCookie()" style="display:none">复制 Cookie</button>
+      <button class="btn btn-outline" onclick="closeQrcode()">关闭</button>
     </div>
   </div>
 </div>
@@ -469,13 +471,24 @@ async function pollQrcode(uid) {
     if (d.status === 'success' && d.cookie) {
       clearInterval(_qrcodeTimer);
       document.getElementById('p115_cookie').value = d.cookie;
-      document.getElementById('qrcodeStatus').textContent = '登录成功! Cookie 已填入';
-      setTimeout(() => document.getElementById('qrcodeModal').style.display = 'none', 1500);
+      document.getElementById('qrcodeCookie').value = d.cookie;
+      document.getElementById('qrcodeStatus').innerHTML = '登录成功! Cookie 已填入';
+      document.getElementById('qrcodeCopyBtn').style.display = 'inline-block';
     } else if (d.status === 'expired') {
       clearInterval(_qrcodeTimer);
       document.getElementById('qrcodeStatus').textContent = '二维码已过期，请重新获取';
     }
   } catch {}
+}
+
+function copyQrcodeCookie() {
+  const cookie = document.getElementById('qrcodeCookie').value;
+  if (!cookie) return;
+  navigator.clipboard.writeText(cookie).then(() => {
+    showToast('Cookie 已复制', 'success');
+  }).catch(() => {
+    showToast('复制失败，请手动选择复制', 'error');
+  });
 }
 
 function closeQrcode() {
