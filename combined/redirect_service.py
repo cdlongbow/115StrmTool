@@ -1,5 +1,6 @@
+from hashlib import sha256
 from json import dumps as json_dumps
-from time import monotonic
+from time import monotonic, time
 from typing import Dict, Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
@@ -9,25 +10,26 @@ from fastapi.responses import RedirectResponse, JSONResponse, Response
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 
-CACHE_TTL = 90
-
-REDIRECT_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
+CACHE_TTL_DEFAULT = 90
+CACHE_MAX_SIZE = 1000
+DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 
 
 class RedirectService:
     def __init__(self, client: P115ClientWrapper):
         self._client = client
         self._cache: Dict[str, Tuple[str, str, float]] = {}
+        self._cache_order: list[str] = []
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
 
-        @app.api_route(REDIRECT_API_PATH, methods=["GET", "HEAD", "POST"])
+        @app.api_route(DOWNLOAD_API_PATH, methods=["GET", "HEAD", "POST"])
         async def redirect_url_endpoint(request: Request):
             pickcode = request.query_params.get("pickcode") or ""
             return await self._do_redirect(pickcode, request)
 
-        @app.api_route(REDIRECT_API_PATH + "/{file_id}", methods=["GET", "HEAD", "POST"])
+        @app.api_route(DOWNLOAD_API_PATH + "/{file_id}", methods=["GET", "HEAD", "POST"])
         async def redirect_url_with_id(request: Request, file_id: str):
             pickcode = request.query_params.get("pickcode") or file_id
             return await self._do_redirect(pickcode, request)
@@ -45,6 +47,13 @@ class RedirectService:
         return app
 
     @staticmethod
+    def _ua_hash(user_agent: str) -> str:
+        return sha256(user_agent.encode("utf-8")).hexdigest()[:16]
+
+    def _cache_key(self, pickcode: str, ua: str) -> str:
+        return f"{pickcode}:{self._ua_hash(ua)}"
+
+    @staticmethod
     def _real_client_ip(request: Request) -> str:
         xff = request.headers.get("x-forwarded-for")
         if xff:
@@ -60,33 +69,44 @@ class RedirectService:
 
     async def _do_redirect(self, pickcode: str, request: Request) -> Response:
         client_ip = self._real_client_ip(request)
-        user_agent = (request.headers.get("user-agent") or "")[:64]
-        logger.debug("【302跳转服务】获取到客户端UA: %s", user_agent)
+        user_agent = (request.headers.get("user-agent") or "")[:256]
+        logger.debug("【302跳转服务】UA: %s", user_agent[:64])
 
         if not pickcode or len(pickcode) != 17 or not pickcode.isalnum():
-            logger.debug("【302跳转服务】Missing or bad pickcode: %s", pickcode)
+            logger.debug("【302跳转服务】无效 pickcode: %s", pickcode)
             return JSONResponse(
                 status_code=400,
                 content={"code": -1, "msg": "Missing or invalid pickcode", "data": None},
             )
 
-        cached = self._get_cached(pickcode)
+        ckey = self._cache_key(pickcode, user_agent)
+        cached = self._get_cached(ckey)
         if cached:
             cached_url, cached_fname = cached
-            logger.info("【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s", pickcode, cached_fname, client_ip)
+            logger.info(
+                "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
+                pickcode, cached_fname, client_ip,
+            )
             return self._build_302(cached_url, pickcode, cached_fname)
 
-        download_url = self._client.get_download_url(pickcode)
-        if not download_url:
-            logger.error("【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s", pickcode, client_ip)
+        result = self._client.get_download_url_with_ua(pickcode, user_agent)
+        if not result:
+            logger.error(
+                "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
+                pickcode, client_ip,
+            )
             return JSONResponse(
                 status_code=502,
                 content={"code": -1, "msg": "Failed to resolve download URL", "data": None},
             )
 
-        file_name = self._extract_file_name(download_url)
-        self._set_cache(pickcode, download_url, file_name)
-        logger.info("【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s url=%s ip=%s", pickcode, file_name, download_url, client_ip)
+        download_url, file_name, expires_time = result
+        ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
+        self._set_cache(ckey, download_url, file_name, ttl)
+        logger.info(
+            "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
+            pickcode, file_name, ttl, client_ip,
+        )
         return self._build_302(download_url, pickcode, file_name)
 
     def _build_302(self, url: str, pickcode: str, file_name: str = "") -> Response:
@@ -124,11 +144,32 @@ class RedirectService:
             if monotonic() < expiry:
                 return (url, fname)
             del self._cache[key]
+            try:
+                self._cache_order.remove(key)
+            except ValueError:
+                pass
         return None
 
-    def _set_cache(self, key: str, url: str, file_name: str):
-        self._cache[key] = (url, file_name, monotonic() + CACHE_TTL)
+    def _set_cache(self, key: str, url: str, file_name: str, ttl: int):
+        expiry = monotonic() + ttl
+        now = monotonic()
+        expired_keys = [
+            k for k in self._cache_order
+            if k in self._cache and self._cache[k][2] < now
+        ]
+        for k in expired_keys:
+            del self._cache[k]
+            try:
+                self._cache_order.remove(k)
+            except ValueError:
+                pass
+        while len(self._cache) >= CACHE_MAX_SIZE and self._cache_order:
+            oldest = self._cache_order.pop(0)
+            self._cache.pop(oldest, None)
+        self._cache[key] = (url, file_name, expiry)
+        self._cache_order.append(key)
 
     def clear_cache(self):
         self._cache.clear()
+        self._cache_order.clear()
         logger.info("302 缓存已清理")

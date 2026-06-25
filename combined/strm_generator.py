@@ -1,13 +1,65 @@
-import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from p115client.tool.iterdir import iter_files_with_path_skim
-
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from database import db
+
+
+def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
+    """
+    递归遍历 115 目录下的所有文件（非目录）
+    使用 fs_files API 分页获取，递归子目录
+
+    :param client_wrapper: P115ClientWrapper 实例
+    :param cid: 起始目录 ID
+    """
+    http_client = client_wrapper.client
+    if http_client is None:
+        return
+    stack = [cid]
+    while stack:
+        current_cid = stack.pop()
+        offset = 0
+        limit = 1000
+        while True:
+            try:
+                resp = http_client.fs_files({
+                    "cid": current_cid,
+                    "limit": limit,
+                    "offset": offset,
+                })
+            except Exception as e:
+                logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
+                break
+            if not isinstance(resp, dict):
+                break
+            items = resp.get("data") or resp.get("Data") or []
+            if not items:
+                break
+            for item in items:
+                is_dir = False
+                if "fid" not in item:
+                    is_dir = True
+                attr = {
+                    "name": item.get("n") or item.get("name", ""),
+                    "is_dir": is_dir,
+                    "size": item.get("s") or item.get("size", 0),
+                    "pickcode": item.get("pc") or item.get("pickcode") or "",
+                    "pick_code": item.get("pc") or item.get("pickcode") or "",
+                    "sha1": item.get("sha") or item.get("sha1", ""),
+                    "path": "",
+                    "id": item.get("cid") if is_dir else item.get("fid", 0),
+                    "parent_id": item.get("pid", 0),
+                }
+                if is_dir:
+                    stack.append(attr["id"])
+                else:
+                    yield attr
+            if len(items) < limit:
+                break
+            offset += limit
 
 
 class StrmGenerator:
@@ -29,7 +81,13 @@ class StrmGenerator:
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
 
-    def set_config(self, rmt_mediaext: str = "", download_mediaext: str = "", auto_download_mediainfo: bool = False, overwrite_mode: str = "never"):
+    def set_config(
+        self,
+        rmt_mediaext: str = "",
+        download_mediaext: str = "",
+        auto_download_mediainfo: bool = False,
+        overwrite_mode: str = "never",
+    ):
         if rmt_mediaext:
             self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
         if download_mediaext:
@@ -44,9 +102,25 @@ class StrmGenerator:
     def reset_cancel(self):
         self._cancel_flag.clear()
 
+    def _resolve_pan_path(self, pan_path: str) -> int:
+        try:
+            http_client = self._client.client
+            if http_client is None:
+                raise RuntimeError("115 客户端未初始化")
+            resp = http_client.fs_dir_getid(pan_path)
+            if not isinstance(resp, dict):
+                raise RuntimeError(f"获取目录ID失败: {pan_path}")
+            from p115client import check_response as _check_response
+            _check_response(resp)
+            cid = int(resp.get("id", -1))
+            if cid <= 0:
+                raise RuntimeError(f"目录不存在: {pan_path}")
+            return cid
+        except Exception as e:
+            raise
+
     def full_sync(self, path_mappings: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         self.reset_cancel()
-        # Apply optional config overrides
         if kwargs.get("rmt_mediaext") is not None:
             self.set_config(
                 rmt_mediaext=kwargs.get("rmt_mediaext", ""),
@@ -71,22 +145,11 @@ class StrmGenerator:
                 logger.info("开始同步目录: %s -> %s", pan_path, local_path)
 
                 try:
-                    # 通过路径获取目录 CID
-                    from p115client import check_response
-                    resp = self._client._client.fs_dir_getid(pan_path)
-                    if not isinstance(resp, dict):
-                        logger.warning("获取目录ID失败: %s 返回非 dict", pan_path)
-                        total_failed += 1
-                        continue
-                    check_response(resp)
-                    cid = int(resp.get("id", -1))
-                    if cid <= 0:
-                        logger.warning("目录不存在: %s (cid=%s)", pan_path, cid)
-                        total_failed += 1
-                        continue
+                    cid = self._resolve_pan_path(pan_path)
+                    path_cache: Dict[int, str] = {}
+                    path_cache[0] = "/"
 
-                    # 遍历目录下所有文件（递归子目录）
-                    for attr in iter_files_with_path_skim(self._client._client, cid, with_ancestors=True):
+                    for attr in _iter_files_115(self._client, cid):
                         if self._cancel_flag.is_set():
                             break
                         if attr.get("is_dir"):
@@ -94,9 +157,13 @@ class StrmGenerator:
                         name = attr.get("name", "")
                         ext = Path(name).suffix.lower()
                         pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
-                        pan_full_path = attr.get("path", f"{pan_path}/{name}")
+                        file_id = attr.get("id", 0)
+                        parent_id = attr.get("parent_id", 0)
+                        parent_path = path_cache.get(parent_id, "")
+                        if not parent_path:
+                            parent_path = pan_path
+                        pan_full_path = f"{parent_path}/{name}" if parent_path else f"{pan_path}/{name}"
 
-                        # 先检查附属文件下载（字幕/元数据）
                         if self._auto_download_mediainfo and ext in self._download_mediaext:
                             local_file_path = self._to_local_path(
                                 pan_full_path, pan_path, local_path
@@ -106,6 +173,7 @@ class StrmGenerator:
                                 try:
                                     dl_resp = self._client._client.download_url(pickcode)
                                     if isinstance(dl_resp, dict):
+                                        from p115client import check_response
                                         dl_resp = check_response(dl_resp)
                                         file_url = dl_resp.get("url") or dl_resp.get("file_url", "")
                                         if file_url:
@@ -116,7 +184,6 @@ class StrmGenerator:
                                 except Exception as e:
                                     logger.warning("下载附属文件失败 %s: %s", name, e)
 
-                        # 再检查媒体文件（生成 STRM）
                         if ext in self._rmt_mediaext:
                             if not pickcode:
                                 continue
@@ -147,6 +214,7 @@ class StrmGenerator:
             db.finish_sync_history(
                 history_id, total_count, total_new, total_deleted, total_failed
             )
+
             logger.info(
                 "全量同步完成: 新增=%d, 失败=%d",
                 total_new,

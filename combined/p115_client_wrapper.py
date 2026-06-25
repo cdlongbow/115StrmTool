@@ -1,13 +1,23 @@
-from typing import Any, Dict, Optional
 from base64 import b64encode
+from json import loads as json_loads
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from httpx import Client, Limits, Timeout
+from p115rsacipher import encrypt, decrypt
 
 from logger import logger
+
+
+P115_DOWNLOAD_API = "http://proapi.115.com/android/2.0/ufile/download"
+P115_UA_IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148"
 
 
 class P115ClientWrapper:
     def __init__(self, cookie: str = ""):
         self._cookie = cookie
         self._client = None
+        self._http_client: Optional[Client] = None
         self._init_client()
 
     def _init_client(self):
@@ -17,6 +27,12 @@ class P115ClientWrapper:
         try:
             from p115client import P115Client
             self._client = P115Client(cookies=self._cookie)
+            self._http_client = Client(
+                cookies=self._parse_cookie(self._cookie),
+                follow_redirects=True,
+                timeout=Timeout(10.0, connect=5.0),
+                limits=Limits(max_connections=200, max_keepalive_connections=100),
+            )
             logger.info("115 客户端初始化成功")
         except ImportError:
             logger.error("p115client 库未安装，请执行: pip install p115client==0.0.8.10")
@@ -25,8 +41,21 @@ class P115ClientWrapper:
             logger.error("115 客户端初始化失败: %s", e, exc_info=True)
             self._client = None
 
+    @staticmethod
+    def _parse_cookie(cookie_str: str) -> Dict[str, str]:
+        result = {}
+        for part in cookie_str.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                result[k.strip()] = v.strip()
+        return result
+
     def update_cookie(self, cookie: str):
         self._cookie = cookie
+        if self._http_client:
+            self._http_client.close()
+            self._http_client = None
         self._init_client()
 
     @property
@@ -52,6 +81,77 @@ class P115ClientWrapper:
         except Exception as e:
             logger.error("获取下载地址失败 pickcode=%s: %s", pickcode, e, exc_info=True)
             return None
+
+    def get_download_url_with_ua(
+        self, pickcode: str, user_agent: str = ""
+    ) -> Optional[Tuple[str, str, int]]:
+        """
+        使用加密 API 获取 115 下载地址，URL 绑定指定的 User-Agent
+
+        :param pickcode (str): 文件 pickcode
+        :param user_agent (str): 客户端 User-Agent，URL 将绑定此 UA
+
+        :return Tuple: (下载 URL, 文件名, 过期时间戳), 失败返回 None
+        """
+        if not self._http_client:
+            logger.warning("115 HTTP 客户端未初始化")
+            return None
+        if not user_agent:
+            user_agent = P115_UA_IOS
+        try:
+            payload = encrypt(f'{{"pick_code":"{pickcode}"}}').decode("utf-8")
+            resp = self._http_client.post(
+                P115_DOWNLOAD_API,
+                data={"data": payload},
+                headers={"User-Agent": user_agent},
+            )
+            if resp.status_code != 200:
+                logger.error(
+                    "115 下载 API 返回非 200: status=%s pickcode=%s",
+                    resp.status_code,
+                    pickcode,
+                )
+                return None
+            json = resp.json()
+            if not json.get("state"):
+                logger.error(
+                    "115 下载 API 返回失败: pickcode=%s resp=%s",
+                    pickcode,
+                    json,
+                )
+                return None
+            decrypted = decrypt(json["data"])
+            data = json_loads(decrypted)
+            url = data.get("url") or ""
+            if not url:
+                logger.error(
+                    "115 下载 API 返回无 URL: pickcode=%s data=%s",
+                    pickcode,
+                    data,
+                )
+                return None
+            file_name = unquote(urlsplit(url).path.rpartition("/")[-1])
+            t = int(
+                next(
+                    (v for k, v in parse_qs(urlsplit(url).query).items() if k == "t"),
+                    0,
+                )
+            )
+            expires_time = t - 300
+            return (url, file_name, expires_time)
+        except Exception as e:
+            logger.error(
+                "加密获取下载地址失败 pickcode=%s: %s",
+                pickcode,
+                e,
+                exc_info=True,
+            )
+            return None
+
+    def close(self):
+        if self._http_client:
+            self._http_client.close()
+            self._http_client = None
 
     def list_files(self, cid: str = "0") -> list:
         if not self._client:
@@ -95,13 +195,11 @@ class P115ClientWrapper:
     def get_qrcode(self, app: str = "alipaymini") -> Optional[Dict]:
         try:
             from p115client import P115Client
-            # 获取 QR code token，使用默认 app="web" 匹配原始实现
             token_resp = P115Client.login_qrcode_token()
             if not token_resp or not token_resp.get("data"):
                 return None
             payload = token_resp["data"]
             uid = str(payload["uid"])
-            # 下载二维码图片，使用默认 app="web"
             qr_bytes = P115Client.login_qrcode(uid)
             if not isinstance(qr_bytes, (bytes, bytearray)):
                 return None
@@ -131,7 +229,6 @@ class P115ClientWrapper:
             if status == -2:
                 return {"status": "expired", "msg": "用户取消登录"}
 
-            # status == 2: 已确认登录，获取 cookie
             if status == 2:
                 client_type = payload.get("client_type", "alipaymini")
                 uid = str(payload.get("uid", ""))

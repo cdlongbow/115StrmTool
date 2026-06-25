@@ -30,7 +30,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "strm_url_prefix": "http://192.168.2.100:3333",
         "rmt_mediaext": "mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm",
         "download_mediaext": "srt,ssa,ass,sup,pgs,sub,idx",
-"auto_download_mediainfo": False,
+        "auto_download_mediainfo": False,
         "overwrite_mode": "never",
     },
 }
