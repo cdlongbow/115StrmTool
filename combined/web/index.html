@@ -374,36 +374,36 @@ async function browse115Path(i) {
   _browsePath = '/';
   document.getElementById('browserModal').style.display = 'flex';
   document.getElementById('browserSelectBtn').disabled = true;
-  await loadBrowserDir('0');
+  await loadBrowserDir('0', '/');
 }
 
-async function loadBrowserDir(pid) {
+async function loadBrowserDir(pid, displayPath) {
   _browsePid = pid;
+  _browsePath = displayPath;
   const el = document.getElementById('browserList');
   el.innerHTML = '<p style="padding:16px;color:#999">加载中...</p>';
   try {
-    const r = await fetch(`/api/browse?pid=${pid}`);
+    const r = await fetch(`/api/browse?pid=${pid}&path=${encodeURIComponent(displayPath)}`);
     const d = await r.json();
     document.getElementById('browserPath').textContent = d.path || '/';
     _browsePath = d.path || '/';
     let html = '';
     if (pid !== '0') {
-      html += `<div class="browser-item" onclick="loadBrowserDir('0')" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px"><span style="color:#999">&#x1F3E0;</span> 根目录</div>`;
+      html += `<div class="browser-item" onclick="loadBrowserDir('0','/')" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px"><span style="color:#999">&#x1F3E0;</span> 根目录</div>`;
     }
     (d.items||[]).filter(f => f.is_dir).forEach(f => {
-      html += `<div class="browser-item" data-pid="${f.id}" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px" onclick="event.stopPropagation();loadBrowserDir('${f.id}')"><span style="color:#f39c12">&#x1F4C1;</span> ${esc(f.name)}</div>`;
+      const childPath = (d.path === '/' ? '' : d.path) + '/' + f.name;
+      html += `<div class="browser-item" data-pid="${f.id}" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px" onclick="event.stopPropagation();loadBrowserDir('${f.id}','${esc(childPath)}')"><span style="color:#f39c12">&#x1F4C1;</span> ${esc(f.name)}</div>`;
     });
     if (html) {
       el.innerHTML = html;
       el.querySelectorAll('.browser-item').forEach(el2 => {
         el2.addEventListener('dblclick', () => {
-          _browsePath = d.path || '/';
           document.getElementById('browserSelectBtn').disabled = false;
         });
         el2.addEventListener('click', () => {
           document.querySelectorAll('.browser-item').forEach(x => x.style.background = '');
           el2.style.background = '#e8f0fe';
-          _browsePath = d.path || '/';
           document.getElementById('browserSelectBtn').disabled = false;
         });
       });
