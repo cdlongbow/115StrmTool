@@ -159,14 +159,11 @@ tr:hover{background:#f5f5f5}
       <input type="text" id="p115_rmt_mediaext" placeholder="mp4,mkv,ts,iso,rmvb,avi,mov">
       <div class="hint">只有这些后缀的文件会生成 STRM</div>
     </div>
-    <div class="form-group">
-      <label>附属文件后缀（逗号分隔）</label>
-      <input type="text" id="p115_download_mediaext" placeholder="srt,ssa,ass,sup,pgs">
-      <div class="hint">同步时一并下载到本地的附属文件（字幕、元数据等）</div>
-    </div>
-    <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
-      <input type="checkbox" id="p115_auto_download_mediainfo" style="width:auto">
-      <label for="p115_auto_download_mediainfo" style="margin:0">同步时下载元数据文件（jpg、png、nfo 等）</label>
+    <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;flex-wrap:wrap">
+      <input type="checkbox" id="p115_auto_download_mediainfo" style="width:auto" onchange="toggleDownloadExt()">
+      <label for="p115_auto_download_mediainfo" style="margin:0">附属文件后缀（逗号分隔）</label>
+      <input type="text" id="p115_download_mediaext" placeholder="srt,ssa,ass,sup,pgs" style="flex:1;min-width:200px">
+      <div class="hint" style="width:100%">同步时一并下载到本地的附属文件（字幕、元数据等）</div>
     </div>
     <div class="form-group">
       <label>STRM 覆盖模式</label>
@@ -349,6 +346,8 @@ function loadP115Config(c) {
   document.getElementById('p115_rmt_mediaext').value = c.rmt_mediaext || 'mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm';
   document.getElementById('p115_download_mediaext').value = c.download_mediaext || 'srt,ssa,ass,sup,pgs,sub,idx';
   document.getElementById('p115_auto_download_mediainfo').checked = c.auto_download_mediainfo || false;
+  toggleDownloadExt();
+  document.getElementById('p115_overwrite_mode').value = c.overwrite_mode || 'never';
   document.getElementById('p115_overwrite_mode').value = c.overwrite_mode || 'never';
   p115Paths = (c.paths || []).map(p => ({...p}));
   renderPathMappings();
@@ -595,6 +594,11 @@ async function listStrmFiles(page=1) {
 // ── 工具 ──
 function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]}
 
+function toggleDownloadExt() {
+  const cb = document.getElementById('p115_auto_download_mediainfo');
+  const input = document.getElementById('p115_download_mediaext');
+  input.disabled = !cb.checked;
+}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 let tt;
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
