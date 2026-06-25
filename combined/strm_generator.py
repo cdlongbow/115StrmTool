@@ -83,7 +83,7 @@ class StrmGenerator:
         parts = [p for p in path.strip("/").split("/") if p]
         cid = "0"
         for part in parts:
-            resp = self._client._client.fs_files({"cid": cid, "limit": 10000})
+            resp = self._client._client.fs_files({"cid": cid, "limit": 7000})
             if not isinstance(resp, dict):
                 logger.warning("解析路径 %s 失败: fs_files 返回非 dict", path)
                 return "0"
@@ -119,7 +119,7 @@ class StrmGenerator:
                 # Try root or just return empty
                 if current_pan_path.strip("/") != "":
                     return []
-            resp = self._client._client.fs_files({"cid": cid, "limit": 10000})
+            resp = self._client._client.fs_files({"cid": cid, "limit": 7000})
             entries = resp.get("data", []) if isinstance(resp, dict) else []
         except Exception as e:
             logger.error("列出目录失败 %s: %s", current_pan_path, e)
