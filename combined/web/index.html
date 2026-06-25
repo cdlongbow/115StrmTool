@@ -168,6 +168,13 @@ tr:hover{background:#f5f5f5}
       <input type="checkbox" id="p115_auto_download_mediainfo" style="width:auto">
       <label for="p115_auto_download_mediainfo" style="margin:0">同步时下载元数据文件（jpg、png、nfo 等）</label>
     </div>
+    <div class="form-group">
+      <label>STRM 覆盖模式</label>
+      <select id="p115_overwrite_mode" style="padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+        <option value="never">从不 - 文件已存在时跳过</option>
+        <option value="always">总是 - 覆盖已有文件</option>
+      </select>
+    </div>
   </div>
   <div class="card">
     <h2>路径映射</h2>
@@ -342,6 +349,7 @@ function loadP115Config(c) {
   document.getElementById('p115_rmt_mediaext').value = c.rmt_mediaext || 'mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm';
   document.getElementById('p115_download_mediaext').value = c.download_mediaext || 'srt,ssa,ass,sup,pgs,sub,idx';
   document.getElementById('p115_auto_download_mediainfo').checked = c.auto_download_mediainfo || false;
+  document.getElementById('p115_overwrite_mode').value = c.overwrite_mode || 'never';
   p115Paths = (c.paths || []).map(p => ({...p}));
   renderPathMappings();
 }
@@ -460,6 +468,7 @@ async function saveP115Config() {
     rmt_mediaext: document.getElementById('p115_rmt_mediaext').value.trim(),
     download_mediaext: document.getElementById('p115_download_mediaext').value.trim(),
     auto_download_mediainfo: document.getElementById('p115_auto_download_mediainfo').checked,
+    overwrite_mode: document.getElementById('p115_overwrite_mode').value,
     paths: collectPaths(),
   };
   try {

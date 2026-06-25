@@ -95,6 +95,7 @@ async def start_full_sync() -> Dict[str, Any]:
             rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
             download_mediaext=p115_cfg.get("download_mediaext", ""),
             auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
+            overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
         )
         result = gen.full_sync(p115_cfg.get("paths", []))
         return {"status": "completed", **result}

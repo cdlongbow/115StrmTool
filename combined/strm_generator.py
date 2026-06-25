@@ -24,16 +24,18 @@ class StrmGenerator:
             ".srt", ".ssa", ".ass", ".sup", ".pgs", ".sub", ".idx",
         }
         self._auto_download_mediainfo = False
+        self._overwrite_mode = "never"
 
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
 
-    def set_config(self, rmt_mediaext: str = "", download_mediaext: str = "", auto_download_mediainfo: bool = False):
+    def set_config(self, rmt_mediaext: str = "", download_mediaext: str = "", auto_download_mediainfo: bool = False, overwrite_mode: str = "never"):
         if rmt_mediaext:
             self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
         if download_mediaext:
             self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()}
         self._auto_download_mediainfo = auto_download_mediainfo
+        self._overwrite_mode = overwrite_mode
 
     def cancel(self):
         self._cancel_flag.set()
@@ -169,6 +171,8 @@ class StrmGenerator:
         return Path(local_strm_dir) / rel_path
 
     def _ensure_strm_file(self, strm_path: Path, pickcode: str):
+        if self._overwrite_mode == "never" and strm_path.exists():
+            return
         strm_path.parent.mkdir(parents=True, exist_ok=True)
         strm_url = f"{self._url_prefix}/api/v1/plugin/P115StrmHelper/redirect_url?pickcode={pickcode}"
         strm_path.write_text(strm_url, encoding="utf-8")
