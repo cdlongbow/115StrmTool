@@ -3,6 +3,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from p115client.tool.iterdir import iter_files_with_path_skim
+
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from database import db
@@ -43,8 +45,45 @@ class StrmGenerator:
                 logger.info("开始同步目录: %s -> %s", pan_path, local_path)
 
                 try:
-                    files = self._walk_path(pan_path, pan_path, local_path, path_mappings)
-                    all_files.extend(files)
+                    # 通过路径获取目录 CID
+                    resp = self._client._client.fs_dir_getid(pan_path)
+                    if not isinstance(resp, dict):
+                        logger.warning("获取目录ID失败: %s 返回非 dict", pan_path)
+                        total_failed += 1
+                        continue
+                    cid = resp.get("id", -1)
+                    if cid <= 0:
+                        logger.warning("目录不存在: %s (cid=%s)", pan_path, cid)
+                        total_failed += 1
+                        continue
+
+                    # 遍历目录下所有文件
+                    for attr in iter_files_with_path_skim(self._client._client, cid):
+                        if self._cancel_flag.is_set():
+                            break
+                        if attr.get("is_dir"):
+                            continue
+                        name = attr.get("name", "")
+                        if not self._is_media_file(name):
+                            continue
+                        pickcode = attr.get("pickcode", "")
+                        if not pickcode:
+                            continue
+                        pan_full_path = attr.get("path", f"{pan_path}/{name}")
+                        local_strm_path = self._to_local_path(
+                            pan_full_path, pan_path, local_path
+                        )
+                        self._ensure_strm_file(local_strm_path, pickcode)
+                        all_files.append({
+                            "pickcode": pickcode,
+                            "file_name": name,
+                            "file_size": attr.get("size", 0),
+                            "file_type": Path(name).suffix.lower(),
+                            "pan_path": pan_full_path,
+                            "local_strm_path": str(local_strm_path),
+                            "sha1": attr.get("sha1", ""),
+                            "parent_id": pan_path,
+                        })
                 except Exception as e:
                     logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                     total_failed += 1
@@ -77,98 +116,6 @@ class StrmGenerator:
             "cancelled": self._cancel_flag.is_set(),
         }
 
-    def _resolve_cid(self, path: str) -> str:
-        if not path or path.strip("/") == "":
-            return "0"
-        parts = [p for p in path.strip("/").split("/") if p]
-        cid = "0"
-        for part in parts:
-            resp = self._client._client.fs_files({"cid": cid, "limit": 7000})
-            if not isinstance(resp, dict):
-                logger.warning("解析路径 %s 失败: fs_files 返回非 dict", path)
-                return "0"
-            data = resp.get("data", [])
-            if not isinstance(data, list):
-                logger.warning("解析路径 %s 失败: data 不是列表 (cid=%s)", path, cid)
-                return "0"
-            found = False
-            for item in data:
-                if "fid" not in item and item.get("n") == part:
-                    cid = str(item.get("cid", "0"))
-                    found = True
-                    break
-            if not found:
-                logger.warning("路径 %s 中未找到目录 %s (cid=%s)", path, part, cid)
-                return "0"
-        return cid
-
-    def _walk_path(
-        self,
-        base_pan_path: str,
-        current_pan_path: str,
-        local_strm_dir: str,
-        path_mappings: List[Dict[str, str]],
-    ) -> List[Dict[str, Any]]:
-        if self._cancel_flag.is_set():
-            return []
-
-        files = []
-        try:
-            cid = self._resolve_cid(current_pan_path)
-            if cid == "0":
-                # Try root or just return empty
-                if current_pan_path.strip("/") != "":
-                    return []
-            resp = self._client._client.fs_files({"cid": cid, "limit": 7000})
-            entries = resp.get("data", []) if isinstance(resp, dict) else []
-        except Exception as e:
-            logger.error("列出目录失败 %s: %s", current_pan_path, e)
-            return []
-
-        if not isinstance(entries, list):
-            return []
-
-        for entry in entries:
-            if self._cancel_flag.is_set():
-                break
-            if not isinstance(entry, dict):
-                continue
-
-            name = entry.get("n") or entry.get("name", "")
-            is_dir = "fid" not in entry
-            pickcode = entry.get("pc") or entry.get("pickcode", "")
-            file_size = entry.get("s") or entry.get("size", 0)
-            sha1 = entry.get("sha") or entry.get("sha1", "")
-
-            if is_dir:
-                sub_pan = f"{current_pan_path}/{name}"
-                sub_files = self._walk_path(
-                    base_pan_path, sub_pan, local_strm_dir, path_mappings
-                )
-                files.extend(sub_files)
-            else:
-                if not self._is_media_file(name):
-                    continue
-                pan_full_path = f"{current_pan_path}/{name}"
-                local_path = self._to_local_path(
-                    pan_full_path, base_pan_path, local_strm_dir, path_mappings
-                )
-                self._ensure_strm_file(local_path, pickcode)
-                files.append(
-                    {
-                        "pickcode": pickcode,
-                        "file_name": name,
-                        "file_size": file_size,
-                        "file_type": Path(name).suffix.lower(),
-                        "pan_path": pan_full_path,
-                        "local_strm_path": str(local_path),
-                        "sha1": sha1,
-                        "parent_id": current_pan_path,
-                    }
-                )
-
-        return files
-
     def _is_media_file(self, name: str) -> bool:
         ext = Path(name).suffix.lower()
         return ext in (
@@ -182,13 +129,7 @@ class StrmGenerator:
             ".dts", ".ac3", ".eac3", ".truehd",
         )
 
-    def _to_local_path(
-        self,
-        pan_full_path: str,
-        base_pan_path: str,
-        local_strm_dir: str,
-        path_mappings: List[Dict[str, str]],
-    ) -> Path:
+    def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Path:
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
         return Path(local_strm_dir) / rel_path
 
