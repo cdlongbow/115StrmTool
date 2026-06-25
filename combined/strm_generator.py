@@ -16,25 +16,24 @@ class StrmGenerator:
         self._url_prefix = url_prefix.rstrip("/")
         self._cancel_flag = threading.Event()
         self._progress_callback: Optional[Callable] = None
-        self._rmt_mediaext: set = set()
-        self._download_mediaext: set = set()
+        self._rmt_mediaext: set = {
+            ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
+            ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".tp", ".f4v", ".webm",
+        }
+        self._download_mediaext: set = {
+            ".srt", ".ssa", ".ass", ".sup", ".pgs", ".sub", ".idx",
+        }
         self._auto_download_mediainfo = False
 
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
 
     def set_config(self, rmt_mediaext: str = "", download_mediaext: str = "", auto_download_mediainfo: bool = False):
-        self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()} or {
-            ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
-            ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".tp", ".f4v", ".webm",
-        }
-        self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()} or {
-            ".srt", ".ssa", ".ass", ".sup", ".pgs", ".sub", ".idx",
-        }
+        if rmt_mediaext:
+            self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
+        if download_mediaext:
+            self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()}
         self._auto_download_mediainfo = auto_download_mediainfo
-
-    def set_progress_callback(self, cb: Callable):
-        self._progress_callback = cb
 
     def cancel(self):
         self._cancel_flag.set()
@@ -71,30 +70,54 @@ class StrmGenerator:
 
                 try:
                     # 通过路径获取目录 CID
+                    from p115client import check_response
                     resp = self._client._client.fs_dir_getid(pan_path)
                     if not isinstance(resp, dict):
                         logger.warning("获取目录ID失败: %s 返回非 dict", pan_path)
                         total_failed += 1
                         continue
+                    check_response(resp)
                     cid = resp.get("id", -1)
                     if cid <= 0:
                         logger.warning("目录不存在: %s (cid=%s)", pan_path, cid)
                         total_failed += 1
                         continue
 
-                    # 遍历目录下所有文件
-                    for attr in iter_files_with_path_skim(self._client._client, cid):
+                    # 遍历目录下所有文件（递归子目录）
+                    for attr in iter_files_with_path_skim(self._client._client, cid, with_ancestors=True):
                         if self._cancel_flag.is_set():
                             break
                         if attr.get("is_dir"):
                             continue
                         name = attr.get("name", "")
                         ext = Path(name).suffix.lower()
+                        pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
+                        pan_full_path = attr.get("path", f"{pan_path}/{name}")
+
+                        # 先检查附属文件下载（字幕/元数据）
+                        if self._auto_download_mediainfo and ext in self._download_mediaext:
+                            local_file_path = self._to_local_path(
+                                pan_full_path, pan_path, local_path
+                            )
+                            if not local_file_path.exists():
+                                local_file_path.parent.mkdir(parents=True, exist_ok=True)
+                                try:
+                                    dl_resp = self._client._client.download_url(pickcode)
+                                    if isinstance(dl_resp, dict):
+                                        dl_resp = check_response(dl_resp)
+                                        file_url = dl_resp.get("url") or dl_resp.get("file_url", "")
+                                        if file_url:
+                                            import httpx
+                                            file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
+                                            local_file_path.write_bytes(file_resp.content)
+                                            logger.info("已下载附属文件: %s", name)
+                                except Exception as e:
+                                    logger.warning("下载附属文件失败 %s: %s", name, e)
+
+                        # 再检查媒体文件（生成 STRM）
                         if ext in self._rmt_mediaext:
-                            pickcode = attr.get("pickcode", "")
                             if not pickcode:
                                 continue
-                            pan_full_path = attr.get("path", f"{pan_path}/{name}")
                             local_strm_path = self._to_local_path(
                                 pan_full_path, pan_path, local_path
                             )
@@ -109,24 +132,6 @@ class StrmGenerator:
                                 "sha1": attr.get("sha1", ""),
                                 "parent_id": pan_path,
                             })
-                        elif self._auto_download_mediainfo and ext in self._download_mediaext:
-                            # Directly download metadata files (subtitles, etc.) alongside STRM
-                            pan_full_path = attr.get("path", f"{pan_path}/{name}")
-                            local_path = self._to_local_path(
-                                pan_full_path, pan_path, local_path
-                            )
-                            local_path.parent.mkdir(parents=True, exist_ok=True)
-                            try:
-                                download_resp = self._client._client.download_url(attr.get("pickcode", ""))
-                                if isinstance(download_resp, dict):
-                                    file_url = download_resp.get("url") or download_resp.get("file_url", "")
-                                    if file_url:
-                                        import httpx
-                                        file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
-                                        local_path.write_bytes(file_resp.content)
-                                        logger.info("已下载附属文件: %s", name)
-                            except Exception as e:
-                                logger.warning("下载附属文件失败 %s: %s", name, e)
                 except Exception as e:
                     logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                     total_failed += 1
