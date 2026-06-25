@@ -44,6 +44,16 @@ class RedirectService:
 
         return app
 
+    @staticmethod
+    def _real_client_ip(request: Request) -> str:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",", 1)[0].strip()
+        xri = request.headers.get("x-real-ip")
+        if xri:
+            return xri.strip()
+        return request.client.host if request.client else ""
+
     async def _do_redirect(self, pickcode: str, request: Request) -> Response:
         if not pickcode or len(pickcode) != 17 or not pickcode.isalnum():
             return JSONResponse(
@@ -51,20 +61,24 @@ class RedirectService:
                 content={"code": -1, "msg": "Missing or invalid pickcode", "data": None},
             )
 
+        client_ip = self._real_client_ip(request)
+        ua = request.headers.get("user-agent", "")[:64]
+
         cached = self._get_cached(pickcode)
         if cached:
-            logger.debug("302 缓存命中: pickcode=%s", pickcode)
+            logger.info("302 缓存命中 | ip=%s | pickcode=%s | ua=%s", client_ip, pickcode, ua)
             return self._build_302(cached, pickcode)
 
         download_url = self._client.get_download_url(pickcode)
         if not download_url:
+            logger.warning("302 解析失败 | ip=%s | pickcode=%s | ua=%s", client_ip, pickcode, ua)
             return JSONResponse(
                 status_code=502,
                 content={"code": -1, "msg": "Failed to resolve download URL", "data": None},
             )
 
         self._set_cache(pickcode, download_url)
-        logger.info("302 跳转: pickcode=%s -> %s", pickcode, download_url)
+        logger.info("302 跳转 | ip=%s | pickcode=%s | url=%s | ua=%s", client_ip, pickcode, download_url, ua)
         return self._build_302(download_url, pickcode)
 
     def _build_302(self, url: str, pickcode: str) -> Response:
