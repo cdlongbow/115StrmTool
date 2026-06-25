@@ -79,7 +79,7 @@ class StrmGenerator:
                         total_failed += 1
                         continue
                     check_response(resp)
-                    cid = resp.get("id", -1)
+                    cid = int(resp.get("id", -1))
                     if cid <= 0:
                         logger.warning("目录不存在: %s (cid=%s)", pan_path, cid)
                         total_failed += 1
