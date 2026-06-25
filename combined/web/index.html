@@ -153,6 +153,23 @@ tr:hover{background:#f5f5f5}
     </div>
   </div>
   <div class="card">
+    <h2>同步选项</h2>
+    <div class="form-group">
+      <label>媒体文件后缀（逗号分隔）</label>
+      <input type="text" id="p115_rmt_mediaext" placeholder="mp4,mkv,ts,iso,rmvb,avi,mov">
+      <div class="hint">只有这些后缀的文件会生成 STRM</div>
+    </div>
+    <div class="form-group">
+      <label>附属文件后缀（逗号分隔）</label>
+      <input type="text" id="p115_download_mediaext" placeholder="srt,ssa,ass,sup,pgs">
+      <div class="hint">同步时一并下载到本地的附属文件（字幕、元数据等）</div>
+    </div>
+    <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="p115_auto_download_mediainfo" style="width:auto">
+      <label for="p115_auto_download_mediainfo" style="margin:0">同步时下载元数据文件（jpg、png、nfo 等）</label>
+    </div>
+  </div>
+  <div class="card">
     <h2>路径映射</h2>
     <div id="p115_pathMappings"></div>
     <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
@@ -322,6 +339,9 @@ function loadP115Config(c) {
   document.getElementById('p115_redirect_host').value = c.redirect_host || '0.0.0.0';
   document.getElementById('p115_redirect_port').value = c.redirect_port || 3333;
   document.getElementById('p115_strm_url_prefix').value = c.strm_url_prefix || 'http://192.168.2.100:3333';
+  document.getElementById('p115_rmt_mediaext').value = c.rmt_mediaext || 'mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm';
+  document.getElementById('p115_download_mediaext').value = c.download_mediaext || 'srt,ssa,ass,sup,pgs,sub,idx';
+  document.getElementById('p115_auto_download_mediainfo').checked = c.auto_download_mediainfo || false;
   p115Paths = (c.paths || []).map(p => ({...p}));
   renderPathMappings();
 }
@@ -435,8 +455,11 @@ async function saveP115Config() {
     enabled: document.getElementById('p115_enabled').checked,
     cookie: document.getElementById('p115_cookie').value.trim(),
     redirect_host: document.getElementById('p115_redirect_host').value.trim() || '0.0.0.0',
-    redirect_port: parseInt(document.getElementById('p115_redirect_port').value) || 8080,
-    strm_url_prefix: document.getElementById('p115_strm_url_prefix').value.trim() || 'http://localhost:8080',
+    redirect_port: parseInt(document.getElementById('p115_redirect_port').value) || 3333,
+    strm_url_prefix: document.getElementById('p115_strm_url_prefix').value.trim() || 'http://localhost:3333',
+    rmt_mediaext: document.getElementById('p115_rmt_mediaext').value.trim(),
+    download_mediaext: document.getElementById('p115_download_mediaext').value.trim(),
+    auto_download_mediainfo: document.getElementById('p115_auto_download_mediainfo').checked,
     paths: collectPaths(),
   };
   try {

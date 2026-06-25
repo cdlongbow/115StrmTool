@@ -88,9 +88,15 @@ async def start_full_sync() -> Dict[str, Any]:
     _sync_in_progress = True
     try:
         config = config_manager.get()
+        p115_cfg = config.get("p115", {})
         from strm_generator import get_strm_generator
-        gen = get_strm_generator(_client, config.get("strm_url_prefix", ""))
-        result = gen.full_sync(config.get("paths", []))
+        gen = get_strm_generator(_client, p115_cfg.get("strm_url_prefix", ""))
+        gen.set_config(
+            rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
+            download_mediaext=p115_cfg.get("download_mediaext", ""),
+            auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
+        )
+        result = gen.full_sync(p115_cfg.get("paths", []))
         return {"status": "completed", **result}
     except Exception as e:
         logger.error("同步异常: %s", e, exc_info=True)

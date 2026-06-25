@@ -16,6 +16,22 @@ class StrmGenerator:
         self._url_prefix = url_prefix.rstrip("/")
         self._cancel_flag = threading.Event()
         self._progress_callback: Optional[Callable] = None
+        self._rmt_mediaext: set = set()
+        self._download_mediaext: set = set()
+        self._auto_download_mediainfo = False
+
+    def set_progress_callback(self, cb: Callable):
+        self._progress_callback = cb
+
+    def set_config(self, rmt_mediaext: str = "", download_mediaext: str = "", auto_download_mediainfo: bool = False):
+        self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()} or {
+            ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
+            ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".tp", ".f4v", ".webm",
+        }
+        self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()} or {
+            ".srt", ".ssa", ".ass", ".sup", ".pgs", ".sub", ".idx",
+        }
+        self._auto_download_mediainfo = auto_download_mediainfo
 
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
@@ -27,8 +43,15 @@ class StrmGenerator:
     def reset_cancel(self):
         self._cancel_flag.clear()
 
-    def full_sync(self, path_mappings: List[Dict[str, str]]) -> Dict[str, Any]:
+    def full_sync(self, path_mappings: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         self.reset_cancel()
+        # Apply optional config overrides
+        if kwargs.get("rmt_mediaext") is not None:
+            self.set_config(
+                rmt_mediaext=kwargs.get("rmt_mediaext", ""),
+                download_mediaext=kwargs.get("download_mediaext", ""),
+                auto_download_mediainfo=kwargs.get("auto_download_mediainfo", False),
+            )
         history_id = db.add_sync_history("full")
         total_new = 0
         total_deleted = 0
@@ -66,26 +89,44 @@ class StrmGenerator:
                         if attr.get("is_dir"):
                             continue
                         name = attr.get("name", "")
-                        if not self._is_media_file(name):
-                            continue
-                        pickcode = attr.get("pickcode", "")
-                        if not pickcode:
-                            continue
-                        pan_full_path = attr.get("path", f"{pan_path}/{name}")
-                        local_strm_path = self._to_local_path(
-                            pan_full_path, pan_path, local_path
-                        )
-                        self._ensure_strm_file(local_strm_path, pickcode)
-                        all_files.append({
-                            "pickcode": pickcode,
-                            "file_name": name,
-                            "file_size": attr.get("size", 0),
-                            "file_type": Path(name).suffix.lower(),
-                            "pan_path": pan_full_path,
-                            "local_strm_path": str(local_strm_path),
-                            "sha1": attr.get("sha1", ""),
-                            "parent_id": pan_path,
-                        })
+                        ext = Path(name).suffix.lower()
+                        if ext in self._rmt_mediaext:
+                            pickcode = attr.get("pickcode", "")
+                            if not pickcode:
+                                continue
+                            pan_full_path = attr.get("path", f"{pan_path}/{name}")
+                            local_strm_path = self._to_local_path(
+                                pan_full_path, pan_path, local_path
+                            )
+                            self._ensure_strm_file(local_strm_path, pickcode)
+                            all_files.append({
+                                "pickcode": pickcode,
+                                "file_name": name,
+                                "file_size": attr.get("size", 0),
+                                "file_type": ext,
+                                "pan_path": pan_full_path,
+                                "local_strm_path": str(local_strm_path),
+                                "sha1": attr.get("sha1", ""),
+                                "parent_id": pan_path,
+                            })
+                        elif self._auto_download_mediainfo and ext in self._download_mediaext:
+                            # Directly download metadata files (subtitles, etc.) alongside STRM
+                            pan_full_path = attr.get("path", f"{pan_path}/{name}")
+                            local_path = self._to_local_path(
+                                pan_full_path, pan_path, local_path
+                            )
+                            local_path.parent.mkdir(parents=True, exist_ok=True)
+                            try:
+                                download_resp = self._client._client.download_url(attr.get("pickcode", ""))
+                                if isinstance(download_resp, dict):
+                                    file_url = download_resp.get("url") or download_resp.get("file_url", "")
+                                    if file_url:
+                                        import httpx
+                                        file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
+                                        local_path.write_bytes(file_resp.content)
+                                        logger.info("已下载附属文件: %s", name)
+                            except Exception as e:
+                                logger.warning("下载附属文件失败 %s: %s", name, e)
                 except Exception as e:
                     logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                     total_failed += 1
@@ -117,19 +158,6 @@ class StrmGenerator:
             "failed": total_failed,
             "cancelled": self._cancel_flag.is_set(),
         }
-
-    def _is_media_file(self, name: str) -> bool:
-        ext = Path(name).suffix.lower()
-        return ext in (
-            ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
-            ".ts", ".mts", ".m2ts", ".iso", ".bdmv",
-            ".mpg", ".mpeg", ".rmvb", ".3gp", ".ogm",
-            ".m4v", ".asf", ".divx",
-            ".srt", ".ass", ".ssa", ".sub", ".idx",
-            ".sup", ".pgs", ".mks",
-            ".mp3", ".flac", ".wav", ".aac", ".ogg", ".wma",
-            ".dts", ".ac3", ".eac3", ".truehd",
-        )
 
     def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Path:
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
