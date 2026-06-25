@@ -120,9 +120,10 @@ class StrmGenerator:
                         if ext in self._rmt_mediaext:
                             if not pickcode:
                                 continue
-                            local_strm_path = self._to_local_path(
+                            local_strm_path_orig = self._to_local_path(
                                 pan_full_path, pan_path, local_path
                             )
+                            local_strm_path = local_strm_path_orig.with_suffix(".strm")
                             self._ensure_strm_file(local_strm_path, pickcode)
                             all_files.append({
                                 "pickcode": pickcode,
