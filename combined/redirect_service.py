@@ -1,7 +1,7 @@
 from json import dumps as json_dumps
 from time import monotonic
-from typing import Dict, Optional
-from urllib.parse import quote
+from typing import Dict, Optional, Tuple
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, JSONResponse, Response
@@ -17,7 +17,7 @@ REDIRECT_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 class RedirectService:
     def __init__(self, client: P115ClientWrapper):
         self._client = client
-        self._cache: Dict[str, tuple] = {}
+        self._cache: Dict[str, Tuple[str, str, float]] = {}
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
@@ -54,39 +54,55 @@ class RedirectService:
             return xri.strip()
         return request.client.host if request.client else ""
 
+    @staticmethod
+    def _extract_file_name(url: str) -> str:
+        return unquote(urlsplit(url).path.rpartition("/")[-1])
+
     async def _do_redirect(self, pickcode: str, request: Request) -> Response:
+        client_ip = self._real_client_ip(request)
+        user_agent = (request.headers.get("user-agent") or "")[:64]
+        logger.debug("【302跳转服务】获取到客户端UA: %s", user_agent)
+
         if not pickcode or len(pickcode) != 17 or not pickcode.isalnum():
+            logger.debug("【302跳转服务】Missing or bad pickcode: %s", pickcode)
             return JSONResponse(
                 status_code=400,
                 content={"code": -1, "msg": "Missing or invalid pickcode", "data": None},
             )
 
-        client_ip = self._real_client_ip(request)
-        ua = request.headers.get("user-agent", "")[:64]
-
         cached = self._get_cached(pickcode)
         if cached:
-            logger.info("302 缓存命中 | ip=%s | pickcode=%s | ua=%s", client_ip, pickcode, ua)
-            return self._build_302(cached, pickcode)
+            cached_url, cached_fname = cached
+            logger.info("【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s", pickcode, cached_fname, client_ip)
+            return self._build_302(cached_url, pickcode, cached_fname)
 
         download_url = self._client.get_download_url(pickcode)
         if not download_url:
-            logger.warning("302 解析失败 | ip=%s | pickcode=%s | ua=%s", client_ip, pickcode, ua)
+            logger.error("【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s", pickcode, client_ip)
             return JSONResponse(
                 status_code=502,
                 content={"code": -1, "msg": "Failed to resolve download URL", "data": None},
             )
 
-        self._set_cache(pickcode, download_url)
-        logger.info("302 跳转 | ip=%s | pickcode=%s | url=%s | ua=%s", client_ip, pickcode, download_url, ua)
-        return self._build_302(download_url, pickcode)
+        file_name = self._extract_file_name(download_url)
+        self._set_cache(pickcode, download_url, file_name)
+        logger.info("【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s url=%s ip=%s", pickcode, file_name, download_url, client_ip)
+        return self._build_302(download_url, pickcode, file_name)
 
-    def _build_302(self, url: str, pickcode: str) -> Response:
+    def _build_302(self, url: str, pickcode: str, file_name: str = "") -> Response:
+        if not file_name:
+            file_name = pickcode
+        try:
+            file_name.encode("ascii")
+            content_disposition = f'attachment; filename="{file_name}"'
+        except UnicodeEncodeError:
+            encoded_filename = quote(file_name, safe="")
+            content_disposition = f"attachment; filename*=UTF-8\'\'{encoded_filename}"
         return Response(
             status_code=302,
             headers={
                 "Location": url,
-                "Content-Disposition": f'attachment; filename="{pickcode}"',
+                "Content-Disposition": content_disposition,
             },
             media_type="application/json; charset=utf-8",
             content=json_dumps({"status": "redirecting", "url": url}),
@@ -101,17 +117,17 @@ class RedirectService:
             return path
         return None
 
-    def _get_cached(self, key: str) -> Optional[str]:
+    def _get_cached(self, key: str) -> Optional[Tuple[str, str]]:
         entry = self._cache.get(key)
         if entry:
-            url, expiry = entry
+            url, fname, expiry = entry
             if monotonic() < expiry:
-                return url
+                return (url, fname)
             del self._cache[key]
         return None
 
-    def _set_cache(self, key: str, url: str):
-        self._cache[key] = (url, monotonic() + CACHE_TTL)
+    def _set_cache(self, key: str, url: str, file_name: str):
+        self._cache[key] = (url, file_name, monotonic() + CACHE_TTL)
 
     def clear_cache(self):
         self._cache.clear()
