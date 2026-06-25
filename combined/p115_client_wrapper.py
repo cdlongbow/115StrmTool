@@ -133,7 +133,7 @@ class P115ClientWrapper:
             file_name = unquote(urlsplit(url).path.rpartition("/")[-1])
             t = int(
                 next(
-                    (v for k, v in parse_qs(urlsplit(url).query).items() if k == "t"),
+                    (v[0] for k, v in parse_qs(urlsplit(url).query).items() if k == "t"),
                     0,
                 )
             )
