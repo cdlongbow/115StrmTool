@@ -40,6 +40,8 @@ class StrmGenerator:
             for mapping in path_mappings:
                 if self._cancel_flag.is_set():
                     break
+                if mapping.get("enabled") is False:
+                    continue
                 pan_path = mapping["from"]
                 local_path = mapping["to"]
                 logger.info("开始同步目录: %s -> %s", pan_path, local_path)

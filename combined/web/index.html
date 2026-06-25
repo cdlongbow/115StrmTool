@@ -57,6 +57,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .path-entry{display:flex;gap:6px;align-items:center;margin-bottom:8px}
 .path-entry .path-wrap{flex:1;display:flex;gap:4px}
 .path-entry input{flex:1;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px}
+.path-entry .path-cb{width:18px;height:18px;cursor:pointer;flex-shrink:0}
 .table-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:9px 12px;text-align:left;border-bottom:1px solid #eee}
@@ -330,19 +331,22 @@ function renderPathMappings() {
   container.innerHTML = '';
   p115Paths.forEach((m, i) => {
     const div = document.createElement('div'); div.className = 'path-entry';
+    const checked = m.enabled !== false ? 'checked' : '';
     div.innerHTML = `
+      <input type="checkbox" class="path-cb" ${checked} onchange="p115Paths[${i}].enabled=this.checked">
       <div class="path-wrap"><input class="path-from" value="${esc(m.from)}" placeholder="115 路径，如 /电影"><button class="btn-sm btn-outline" onclick="browse115Path(${i})">浏览</button></div>
       <div class="path-wrap"><input class="path-to" value="${esc(m.to)}" placeholder="本地路径，如 D:/strm/电影"><button class="btn-sm btn-outline" onclick="browseLocalPath(${i})">浏览</button></div>
       <button class="btn-sm btn-danger" onclick="removePathMapping(${i})">&times;</button>`;
     container.appendChild(div);
   });
 }
-function addPathMapping() { p115Paths.push({from:'',to:''}); renderPathMappings(); }
+function addPathMapping() { p115Paths.push({from:'',to:'',enabled:true}); renderPathMappings(); }
 function removePathMapping(i) { p115Paths.splice(i,1); renderPathMappings(); }
 function collectPaths() {
   return Array.from(document.querySelectorAll('#p115_pathMappings .path-entry')).map(e => ({
     from: e.querySelector('.path-from').value.trim(),
     to: e.querySelector('.path-to').value.trim(),
+    enabled: e.querySelector('.path-cb').checked,
   })).filter(m => m.from && m.to);
 }
 
