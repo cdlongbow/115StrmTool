@@ -554,17 +554,61 @@ def create_app(
             return new_url
         return url_or_path
 
+    async def _stream_from_cdn(
+        cdn_url: str, request: Request
+    ) -> StreamingResponse:
+        """
+        从 CDN URL 流式获取媒体数据并直接返回给客户端
+
+        :param cdn_url (str): 115 CDN 文件直链
+        :param request (Request): 原始客户端请求
+
+        :return StreamingResponse: 流式响应，将 CDN 数据逐块转发给客户端
+        """
+        client = request.app.state.http_client_no_follow
+        fwd_headers = _build_forward_headers(request)
+        cdn_method = request.method
+        try:
+            req = client.build_request(
+                method=cdn_method, url=cdn_url, headers=fwd_headers
+            )
+            cdn_resp = await client.send(req, stream=True)
+        except Exception:
+            logger.warning("CDN 流式获取失败: %s", cdn_url, exc_info=True)
+            raise
+
+        excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "transfer-encoding"}
+        resp_headers = {
+            k: v
+            for k, v in cdn_resp.headers.multi_items()
+            if k.lower() not in excluded
+        }
+
+        async def _cdn_stream():
+            try:
+                async for chunk in cdn_resp.aiter_bytes(chunk_size=65536):
+                    yield chunk
+            finally:
+                await cdn_resp.aclose()
+
+        return StreamingResponse(
+            _cdn_stream(),
+            status_code=cdn_resp.status_code,
+            headers=resp_headers,
+        )
+
     async def _try_media_response(
         item_id: str, api_key: str | None, request: Request
-    ) -> RedirectResponse | None:
+    ) -> Response | None:
         """
-        尝试获取媒体文件真实地址并返回 302 重定向
+        尝试获取媒体文件真实地址并从 CDN 流式代理到客户端
         优先级：已解析 URL 缓存 → PlaybackInfo 实时查询 → STRM 源缓存
 
         :param item_id: 媒体项 ID
         :param api_key: Emby API Key，可为 None
         :param request: 当前请求
-        :return: 302 重定向响应，或 None 表示回退到反向代理
+
+        :return Response: 流式代理响应，或 None 表示回退到反向代理
         """
         media_source_id = request.query_params.get("MediaSourceId") or ""
 
@@ -604,7 +648,7 @@ def create_app(
                         pass
         if cached_final_url is not None:
             logger.debug("PlaybackInfo 使用缓存: item_id=%s", item_id)
-            return RedirectResponse(url=cached_final_url, status_code=302)
+            return await _stream_from_cdn(cached_final_url, request)
 
         http_path = None
 
@@ -667,8 +711,8 @@ def create_app(
             cache[cache_key] = (final_url, expiry)
             order.append(cache_key)
 
-        logger.info("302 重定向: item_id=%s -> %s", item_id, final_url)
-        return RedirectResponse(url=final_url, status_code=302)
+        logger.info("媒体流代理: item_id=%s -> %s", item_id, final_url)
+        return await _stream_from_cdn(final_url, request)
 
     for route in MEDIA_ROUTES:
         app.api_route(route, methods=["GET", "HEAD"], response_model=None)(
