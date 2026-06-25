@@ -34,10 +34,6 @@ class StrmGenerator:
         total_count = 0
 
         try:
-            fs = self._client.get_filesystem()
-            if not fs:
-                raise RuntimeError("无法获取 115 文件系统")
-
             all_files = []
             for mapping in path_mappings:
                 if self._cancel_flag.is_set():
@@ -47,7 +43,7 @@ class StrmGenerator:
                 logger.info("开始同步目录: %s -> %s", pan_path, local_path)
 
                 try:
-                    files = self._walk_path(fs, pan_path, pan_path, local_path, path_mappings)
+                    files = self._walk_path(pan_path, pan_path, local_path, path_mappings)
                     all_files.extend(files)
                 except Exception as e:
                     logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
@@ -81,9 +77,29 @@ class StrmGenerator:
             "cancelled": self._cancel_flag.is_set(),
         }
 
+    def _resolve_cid(self, path: str) -> str:
+        if not path or path.strip("/") == "":
+            return "0"
+        parts = [p for p in path.strip("/").split("/") if p]
+        cid = "0"
+        for part in parts:
+            resp = self._client._client.fs_files({"cid": cid, "limit": 200})
+            if not isinstance(resp, dict):
+                return "0"
+            data = resp.get("data", [])
+            found = False
+            for item in data:
+                if "fid" not in item and item.get("n") == part:
+                    cid = str(item.get("cid", "0"))
+                    found = True
+                    break
+            if not found:
+                logger.warning("路径 %s 中未找到目录 %s", path, part)
+                return "0"
+        return cid
+
     def _walk_path(
         self,
-        fs: Any,
         base_pan_path: str,
         current_pan_path: str,
         local_strm_dir: str,
@@ -94,7 +110,13 @@ class StrmGenerator:
 
         files = []
         try:
-            entries = fs.list(current_pan_path)
+            cid = self._resolve_cid(current_pan_path)
+            if cid == "0":
+                # Try root or just return empty
+                if current_pan_path.strip("/") != "":
+                    return []
+            resp = self._client._client.fs_files({"cid": cid, "limit": 2000})
+            entries = resp.get("data", []) if isinstance(resp, dict) else []
         except Exception as e:
             logger.error("列出目录失败 %s: %s", current_pan_path, e)
             return []
@@ -109,7 +131,7 @@ class StrmGenerator:
                 continue
 
             name = entry.get("n") or entry.get("name", "")
-            is_dir = entry.get("ico") == 1 or entry.get("is_dir", False)
+            is_dir = "fid" not in entry
             pickcode = entry.get("pc") or entry.get("pickcode", "")
             file_size = entry.get("s") or entry.get("size", 0)
             sha1 = entry.get("sha") or entry.get("sha1", "")
@@ -117,7 +139,7 @@ class StrmGenerator:
             if is_dir:
                 sub_pan = f"{current_pan_path}/{name}"
                 sub_files = self._walk_path(
-                    fs, base_pan_path, sub_pan, local_strm_dir, path_mappings
+                    base_pan_path, sub_pan, local_strm_dir, path_mappings
                 )
                 files.extend(sub_files)
             else:

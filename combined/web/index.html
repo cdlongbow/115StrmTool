@@ -454,6 +454,7 @@ async function saveAutostart() {
 // ── 扫码登录 ──
 let _qrcodeTimer = null;
 let _qrcodePayload = null;
+let _qrcodeClientType = 'alipaymini';
 
 async function showQrcodeLogin() {
   document.getElementById('qrcodeModal').style.display = 'flex';
@@ -461,6 +462,7 @@ async function showQrcodeLogin() {
   document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
   _qrcodePayload = null;
   const app = document.getElementById('qrcodeAppType').value;
+  _qrcodeClientType = app;
   try {
     const r = await fetch(`/api/qrcode?app=${app}`);
     const d = await r.json();
@@ -478,7 +480,8 @@ async function showQrcodeLogin() {
 async function pollQrcode() {
   if (!_qrcodePayload) return;
   try {
-    const r = await fetch('/api/qrcode/check', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_qrcodePayload)});
+    const body = {..._qrcodePayload, client_type: _qrcodeClientType};
+    const r = await fetch('/api/qrcode/check', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d = await r.json();
     if (d.status === 'success' && d.cookie) {
       clearInterval(_qrcodeTimer);
@@ -486,6 +489,8 @@ async function pollQrcode() {
       document.getElementById('qrcodeCookie').value = d.cookie;
       document.getElementById('qrcodeStatus').innerHTML = '登录成功! Cookie 已填入';
       document.getElementById('qrcodeCopyBtn').style.display = 'inline-block';
+    } else if (d.status === 'scanned') {
+      document.getElementById('qrcodeStatus').textContent = '已扫码，请在手机上确认';
     } else if (d.status === 'expired') {
       clearInterval(_qrcodeTimer);
       document.getElementById('qrcodeStatus').textContent = '二维码已过期，请重新获取';

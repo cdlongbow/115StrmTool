@@ -57,29 +57,17 @@ async def get_status() -> Dict[str, Any]:
 async def browse_directory(pid: str = "0", path: str = ""):
     client = get_client()
     try:
-        if path:
-            fs = client.get_filesystem()
-            if fs:
-                entries = fs.list(path)
-            else:
-                entries = client.list_files(pid)
-        else:
-            entries = client.list_files(pid)
+        resp = client._client.fs_files({"cid": pid, "limit": 1000})
         items = []
-        if isinstance(entries, list):
-            for e in entries:
-                if not isinstance(e, dict):
-                    continue
-                items.append(
-                    {
-                        "id": e.get("id") or e.get("pid", ""),
-                        "name": e.get("n") or e.get("name", ""),
-                        "is_dir": e.get("ico") == 1 or e.get("is_dir", False),
-                        "size": e.get("s") or e.get("size", 0),
-                        "pickcode": e.get("pc") or e.get("pickcode", ""),
-                        "updated_at": e.get("te") or e.get("updated_at", ""),
-                    }
-                )
+        if isinstance(resp, dict):
+            data = resp.get("data", [])
+            for item in data:
+                if "fid" not in item:
+                    items.append({
+                        "id": str(item.get("cid", "")),
+                        "name": item.get("n", ""),
+                        "is_dir": True,
+                    })
         return {"items": items, "path": path or "/"}
     except Exception as e:
         logger.error("浏览目录失败: %s", e, exc_info=True)
