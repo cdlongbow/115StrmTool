@@ -33,6 +33,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_download_mediainfo": False,
         "overwrite_mode": "never",
     },
+    "checkin": {
+        "enabled": False,
+        "time_range": "06:00-09:00",
+    },
 }
 
 

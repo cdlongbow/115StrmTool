@@ -79,6 +79,7 @@ tr:hover{background:#f5f5f5}
   <a data-tab="p115-config">P115 配置</a>
   <a data-tab="sync">同步</a>
   <a data-tab="strm">STRM</a>
+  <a data-tab="checkin">签到</a>
   <a data-tab="logs">日志</a>
 </div>
 
@@ -240,6 +241,42 @@ tr:hover{background:#f5f5f5}
   </div>
 </div>
 
+<!-- 签到 -->
+<div id="tab-checkin" class="tab-content">
+  <div class="card">
+    <div class="switch-group">
+      <label class="switch"><input type="checkbox" id="checkin_enabled"><span class="slider"></span></label>
+      <span class="switch-label">启用 115 每日签到</span>
+    </div>
+  </div>
+  <div class="grid-3" style="margin-bottom:16px">
+    <div class="stat-card"><div class="num" id="chkStatus">-</div><div class="label">今日状态</div><div class="sub" id="chkStatusSub">-</div></div>
+    <div class="stat-card"><div class="num" id="chkNextRun">-</div><div class="label">下次签到</div><div class="sub">随机时刻</div></div>
+    <div class="stat-card"><div class="num" id="chkLastDetail">-</div><div class="label">最新记录</div><div class="sub" id="chkLastDetailSub">-</div></div>
+  </div>
+  <div class="card">
+    <div class="form-row">
+      <div class="form-group">
+        <label>签到时间段</label>
+        <input type="text" id="checkin_time_range" placeholder="06:00-09:00" value="06:00-09:00">
+        <div class="hint">格式 HH:MM-HH:MM，每天在此范围内随机一个时刻执行签到</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary" onclick="saveCheckinConfig()">保存配置</button>
+      <button class="btn btn-success" id="chkManualBtn" onclick="manualCheckin()">立即签到</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>注意事项</h2>
+    <ul style="font-size:13px;color:#666;line-height:1.8;padding-left:18px">
+      <li>使用已配置的 115 Cookie，无需额外账号</li>
+      <li>不支持 web 类型 Cookie（浏览器 Cookie），请使用 Android/客户端类型 Cookie</li>
+      <li>签到实际每天只执行一次，系统每 60 秒检查一次调度状态</li>
+    </ul>
+  </div>
+</div>
+
 <!-- 115 目录浏览弹窗 -->
 <div id="browserModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:99998;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:8px;width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(0,0,0,.2)">
@@ -271,6 +308,7 @@ document.querySelectorAll('.nav a').forEach(a => {
     if (a.dataset.tab === 'logs') refreshLogs();
     if (a.dataset.tab === 'sync') loadSyncHistory();
     if (a.dataset.tab === 'strm') listStrmFiles();
+    if (a.dataset.tab === 'checkin') refreshCheckinStatus();
   });
 });
 
@@ -279,6 +317,7 @@ function loadConfig() {
     currentConfig = config;
     loadEmbyConfig(config.emby || {});
     loadP115Config(config.p115 || {});
+    loadCheckinConfig(config.checkin || {});
     updateDashboard();
   }).catch(err => showToast('加载失败: ' + err.message, 'error'));
   fetch('/admin/api/autostart').then(r => r.json()).then(d => {
@@ -595,6 +634,62 @@ function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB',
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 let tt;
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
+
+// ── 签到 ──
+function loadCheckinConfig(c) {
+  document.getElementById('checkin_enabled').checked = c.enabled || false;
+  document.getElementById('checkin_time_range').value = c.time_range || '06:00-09:00';
+}
+
+async function saveCheckinConfig() {
+  const cfg = {
+    enabled: document.getElementById('checkin_enabled').checked,
+    time_range: document.getElementById('checkin_time_range').value.trim() || '06:00-09:00',
+  };
+  try {
+    const r = await fetch('/api/checkin/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    if (!r.ok) throw new Error(await r.text());
+    showToast('签到配置已保存', 'success');
+  } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+async function manualCheckin() {
+  const btn = document.getElementById('chkManualBtn');
+  btn.disabled = true;
+  btn.textContent = '签到中...';
+  try {
+    const r = await fetch('/api/checkin/run', {method:'POST'});
+    const d = await r.json();
+    showToast(d.message, d.status === 'ok' ? 'success' : 'error');
+    refreshCheckinStatus();
+  } catch(err) { showToast('签到请求失败: ' + err.message, 'error'); }
+  btn.disabled = false;
+  btn.textContent = '立即签到';
+}
+
+async function refreshCheckinStatus() {
+  try {
+    const r = await fetch('/api/checkin/status');
+    const s = await r.json();
+    const stEl = document.getElementById('chkStatus');
+    if (s.signed_today) {
+      stEl.textContent = '已签到';
+      stEl.style.color = '#34a853';
+    } else if (s.enabled) {
+      stEl.textContent = '未签到';
+      stEl.style.color = '#ea4335';
+    } else {
+      stEl.textContent = '已关闭';
+      stEl.style.color = '#999';
+    }
+    document.getElementById('chkStatusSub').textContent = s.enabled ? '(已启用)' : '(未启用)';
+    document.getElementById('chkNextRun').textContent = s.next_run ? s.next_run.split(' ')[1] : '待安排';
+    document.getElementById('chkNextRun').style.color = s.next_run ? '#1a73e8' : '#999';
+    const lastDetail = s.last_detail || '无';
+    document.getElementById('chkLastDetail').textContent = lastDetail.length > 20 ? lastDetail.substring(0, 20) + '...' : lastDetail;
+    document.getElementById('chkLastDetailSub').textContent = s.last_done ? '上次签到: ' + s.last_done : '-';
+  } catch(e) {}
+}
 
 async function refreshLogs() {
   try {

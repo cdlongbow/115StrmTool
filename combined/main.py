@@ -132,6 +132,11 @@ def _start_p115():
     set_client(client)
     set_p115_client_ref(client)
 
+    # 启动签到调度器
+    from checkin_scheduler import checkin_scheduler
+    checkin_scheduler.set_client(client)
+    checkin_scheduler.start()
+
     svc = RedirectService(client)
     redirect_app = svc.create_app()
     try:

@@ -187,6 +187,76 @@ async def add_offline_task(req: OfflineTaskRequest) -> Dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── 签到 ──
+
+
+from checkin_scheduler import checkin_scheduler
+
+
+@router.get("/checkin/status")
+async def checkin_status() -> Dict:
+    return checkin_scheduler.get_status()
+
+
+@router.post("/checkin/run")
+async def checkin_manual() -> Dict:
+    config = config_manager.get().get("checkin", {})
+    if not config.get("enabled"):
+        return {"status": "error", "message": "签到功能未启用"}
+    ok, detail = checkin_scheduler.manual_checkin()
+    return {"status": "ok" if ok else "error", "message": detail}
+
+
+@router.post("/checkin/config")
+async def checkin_config(data: dict) -> Dict:
+    cfg = config_manager.get()
+    cfg["checkin"] = {
+        "enabled": bool(data.get("enabled", False)),
+        "time_range": str(data.get("time_range", "06:00-09:00")),
+    }
+    config_manager.save()
+    from checkin_scheduler import checkin_scheduler
+    p115_cfg = cfg.get("p115", {})
+    from p115_client_wrapper import P115ClientWrapper
+    client = None
+    if p115_cfg.get("cookie"):
+        client = P115ClientWrapper(p115_cfg["cookie"])
+    checkin_scheduler.configure(
+        enabled=cfg["checkin"]["enabled"],
+        time_range=cfg["checkin"]["time_range"],
+        client=client,
+    )
+    return {"status": "ok", "message": "签到配置已保存"}
+
+
+# ── 签到 ──
+
+
+from checkin_scheduler import checkin_scheduler
+
+
+@router.get("/checkin/status")
+async def checkin_status() -> Dict:
+    return checkin_scheduler.get_status()
+
+
+@router.post("/checkin/run")
+async def checkin_manual_exec() -> Dict:
+    ok, detail = checkin_scheduler.manual_checkin()
+    return {"status": "ok" if ok else "error", "message": detail}
+
+
+@router.post("/checkin/config")
+async def checkin_save_config(data: dict) -> Dict:
+    cfg = config_manager.get()
+    cfg["checkin"] = {
+        "enabled": bool(data.get("enabled", False)),
+        "time_range": str(data.get("time_range", "06:00-09:00")),
+    }
+    config_manager.save()
+    return {"status": "ok", "message": "签到配置已保存"}
+
+
 # ── 二维码登录 ──
 
 
