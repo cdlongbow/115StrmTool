@@ -177,3 +177,9 @@ CLAUDE.md
 !/CLAUDE.md
 .claude/
 .sisyphus/
+
+# Runtime data
+data/
+
+# Runtime data
+data/
