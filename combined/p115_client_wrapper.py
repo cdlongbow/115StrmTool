@@ -174,6 +174,24 @@ class P115ClientWrapper:
             logger.error("获取文件系统失败: %s", e, exc_info=True)
             return None
 
+    def user_points_sign(self) -> Optional[Dict]:
+        if not self._client:
+            return None
+        try:
+            return self._client.user_points_sign()
+        except Exception as e:
+            logger.error("查询签到状态失败: %s", e, exc_info=True)
+            return None
+
+    def user_points_sign_post(self) -> Optional[Dict]:
+        if not self._client:
+            return None
+        try:
+            return self._client.user_points_sign_post()
+        except Exception as e:
+            logger.error("执行签到失败: %s", e, exc_info=True)
+            return None
+
     def get_user_info(self) -> Optional[Dict]:
         if not self._client:
             return None
