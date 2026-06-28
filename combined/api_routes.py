@@ -217,12 +217,10 @@ async def checkin_manual_exec() -> Dict:
 
 @router.post("/checkin/config")
 async def checkin_save_config(data: dict) -> Dict:
-    cfg = config_manager.get()
-    cfg["checkin"] = {
+    config_manager.update({"checkin": {
         "enabled": bool(data.get("enabled", False)),
         "time_range": str(data.get("time_range", "06:00-09:00")),
-    }
-    config_manager.save()
+    }})
     return {"status": "ok", "message": "签到配置已保存"}
 
 
