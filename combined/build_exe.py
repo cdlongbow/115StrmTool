@@ -3,38 +3,33 @@ import sys
 
 
 def main():
+    py_files = [
+        "admin_api.py", "api_routes.py", "checkin_scheduler.py",
+        "config_manager.py", "database.py", "external_players.py",
+        "logger.py", "p115_client_wrapper.py", "proxy_app.py",
+        "redirect_service.py", "strm_generator.py", "windows_tray.py",
+    ]
     args = [
         "pyinstaller",
         "--name", "115网盘STRM生成与302工具",
         "--onefile",
         "--add-data", "web:web",
-        "--add-data", "admin_api.py:.",
-        "--add-data", "api_routes.py:.",
-        "--add-data", "config_manager.py:.",
-        "--add-data", "database.py:.",
-        "--add-data", "external_players.py:.",
-        "--add-data", "logger.py:.",
-        "--add-data", "p115_client_wrapper.py:.",
-        "--add-data", "proxy_app.py:.",
-        "--add-data", "redirect_service.py:.",
-        "--add-data", "strm_generator.py:.",
-        "--add-data", "windows_tray.py:.",
-        "--hidden-import", "uvicorn.logging",
-        "--hidden-import", "uvicorn.loops.auto",
-        "--hidden-import", "uvicorn.protocols.http.auto",
-        "--hidden-import", "httpx",
-        "--hidden-import", "websockets",
-        "--hidden-import", "p115client",
-        "--hidden-import", "p115rsacipher",
-        "--hidden-import", "pystray",
-        "--hidden-import", "PIL",
-        "--hidden-import", "webview",
+    ]
+    for f in py_files:
+        args.extend(["--add-data", f"{f}:."])
+    hidden = [
+        "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
+        "httpx", "websockets", "p115client", "p115rsacipher", "pystray", "PIL",
+    ]
+    for h in hidden:
+        args.extend(["--hidden-import", h])
+    args.extend([
         "--collect-all", "fastapi",
         "--collect-all", "starlette",
         "--noconsole",
         "--noconfirm",
         "main.py",
-    ]
+    ])
     print("Building ...")
     result = subprocess.run(args, capture_output=False)
     if result.returncode == 0:
