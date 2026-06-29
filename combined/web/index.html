@@ -422,9 +422,9 @@ async function browse115Path(i) {
 async function browseLocalPath(i) {
   let path = '';
   try {
-    if (window.pywebview && window.pywebview.api) {
-      path = await window.pywebview.api.selectDirectory();
-    }
+    const resp = await fetch('/api/select-directory');
+    const data = await resp.json();
+    path = data.path || '';
   } catch {}
   if (!path) {
     path = prompt('请输入本地 STRM 输出目录的完整路径（如 D:/strm/电影）:', p115Paths[i].to || '');

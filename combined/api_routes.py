@@ -28,6 +28,21 @@ def get_client() -> P115ClientWrapper:
 # ── 浏览目录 ──
 
 
+@router.get("/select-directory")
+async def select_directory() -> Dict:
+    try:
+        import tkinter
+        from tkinter import filedialog
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askdirectory(title="选择 STRM 输出目录")
+        root.destroy()
+        return {"path": (path or "").replace("\\", "/")}
+    except Exception as e:
+        return {"path": ""}
+
+
 @router.get("/status")
 async def get_status() -> Dict[str, Any]:
     stats = db.get_stats()
