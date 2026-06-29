@@ -19,7 +19,7 @@ def main():
         args.extend(["--add-data", f"{f}:."])
     hidden = [
         "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
-        "httpx", "websockets", "p115client", "p115rsacipher", "pystray", "PIL",
+        "httpx", "websockets", "p115client", "p115cipher", "pystray", "PIL",
     ]
     for h in hidden:
         args.extend(["--hidden-import", h])

@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import Client, Limits, Timeout
-from p115rsacipher import encrypt, decrypt
+from p115cipher import rsa_decrypt, rsa_encrypt
 
 from logger import logger
 
@@ -99,7 +99,9 @@ class P115ClientWrapper:
         if not user_agent:
             user_agent = P115_UA_IOS
         try:
-            payload = encrypt(f'{{"pick_code":"{pickcode}"}}').decode("utf-8")
+            payload = rsa_encrypt(
+                f'{{"pick_code":"{pickcode}"}}'.encode("utf-8")
+            ).decode("utf-8")
             resp = self._http_client.post(
                 P115_DOWNLOAD_API,
                 data={"data": payload},
@@ -120,7 +122,7 @@ class P115ClientWrapper:
                     json,
                 )
                 return None
-            decrypted = decrypt(json["data"])
+            decrypted = rsa_decrypt(json["data"]).decode("utf-8")
             data = json_loads(decrypted)
             url = data.get("url") or ""
             if not url:
