@@ -215,18 +215,29 @@ class P115ClientWrapper:
     def get_qrcode(self, app: str = "alipaymini") -> Optional[Dict]:
         try:
             from p115client import P115Client
+            from io import BytesIO
+            import qrcode as qrcode_lib
+
             token_resp = P115Client.login_qrcode_token()
             if not token_resp or not token_resp.get("data"):
                 return None
             payload = token_resp["data"]
-            uid = str(payload["uid"])
-            qr_bytes = P115Client.login_qrcode(uid)
-            if not isinstance(qr_bytes, (bytes, bytearray)):
+            _uid = str(payload.get("uid") or "")
+            _time = payload.get("time")
+            _sign = payload.get("sign")
+            if not _uid or not _time or not _sign:
+                logger.error("获取二维码失败: 返回登录参数不完整")
                 return None
+
+            qrcode_content = f"https://115.com/scan/dg-{_uid}"
+            img = qrcode_lib.make(qrcode_content)
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+
             return {
-                "uid": uid,
+                "uid": _uid,
                 "payload": payload,
-                "qrcode": f"data:image/png;base64,{b64encode(qr_bytes).decode()}",
+                "qrcode": f"data:image/png;base64,{b64encode(buffered.getvalue()).decode()}",
                 "client_type": app,
             }
         except Exception as e:
