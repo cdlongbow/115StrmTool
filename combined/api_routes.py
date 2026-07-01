@@ -134,6 +134,12 @@ async def get_sync_history(limit: int = 20) -> List[Dict]:
     return db.get_sync_history(limit)
 
 
+@router.post("/sync/history/clear")
+async def clear_sync_history() -> Dict[str, Any]:
+    db.clear_sync_history()
+    return {"success": True}
+
+
 # ── STRM 管理 ──
 
 
@@ -152,6 +158,12 @@ async def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
 @router.get("/strm/count")
 async def count_strm_files() -> Dict:
     return {"total": db.count_active_files()}
+
+
+@router.post("/strm/clear")
+async def clear_strm_files() -> Dict[str, Any]:
+    db.clear_all_files()
+    return {"success": True}
 
 
 # ── 分享转存 ──
@@ -200,17 +212,6 @@ async def add_offline_task(req: OfflineTaskRequest) -> Dict:
     except Exception as e:
         logger.error("添加离线任务失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── 签到 ──
-
-
-from checkin_scheduler import checkin_scheduler
-
-
-@router.get("/checkin/status")
-async def checkin_status() -> Dict:
-    return checkin_scheduler.get_status()
 
 
 # ── 签到 ──

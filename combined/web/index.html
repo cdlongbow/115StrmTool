@@ -190,7 +190,7 @@ tr:hover{background:#f5f5f5}
     <button class="btn btn-success" onclick="startFullSync()">启动全量同步</button>
     <button class="btn btn-danger" onclick="cancelSync()">取消同步</button>
   </div>
-  <div class="card"><h2>同步记录</h2><div id="syncHistory"><p>加载中...</p></div></div>
+  <div class="card"><h2>同步记录 <button class="btn-sm btn-outline" onclick="clearSyncHistory()" style="float:right">清空记录</button></h2><div id="syncHistory"><p>加载中...</p></div></div>
 </div>
 
 <!-- STRM -->
@@ -198,7 +198,10 @@ tr:hover{background:#f5f5f5}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0">STRM 文件列表</h2>
-      <span id="strmCount"></span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="strmCount"></span>
+        <button class="btn-sm btn-outline" onclick="clearStrmFiles()">清空列表</button>
+      </div>
     </div>
     <div class="table-wrap" id="strmTable"><p>加载中...</p></div>
   </div>
@@ -612,6 +615,14 @@ async function loadSyncHistory() {
     el.innerHTML = html;
   } catch(e) { document.getElementById('syncHistory').innerHTML = '<p>加载失败</p>'; }
 }
+async function clearSyncHistory() {
+  if (!confirm('确定清空所有同步记录？此操作不可恢复。')) return;
+  try {
+    await fetch('/api/sync/history/clear', {method:'POST'});
+    loadSyncHistory();
+    showToast('同步记录已清空', 'success');
+  } catch(e) { showToast('清空失败: ' + e.message, 'error'); }
+}
 
 // ── STRM ──
 async function listStrmFiles(page=1) {
@@ -627,6 +638,11 @@ async function listStrmFiles(page=1) {
     if (d.total > 20) html += `<div style="margin-top:8px"><button class="btn btn-outline" onclick="listStrmFiles(${page+1})">下一页</button></div>`;
     tbl.innerHTML = html;
   } catch(e) { document.getElementById('strmTable').innerHTML = '<p>加载失败</p>'; }
+}
+async function clearStrmFiles() {
+  if (!confirm('确定清空 STRM 文件列表？仅清除数据库记录，不会删除磁盘上的 .strm 文件。')) return;
+  try { await fetch('/api/strm/clear', {method:'POST'}); listStrmFiles(); showToast('STRM 列表已清空', 'success'); }
+  catch(e) { showToast('清空失败: ' + e.message, 'error'); }
 }
 
 // ── 工具 ──

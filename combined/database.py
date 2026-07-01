@@ -170,6 +170,16 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def clear_sync_history(self):
+        self.conn.execute("DELETE FROM sync_history")
+        self.conn.commit()
+
+    def clear_all_files(self):
+        self.conn.execute(
+            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE status='active'"
+        )
+        self.conn.commit()
+
     def add_share_transfer(self, share_url: str, target_path: str) -> int:
         cursor = self.conn.execute(
             "INSERT INTO share_transfer_history (share_url, target_path) VALUES (?, ?)",
