@@ -27,14 +27,14 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
         limit = 1000
         while True:
             try:
-                resp = http_client.fs_files({
+                resp = http_client.fs_files_app({
                     "cid": current_cid,
                     "limit": limit,
                     "offset": offset,
                     "app_ver": app_ver,
                     "cur": 1,
                     "fc_mix": 1,
-                })
+                }, app="android")
             except Exception as e:
                 logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
                 break

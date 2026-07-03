@@ -74,7 +74,7 @@ async def browse_directory(pid: str = "0", path: str = ""):
     try:
         from p115client import check_response
         from app_ver import get_real_app_ver
-        resp = client._client.fs_files({"cid": pid, "limit": 1000, "app_ver": get_real_app_ver()})
+        resp = client._client.fs_files_app({"cid": pid, "limit": 1000, "app_ver": get_real_app_ver()}, app="android")
         check_response(resp)
         items = []
         data = resp.get("data") or resp.get("Data") or []
