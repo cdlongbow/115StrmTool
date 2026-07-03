@@ -72,20 +72,23 @@ async def get_status() -> Dict[str, Any]:
 async def browse_directory(pid: str = "0", path: str = ""):
     client = get_client()
     try:
+        from p115client import check_response
         resp = client._client.fs_files({"cid": pid, "limit": 1000})
+        check_response(resp)
         items = []
-        if isinstance(resp, dict):
-            data = resp.get("data", [])
-            for item in data:
-                if "fid" not in item:
-                    items.append({
-                        "id": str(item.get("cid", "")),
-                        "name": item.get("n", ""),
-                        "is_dir": True,
-                    })
+        data = resp.get("data") or resp.get("Data") or []
+        for item in data:
+            if "fid" not in item:
+                items.append({
+                    "id": str(item.get("cid", "")),
+                    "name": item.get("n", ""),
+                    "is_dir": True,
+                })
+        if not items:
+            logger.info("浏览目录 pid=%s 返回空: resp=%s", pid, resp)
         return {"items": items, "path": path or "/"}
     except Exception as e:
-        logger.error("浏览目录失败: %s", e, exc_info=True)
+        logger.error("浏览目录失败 pid=%s: %s", pid, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"浏览目录失败: {e}")
 
 
