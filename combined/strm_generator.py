@@ -29,11 +29,14 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
                     "cid": current_cid,
                     "limit": limit,
                     "offset": offset,
+                    "cur": 1,
+                    "fc_mix": 1,
                 })
             except Exception as e:
                 logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
                 break
             if not isinstance(resp, dict):
+                logger.warning("遍历目录响应不是 dict cid=%s: %s", current_cid, type(resp))
                 break
             items = resp.get("data") or resp.get("Data") or []
             if not items:
@@ -42,6 +45,11 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
                 is_dir = False
                 if "fid" not in item:
                     is_dir = True
+                child_cid = item.get("cid")
+                if is_dir:
+                    if not child_cid or str(child_cid) == "0":
+                        logger.warning("跳过无效子目录 cid=%s name=%s", child_cid, item.get("n", ""))
+                        continue
                 attr = {
                     "name": item.get("n") or item.get("name", ""),
                     "is_dir": is_dir,
@@ -50,7 +58,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
                     "pick_code": item.get("pc") or item.get("pickcode") or "",
                     "sha1": item.get("sha") or item.get("sha1", ""),
                     "path": "",
-                    "id": item.get("cid") if is_dir else item.get("fid", 0),
+                    "id": child_cid if is_dir else item.get("fid", 0),
                     "parent_id": item.get("pid", 0),
                 }
                 if is_dir:
