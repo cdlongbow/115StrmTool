@@ -15,6 +15,8 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
     """
+    from app_ver import get_real_app_ver
+    app_ver = get_real_app_ver()
     http_client = client_wrapper.client
     if http_client is None:
         return
@@ -29,6 +31,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
                     "cid": current_cid,
                     "limit": limit,
                     "offset": offset,
+                    "app_ver": app_ver,
                     "cur": 1,
                     "fc_mix": 1,
                 })

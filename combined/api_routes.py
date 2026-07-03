@@ -73,7 +73,8 @@ async def browse_directory(pid: str = "0", path: str = ""):
     client = get_client()
     try:
         from p115client import check_response
-        resp = client._client.fs_files({"cid": pid, "limit": 1000})
+        from app_ver import get_real_app_ver
+        resp = client._client.fs_files({"cid": pid, "limit": 1000, "app_ver": get_real_app_ver()})
         check_response(resp)
         items = []
         data = resp.get("data") or resp.get("Data") or []
