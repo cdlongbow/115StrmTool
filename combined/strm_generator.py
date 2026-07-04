@@ -51,14 +51,14 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
         limit = 1000
         while True:
             try:
-                resp = http_client.fs_files_app({
+                resp = http_client.fs_files({
                     "cid": current_cid,
                     "limit": limit,
                     "offset": offset,
                     "app_ver": app_ver,
                     "cur": 1,
                     "fc_mix": 1,
-                }, app="android")
+                })
             except Exception as e:
                 logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
                 break
@@ -70,20 +70,20 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
                 break
             for item in items:
                 is_dir = False
-                if "s" not in item:
+                if "fid" not in item:
                     is_dir = True
-                child_cid = item.get("fid")
+                child_cid = item.get("cid")
                 if is_dir:
                     if not child_cid or str(child_cid) == "0":
-                        logger.warning("跳过无效子目录 cid=%s name=%s", child_cid, item.get("fn", ""))
+                        logger.warning("跳过无效子目录 cid=%s name=%s", child_cid, item.get("n", ""))
                         continue
-                    dir_name = item.get("fn", "")
+                    dir_name = item.get("n", "")
                     child_rel = f"{current_rel}/{dir_name}" if current_rel else dir_name
                     path_cache[child_cid] = child_rel
                     stack.append((child_cid, child_rel))
                 else:
                     attr = {
-                        "name": item.get("fn") or item.get("name", ""),
+                        "name": item.get("n") or item.get("name", ""),
                         "is_dir": is_dir,
                         "size": item.get("s") or item.get("size", 0),
                         "pickcode": item.get("pc") or item.get("pickcode") or "",

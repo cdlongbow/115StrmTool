@@ -74,15 +74,15 @@ async def browse_directory(pid: str = "0", path: str = ""):
     try:
         from p115client import check_response
         from app_ver import get_real_app_ver
-        resp = client._client.fs_files_app({"cid": pid, "limit": 1000, "app_ver": get_real_app_ver()}, app="android")
+        resp = client._client.fs_files({"cid": pid, "limit": 1000, "app_ver": get_real_app_ver()})
         check_response(resp)
         items = []
         data = resp.get("data") or resp.get("Data") or []
         for item in data:
-            if "s" not in item:
+            if "fid" not in item:
                 items.append({
-                    "id": str(item.get("fid", "")),
-                    "name": item.get("fn", ""),
+                    "id": str(item.get("cid", "")),
+                    "name": item.get("n", ""),
                     "is_dir": True,
                 })
         if not items:
