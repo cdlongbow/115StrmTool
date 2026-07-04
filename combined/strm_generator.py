@@ -1,10 +1,30 @@
 import threading
+from os import name as os_name
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from database import db
+
+
+def sanitize_path_parts(rel_path: Path) -> Path:
+    if os_name != "nt":
+        return rel_path
+    illegal_chars = '<>"|?*'
+    parts = list(rel_path.parts)
+    if not parts:
+        return rel_path
+    sanitized = []
+    for part in parts:
+        part = part.replace(":", "：")
+        for char in illegal_chars:
+            part = part.replace(char, "_")
+        sanitized.append(part)
+    result = Path(sanitized[0])
+    for part in sanitized[1:]:
+        result = result / part
+    return result
 
 
 def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
@@ -248,7 +268,7 @@ class StrmGenerator:
 
     def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Path:
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
-        return Path(local_strm_dir) / rel_path
+        return sanitize_path_parts(Path(local_strm_dir) / rel_path)
 
     def _ensure_strm_file(self, strm_path: Path, pickcode: str):
         if self._overwrite_mode == "never" and strm_path.exists():

@@ -6,11 +6,11 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from httpx import Client, Limits, Timeout
 from p115cipher import rsa_decrypt, rsa_encrypt
 
+from app_ver import generate_u115_ios, _real_ua
 from logger import logger
 
 
 P115_DOWNLOAD_API = "http://proapi.115.com/android/2.0/ufile/download"
-P115_UA_IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148"
 
 
 class P115ClientWrapper:
@@ -97,7 +97,7 @@ class P115ClientWrapper:
             logger.warning("115 HTTP 客户端未初始化")
             return None
         if not user_agent:
-            user_agent = P115_UA_IOS
+            user_agent = generate_u115_ios()
         try:
             payload = rsa_encrypt(
                 f'{{"pick_code":"{pickcode}"}}'.encode("utf-8")
