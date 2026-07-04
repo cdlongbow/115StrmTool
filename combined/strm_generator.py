@@ -27,22 +27,26 @@ def sanitize_path_parts(rel_path: Path) -> Path:
     return result
 
 
-def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
+def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dict[int, str] = None):
     """
     递归遍历 115 目录下的所有文件（非目录）
     使用 fs_files API 分页获取，递归子目录
 
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
+    :param path_cache: 可选，用于追踪目录 CID 到路径的映射，在遍历过程中填充
     """
     from app_ver import get_real_app_ver
     app_ver = get_real_app_ver()
     http_client = client_wrapper.client
     if http_client is None:
         return
-    stack = [cid]
+    if path_cache is None:
+        path_cache = {}
+    path_cache[cid] = ""
+    stack = [(cid, "")]
     while stack:
-        current_cid = stack.pop()
+        current_cid, current_rel = stack.pop()
         offset = 0
         limit = 1000
         while True:
@@ -73,20 +77,22 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
                     if not child_cid or str(child_cid) == "0":
                         logger.warning("跳过无效子目录 cid=%s name=%s", child_cid, item.get("n", ""))
                         continue
-                attr = {
-                    "name": item.get("n") or item.get("name", ""),
-                    "is_dir": is_dir,
-                    "size": item.get("s") or item.get("size", 0),
-                    "pickcode": item.get("pc") or item.get("pickcode") or "",
-                    "pick_code": item.get("pc") or item.get("pickcode") or "",
-                    "sha1": item.get("sha") or item.get("sha1", ""),
-                    "path": "",
-                    "id": child_cid if is_dir else item.get("fid", 0),
-                    "parent_id": item.get("pid", 0),
-                }
-                if is_dir:
-                    stack.append(attr["id"])
+                    dir_name = item.get("n", "")
+                    child_rel = f"{current_rel}/{dir_name}" if current_rel else dir_name
+                    path_cache[child_cid] = child_rel
+                    stack.append((child_cid, child_rel))
                 else:
+                    attr = {
+                        "name": item.get("n") or item.get("name", ""),
+                        "is_dir": is_dir,
+                        "size": item.get("s") or item.get("size", 0),
+                        "pickcode": item.get("pc") or item.get("pickcode") or "",
+                        "pick_code": item.get("pc") or item.get("pickcode") or "",
+                        "sha1": item.get("sha") or item.get("sha", ""),
+                        "path": "",
+                        "id": child_cid if is_dir else item.get("fid", 0),
+                        "parent_id": item.get("pid", 0),
+                    }
                     yield attr
             if len(items) < limit:
                 break
@@ -178,9 +184,8 @@ class StrmGenerator:
                 try:
                     cid = self._resolve_pan_path(pan_path)
                     path_cache: Dict[int, str] = {}
-                    path_cache[0] = "/"
 
-                    for attr in _iter_files_115(self._client, cid):
+                    for attr in _iter_files_115(self._client, cid, path_cache):
                         if self._cancel_flag.is_set():
                             break
                         if attr.get("is_dir"):
@@ -190,10 +195,8 @@ class StrmGenerator:
                         pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
                         file_id = attr.get("id", 0)
                         parent_id = attr.get("parent_id", 0)
-                        parent_path = path_cache.get(parent_id, "")
-                        if not parent_path:
-                            parent_path = pan_path
-                        pan_full_path = f"{parent_path}/{name}" if parent_path else f"{pan_path}/{name}"
+                        rel_path = path_cache.get(parent_id, "")
+                        pan_full_path = f"{pan_path}/{rel_path}/{name}" if rel_path else f"{pan_path}/{name}"
 
                         if self._auto_download_mediainfo and ext in self._download_mediaext:
                             local_file_path = self._to_local_path(
