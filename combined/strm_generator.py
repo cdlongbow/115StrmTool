@@ -82,9 +82,12 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
                         continue
                     dir_name = item.get("n", "")
                     child_rel = f"{current_rel}/{dir_name}" if current_rel else dir_name
+                    logger.info("目录 cid=%s cid_type=%s rel=%s", child_cid, type(child_cid).__name__, child_rel)
                     path_cache[child_cid] = child_rel
                     stack.append((child_cid, child_rel))
                 else:
+                    pid = item.get("pid", 0)
+                    logger.info("文件 pid=%s pid_type=%s path_cache_has_key=%s", pid, type(pid).__name__, pid in path_cache)
                     attr = {
                         "name": item.get("n") or item.get("name", ""),
                         "is_dir": is_dir,
@@ -199,6 +202,7 @@ class StrmGenerator:
                         file_id = attr.get("id", 0)
                         parent_id = attr.get("parent_id", 0)
                         rel_path = path_cache.get(parent_id, "")
+                        logger.info("full_sync parent_id=%s type=%s rel_path=%s has_key=%s", parent_id, type(parent_id).__name__, rel_path, parent_id in path_cache)
                         pan_full_path = f"{pan_path}/{rel_path}/{name}" if rel_path else f"{pan_path}/{name}"
 
                         if self._auto_download_mediainfo and ext in self._download_mediaext:
