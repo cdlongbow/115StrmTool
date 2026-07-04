@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from httpx import Client, Limits, Timeout
 from p115cipher import rsa_decrypt, rsa_encrypt
 
-from app_ver import generate_u115_ios, _real_ua
+from app_ver import generate_u115_ios
 from logger import logger
 
 
