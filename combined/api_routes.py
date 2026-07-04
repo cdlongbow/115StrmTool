@@ -79,10 +79,10 @@ async def browse_directory(pid: str = "0", path: str = ""):
         items = []
         data = resp.get("data") or resp.get("Data") or []
         for item in data:
-            if "fid" not in item:
+            if "s" not in item:
                 items.append({
-                    "id": str(item.get("cid", "")),
-                    "name": item.get("n", ""),
+                    "id": str(item.get("fid", "")),
+                    "name": item.get("fn", ""),
                     "is_dir": True,
                 })
         if not items:
