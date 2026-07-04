@@ -226,6 +226,7 @@ class StrmGenerator:
                             )
                             local_strm_path = local_strm_path_orig.with_suffix(".strm")
                             self._ensure_strm_file(local_strm_path, pickcode)
+                            logger.info("STRM 文件路径: %s 是否存在: %s", local_strm_path, local_strm_path.exists())
                             all_files.append({
                                 "pickcode": pickcode,
                                 "file_name": name,
