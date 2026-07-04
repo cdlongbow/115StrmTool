@@ -16,7 +16,10 @@ def sanitize_path_parts(rel_path: Path) -> Path:
     if not parts:
         return rel_path
     sanitized = []
-    for part in parts:
+    for i, part in enumerate(parts):
+        if i == 0 and part.endswith("\\"):
+            sanitized.append(part)
+            continue
         part = part.replace(":", "：")
         for char in illegal_chars:
             part = part.replace(char, "_")
