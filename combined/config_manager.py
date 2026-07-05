@@ -1,12 +1,18 @@
 import json
 import shutil
+import sys
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Tuple
 
 from logger import logger
 
-CONFIG_FILE = Path("config.json")
+if getattr(sys, "frozen", False):
+    _BASE_DIR = Path(sys.executable).parent
+else:
+    _BASE_DIR = Path(__file__).parent
+
+CONFIG_FILE = _BASE_DIR / "config.json"
 
 PIN_RULES_SEP = " => "
 
