@@ -3,6 +3,8 @@ from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+
+from logger import LOG_DIR
 from pydantic import BaseModel
 
 from config_manager import config_manager
@@ -139,7 +141,7 @@ async def get_combined_status() -> Dict[str, Any]:
 
 @router.get("/logs")
 async def get_logs(lines: int = 200) -> Dict:
-    log_path = Path("logs/combined.log")
+    log_path = LOG_DIR / "combined.log"
     if not log_path.exists():
         return {"logs": []}
     try:

@@ -45,7 +45,8 @@ def _open_browser(url: str):
 
 
 def _open_logs_dir():
-    logs_path = Path("logs")
+    from logger import LOG_DIR
+    logs_path = LOG_DIR
     if logs_path.exists():
         os.startfile(str(logs_path.resolve()))  # Windows only
 
