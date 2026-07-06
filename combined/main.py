@@ -127,9 +127,9 @@ def _start_p115():
     from p115_client_wrapper import P115ClientWrapper
     from redirect_service import RedirectService
     from api_routes import router as p115_router, set_client
-    from app_ver import apply_patch
+    from app_ver import apply_app_ver_patch
 
-    apply_patch()
+    apply_app_ver_patch()
     client = P115ClientWrapper(cookie)
     set_client(client)
     set_p115_client_ref(client)

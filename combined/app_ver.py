@@ -1,5 +1,4 @@
 import threading
-from functools import wraps
 from random import choice, randint
 from typing import Optional
 
@@ -8,7 +7,7 @@ import p115client.client as _p115_client_mod
 
 from logger import logger
 
-PLACEHOLDER_APP_VER = "99.99.99.99"
+_APP_VERSION_ATTR = "_app_version"
 FALLBACK_APP_VER = "37.2.5"
 
 _real_app_ver: Optional[str] = None
@@ -70,26 +69,10 @@ def generate_u115_ios() -> str:
     )
 
 
-_MARKER = "__app_ver_patched__"
-
-
-def apply_patch():
-    original = _p115_client_mod.get_request
-    if getattr(original, _MARKER, False):
-        logger.debug("app_ver 补丁已存在，跳过")
+def apply_app_ver_patch():
+    if not hasattr(_p115_client_mod, _APP_VERSION_ATTR):
+        logger.warning("p115client 版本不兼容，未找到 %s 属性", _APP_VERSION_ATTR)
         return
-
-    @wraps(original)
-    def patched(*args, **kwargs):
-        request, request_kwargs = original(*args, **kwargs)
-        params = request_kwargs.get("params")
-        if (
-            isinstance(params, dict)
-            and params.get("app_ver") == PLACEHOLDER_APP_VER
-        ):
-            params["app_ver"] = get_real_app_ver()
-        return request, request_kwargs
-
-    setattr(patched, _MARKER, True)
-    _p115_client_mod.get_request = patched
-    logger.info("app_ver 全局补丁已应用")
+    real = get_real_app_ver()
+    setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
+    logger.info("app_ver 补丁已应用: %s", real)
