@@ -5,10 +5,16 @@ from re import fullmatch as re_fullmatch
 from threading import Lock, Thread
 from time import sleep
 from typing import Dict, Optional, Tuple
+import sys
 
 from logger import logger
 
-CHECKIN_STATE_FILE = Path("checkin_state.json")
+if getattr(sys, "frozen", False):
+    _BASE_DIR = Path(sys.executable).parent
+else:
+    _BASE_DIR = Path(__file__).parent
+
+CHECKIN_STATE_FILE = _BASE_DIR / "checkin_state.json"
 CHECKIN_POLL_INTERVAL = 60
 CHECKIN_DEFAULT_WINDOW = "06:00-09:00"
 CHECKIN_MAX_RETRIES = 3
