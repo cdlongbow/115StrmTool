@@ -31,8 +31,19 @@ jobs:
           pip install pystray Pillow pywebview fastapi uvicorn httpx websockets pywin32
 
       - name: Install p115client from local wheels
-        run: python -c "import subprocess, pathlib; [subprocess.run(['pip', 'install', str(f)], check=True) for f in sorted(pathlib.Path('combined/wheels').glob('*.whl'))]"
-        continue-on-error: true
+        run: |
+          python -c "
+          import subprocess, sys
+          from pathlib import Path
+
+          skip_tags = ('macosx', 'manylinux', 'musllinux', 'aarch64')
+          for f in sorted(Path('combined/wheels').glob('*.whl')):
+              if any(s in f.name for s in skip_tags):
+                  print(f'Skip: {f.name}')
+                  continue
+              print(f'Install: {f.name}')
+              subprocess.run([sys.executable, '-m', 'pip', 'install', str(f)], check=True)
+          "
 
       - name: Install PyInstaller
         run: pip install pyinstaller

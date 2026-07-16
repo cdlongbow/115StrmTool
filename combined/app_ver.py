@@ -69,10 +69,53 @@ def generate_u115_ios() -> str:
     )
 
 
+class AppVerPatcher:
+    """
+    app_ver 可逆补丁
+    """
+
+    _original_app_version: Optional[str] = None
+    _patched_app_version: Optional[str] = None
+    _active: bool = False
+
+    @classmethod
+    def enable(cls) -> None:
+        if cls._active:
+            return
+        if not hasattr(_p115_client_mod, _APP_VERSION_ATTR):
+            logger.warning(
+                "p115client 版本不兼容，未找到 %s 属性", _APP_VERSION_ATTR
+            )
+            return
+
+        cls._original_app_version = getattr(_p115_client_mod, _APP_VERSION_ATTR)
+        real = get_real_app_ver()
+        setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
+        cls._patched_app_version = real
+        cls._active = True
+        logger.info("app_ver 补丁已应用: %s", real)
+
+    @classmethod
+    def disable(cls) -> None:
+        if not cls._active:
+            return
+        if cls._original_app_version is not None and (
+            getattr(_p115_client_mod, _APP_VERSION_ATTR, None)
+            == cls._patched_app_version
+        ):
+            setattr(_p115_client_mod, _APP_VERSION_ATTR, cls._original_app_version)
+        cls._original_app_version = None
+        cls._patched_app_version = None
+        cls._active = False
+        logger.info("app_ver 补丁已恢复原始状态")
+
+    @classmethod
+    def is_active(cls) -> bool:
+        return cls._active
+
+
 def apply_app_ver_patch():
-    if not hasattr(_p115_client_mod, _APP_VERSION_ATTR):
-        logger.warning("p115client 版本不兼容，未找到 %s 属性", _APP_VERSION_ATTR)
-        return
-    real = get_real_app_ver()
-    setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
-    logger.info("app_ver 补丁已应用: %s", real)
+    """
+    兼容旧接口，等同于 AppVerPatcher.enable()
+    """
+    AppVerPatcher.enable()

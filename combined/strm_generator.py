@@ -1,6 +1,7 @@
 import threading
 from os import name as os_name
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, Callable, Dict, List, Optional
 
 from logger import logger
@@ -48,12 +49,18 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
         path_cache = {}
     path_cache[cid] = ""
     stack = [(cid, "")]
+    _fs_files_cooldown = 0.5
+    _last_call = 0.0
     while stack:
         current_cid, current_rel = stack.pop()
         offset = 0
         limit = 1000
         while True:
             try:
+                now = monotonic()
+                remaining = _fs_files_cooldown - (now - _last_call)
+                if remaining > 0:
+                    sleep(remaining)
                 resp = http_client.fs_files({
                     "cid": current_cid,
                     "limit": limit,
@@ -62,6 +69,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
                     "cur": 1,
                     "fc_mix": 1,
                 })
+                _last_call = monotonic()
             except Exception as e:
                 logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
                 break
@@ -117,6 +125,8 @@ class StrmGenerator:
         }
         self._auto_download_mediainfo = False
         self._overwrite_mode = "never"
+        self._use_rust = False
+        self._rust_processor = None
 
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
@@ -134,6 +144,32 @@ class StrmGenerator:
             self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()}
         self._auto_download_mediainfo = auto_download_mediainfo
         self._overwrite_mode = overwrite_mode
+
+    def set_use_rust(self, enabled: bool):
+        self._use_rust = enabled
+
+    def _get_rust_processor(self):
+        if self._rust_processor is not None:
+            return self._rust_processor
+        try:
+            from full_strm_sync import Processor
+
+            import json
+            config_json = json.dumps({
+                "media_extensions": list(self._rmt_mediaext)
+            })
+            self._rust_processor = Processor(config_json)
+            from full_strm_sync import __version__ as rust_core_version
+            logger.info("Rust STRM 加速核心已初始化 v%s", rust_core_version)
+            return self._rust_processor
+        except ImportError:
+            logger.warning("full_strm_sync 不可用，回退到纯 Python 模式")
+            self._use_rust = False
+            return None
+        except Exception as e:
+            logger.error("初始化 Rust 处理器失败: %s", e)
+            self._use_rust = False
+            return None
 
     def cancel(self):
         self._cancel_flag.set()
@@ -175,6 +211,7 @@ class StrmGenerator:
 
         try:
             all_files = []
+            rust_items = []
             for mapping in path_mappings:
                 if self._cancel_flag.is_set():
                     break
@@ -224,6 +261,15 @@ class StrmGenerator:
                         if ext in self._rmt_mediaext:
                             if not pickcode:
                                 continue
+                            if self._use_rust:
+                                rust_items.append({
+                                    "name": name,
+                                    "path": pan_full_path,
+                                    "is_dir": False,
+                                    "size": attr.get("size", 0),
+                                    "pickcode": pickcode,
+                                    "sha1": attr.get("sha1", ""),
+                                })
                             local_strm_path_orig = self._to_local_path(
                                 pan_full_path, pan_path, local_path
                             )
@@ -242,6 +288,28 @@ class StrmGenerator:
                 except Exception as e:
                     logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                     total_failed += 1
+
+            if self._use_rust and rust_items and not self._cancel_flag.is_set():
+                processor = self._get_rust_processor()
+                if processor:
+                    try:
+                        import json
+                        batch_json = json.dumps(rust_items)
+                        results = processor.process_batch(batch_json)
+                        rust_strm_count = getattr(results, "strm_results_count", 0) or 0
+                        rust_fail_count = len(getattr(results, "fail_results", []) or [])
+                        logger.info(
+                            "Rust 加速处理完成: STRM=%d, 失败=%d",
+                            rust_strm_count, rust_fail_count
+                        )
+                        for fail_info in (getattr(results, "fail_results", []) or []):
+                            logger.warning(
+                                "Rust STRM 生成失败: path=%s reason=%s",
+                                getattr(fail_info, "path_in_pan", "?"),
+                                getattr(fail_info, "reason", "?"),
+                            )
+                    except Exception as e:
+                        logger.error("Rust 批处理失败: %s", e, exc_info=True)
 
             if not self._cancel_flag.is_set() and all_files:
                 db.batch_add_files(all_files)
