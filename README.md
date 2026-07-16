@@ -1,6 +1,6 @@
-# 115网盘STRM生成与302工具
+# 115网盘STRM生成、签到与Emby 302工具
 
-115 网盘 STRM 生成 + 媒体流代理 + Emby 反向代理 Windows 桌面工具。让 Emby 直接播放 115 网盘中的视频，无需中转下载。
+115 网盘 STRM 生成 + 签到 + Emby 反向代理 Windows 桌面工具。让 Emby 直接播放 115 网盘中的视频，无需中转下载。
 
 基于 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins) 的 115 网盘 STRM 助手和 Emby 302 反向代理移植为独立 Windows 桌面工具。
 
