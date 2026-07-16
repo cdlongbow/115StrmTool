@@ -1,5 +1,7 @@
 from base64 import b64encode
 from json import loads as json_loads
+from time import monotonic, sleep
+from threading import Lock
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -11,6 +13,14 @@ from logger import logger
 
 
 P115_DOWNLOAD_API = "http://proapi.115.com/android/2.0/ufile/download"
+DEFAULT_ENDPOINT_COOLDOWNS = {
+    "fs_files": 0.5,
+    "fs_dir_getid": 0.5,
+    "download_url": 1.0,
+    "user_points_sign": 0.5,
+    "user_points_sign_post": 0.5,
+    "share_snap": 1.5,
+}
 
 
 class P115ClientWrapper:
@@ -18,7 +28,26 @@ class P115ClientWrapper:
         self._cookie = cookie
         self._client = None
         self._http_client: Optional[Client] = None
+        self._cooldown_lock = Lock()
+        self._last_call: Dict[str, float] = {}
+        self._cooldowns = dict(DEFAULT_ENDPOINT_COOLDOWNS)
         self._init_client()
+
+    def _wait_cooling(self, endpoint: str):
+        cooldown = self._cooldowns.get(endpoint, 0)
+        if cooldown <= 0:
+            return
+        with self._cooldown_lock:
+            now = monotonic()
+            last = self._last_call.get(endpoint, 0)
+            remaining = cooldown - (now - last)
+        if remaining > 0:
+            sleep(remaining)
+        with self._cooldown_lock:
+            self._last_call[endpoint] = monotonic()
+
+    def set_endpoint_cooldown(self, endpoint: str, cooldown: float):
+        self._cooldowns[endpoint] = cooldown
 
     def _init_client(self):
         if not self._cookie:
@@ -70,6 +99,7 @@ class P115ClientWrapper:
             logger.warning("115 客户端未初始化")
             return None
         try:
+            self._wait_cooling("download_url")
             result = self._client.download_url(pickcode)
             if isinstance(result, dict):
                 url = result.get("url") or result.get("file_url")
@@ -159,6 +189,7 @@ class P115ClientWrapper:
         if not self._client:
             return []
         try:
+            self._wait_cooling("fs_files")
             resp = self._client.fs_files({"cid": cid, "limit": 1000})
             if isinstance(resp, dict) and "data" in resp:
                 return resp.get("data", [])
@@ -180,6 +211,7 @@ class P115ClientWrapper:
         if not self._client:
             return None
         try:
+            self._wait_cooling("user_points_sign")
             return self._client.user_points_sign()
         except Exception as e:
             logger.error("查询签到状态失败: %s", e, exc_info=True)
@@ -189,6 +221,7 @@ class P115ClientWrapper:
         if not self._client:
             return None
         try:
+            self._wait_cooling("user_points_sign_post")
             return self._client.user_points_sign_post()
         except Exception as e:
             logger.error("执行签到失败: %s", e, exc_info=True)

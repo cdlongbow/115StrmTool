@@ -21,6 +21,45 @@ CHECKIN_MAX_RETRIES = 3
 CHECKIN_RETRY_DELAY = 3
 
 
+def run_p115_checkin_once(client) -> Tuple[bool, str]:
+    """
+    执行 115 单次签到
+
+    :param client: P115ClientWrapper 实例
+    :return: (是否成功, 说明文案)
+    """
+    if not client:
+        return False, "客户端未初始化"
+    try:
+        logger.info("【115 签到】查询今日签到状态...")
+        status_resp = client.user_points_sign()
+        if isinstance(status_resp, dict):
+            data = status_resp.get("data") or {}
+            if data.get("is_sign_today") == 1:
+                return True, "今日已签到，无需重复签到"
+
+        logger.info("【115 签到】执行签到...")
+        for attempt in range(1, CHECKIN_MAX_RETRIES + 1):
+            try:
+                resp = client.user_points_sign_post()
+                if isinstance(resp, dict):
+                    d2 = resp.get("data") or {}
+                    cd = d2.get("continuous_day", 0)
+                    pn = d2.get("points_num", 0)
+                    detail = f"签到成功，连续签到 {cd} 天，获得 {pn} 积分"
+                    logger.info("【115 签到】%s", detail)
+                    return True, detail
+            except Exception as e:
+                logger.warning("【115 签到】第 %d/%d 次失败: %s",
+                               attempt, CHECKIN_MAX_RETRIES, e)
+                if attempt < CHECKIN_MAX_RETRIES:
+                    sleep(CHECKIN_RETRY_DELAY)
+        return False, "签到失败，已达最大重试次数"
+    except Exception as e:
+        logger.error("【115 签到】异常: %s", e, exc_info=True)
+        return False, str(e)
+
+
 class CheckinScheduler:
     def __init__(self):
         self._lock = Lock()
@@ -88,7 +127,7 @@ class CheckinScheduler:
         if now.timestamp() < next_ts:
             return
 
-        ok, detail = self._run_checkin()
+        ok, detail = run_p115_checkin_once(self._client)
         if ok:
             self._save_state_field("last_done_date", today_str)
             self._save_state_field("last_detail", detail)
@@ -98,43 +137,10 @@ class CheckinScheduler:
             self._save_state_field("next_run_ts", None)
             self._save_state_field("last_detail", detail)
 
-    def _run_checkin(self) -> Tuple[bool, str]:
-        client = self._client
-        if not client:
-            return False, "客户端未初始化"
-        try:
-            logger.info("【115 签到】查询今日签到状态...")
-            status_resp = client.user_points_sign()
-            if isinstance(status_resp, dict):
-                data = status_resp.get("data") or {}
-                if data.get("is_sign_today") == 1:
-                    return True, "今日已签到，无需重复签到"
-
-            logger.info("【115 签到】执行签到...")
-            for attempt in range(1, CHECKIN_MAX_RETRIES + 1):
-                try:
-                    resp = client.user_points_sign_post()
-                    if isinstance(resp, dict):
-                        d2 = resp.get("data") or {}
-                        cd = d2.get("continuous_day", 0)
-                        pn = d2.get("points_num", 0)
-                        detail = f"签到成功，连续签到 {cd} 天，获得 {pn} 积分"
-                        logger.info("【115 签到】%s", detail)
-                        return True, detail
-                except Exception as e:
-                    logger.warning("【115 签到】第 %d/%d 次失败: %s",
-                                   attempt, CHECKIN_MAX_RETRIES, e)
-                    if attempt < CHECKIN_MAX_RETRIES:
-                        sleep(CHECKIN_RETRY_DELAY)
-            return False, "签到失败，已达最大重试次数"
-        except Exception as e:
-            logger.error("【115 签到】异常: %s", e, exc_info=True)
-            return False, str(e)
-
     def manual_checkin(self) -> Tuple[bool, str]:
         if not self._client:
             return False, "客户端未初始化"
-        return self._run_checkin()
+        return run_p115_checkin_once(self._client)
 
     def get_status(self) -> Dict:
         from config_manager import config_manager
