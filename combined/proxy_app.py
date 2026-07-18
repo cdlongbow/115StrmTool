@@ -147,6 +147,296 @@ CROSS_ORIGIN_INTERCEPT_SCRIPT = (
 )
 
 
+# ---- 模块级辅助函数（从 create_app 内闭包提升） ----
+
+
+async def _read_request_body_safe(request: Request) -> bytes | None:
+    """
+    读取请求体；客户端已断开时返回 None，避免 ClientDisconnect 未处理导致 500
+
+    :param request: 当前请求
+    :return: 请求体字节串，或 None 表示客户端已断开
+    """
+    try:
+        return await request.body()
+    except ClientDisconnect:
+        logger.debug(
+            "客户端已断开: %s %s",
+            request.method,
+            request.scope.get("path", ""),
+        )
+        return None
+
+
+def _strip_accept_encoding(headers: dict[str, str]) -> dict[str, str]:
+    """
+    去掉 Accept-Encoding，便于上游返回未压缩内容以便修改 body
+
+    :param headers: 原始转发头
+    :return: 不包含 accept-encoding 的头字典
+    """
+    return {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+
+
+def _may_return_emby_html_shell(path: str) -> bool:
+    """
+    判断路径是否可能返回 Emby Web 的 HTML 壳（用于是否走缓冲并注入脚本）
+
+    :param path: 请求路径
+    :return: 若可能为 HTML 页面则 True
+    """
+    pl = path.lower()
+    if "playbackinfo" in pl:
+        return False
+    if path == "/" or path == "":
+        return True
+    if path.startswith("/web/") or path == "/web":
+        return True
+    if path.endswith(".html") or path.endswith(".htm"):
+        return True
+    if path.startswith(("/emby/", "/items/", "/videos/", "/audio/", "/sync/")):
+        return False
+    last = path.rsplit("/", 1)[-1]
+    if "." not in last:
+        return True
+    return False
+
+
+def _inject_scripts_into_html(html: str, external_player_script: str = "") -> str | None:
+    """
+    在 HTML 的 head 中注入 crossOrigin 拦截脚本和外部播放器脚本；已注入则跳过
+
+    :param html: 页面 HTML 文本
+    :param external_player_script: 外部播放器脚本内容
+    :return: 注入后的 HTML；无需修改时返回 None
+    """
+    scripts = ""
+    if CROSS_ORIGIN_INTERCEPT_MARKER not in html:
+        scripts += CROSS_ORIGIN_INTERCEPT_SCRIPT
+    if external_player_script and EXTERNAL_PLAYER_MARKER not in html:
+        scripts += external_player_script
+    if not scripts:
+        return None
+    m = re_search(r"</head>", html, IGNORECASE)
+    if m:
+        i = m.start()
+        return html[:i] + scripts + html[i:]
+    m2 = re_search(r"<head[^>]*>", html, IGNORECASE)
+    if m2:
+        return html[: m2.end()] + scripts + html[m2.end() :]
+    return None
+
+
+def _media_sources_indicate_strm(data: dict[str, Any]) -> bool:
+    """
+    根据 PlaybackInfo JSON 判断是否为 STRM
+    Emby 解析 .strm 后 Path 变为文件内的实际地址（HTTP URL），
+    因此通过 Protocol=Http + IsRemote=True 来识别
+
+    :param data: PlaybackInfo 解析后的字典
+    :return: 若任一 MediaSource 为 STRM 解析后的远程源则为 True
+    """
+    sources = data.get("MediaSources")
+    if not isinstance(sources, list):
+        return False
+    for ms in sources:
+        if not isinstance(ms, dict):
+            continue
+        if ms.get("IsRemote") is True and ms.get("Protocol") == "Http":
+            return True
+    return False
+
+
+def _media_sources_match_pin_rules(
+    data: dict[str, Any], rules: List[Tuple[str, str]]
+) -> bool:
+    """
+    判断 PlaybackInfo 中是否有 MediaSource 的 Path 经 pin_rules 替换后变为 HTTP URL
+
+    :param data: PlaybackInfo 解析后的字典
+    :param rules: 顶置路径规则列表
+    :return: 若任一 MediaSource 命中规则且替换结果为 HTTP URL 则为 True
+    """
+    if not rules:
+        return False
+    sources = data.get("MediaSources")
+    if not isinstance(sources, list):
+        return False
+    for ms in sources:
+        if not isinstance(ms, dict):
+            continue
+        path = ms.get("Path")
+        if not isinstance(path, str):
+            continue
+        replaced = _apply_pin_rules(path, rules)
+        if replaced != path and replaced.startswith(("http://", "https://")):
+            return True
+    return False
+
+
+def _apply_force_direct_play_to_media_sources(
+    data: dict[str, Any], item_id: str
+) -> None:
+    """
+    对 PlaybackInfo 中所有 MediaSource 强制 DirectPlay，去掉转码相关字段，
+    并将 DirectStreamUrl 设为相对直链（相对当前连接主机，便于走代理 302）
+
+    :param data: PlaybackInfo 字典（就地修改）
+    :param item_id: 条目 ID，用于拼 /videos 或 /audio 下的 stream 路径
+    """
+    sources = data.get("MediaSources")
+    if not isinstance(sources, list):
+        return
+    for ms in sources:
+        if not isinstance(ms, dict):
+            continue
+        ms["SupportsDirectPlay"] = True
+        ms["SupportsDirectStream"] = True
+        ms["SupportsTranscoding"] = False
+        for key in (
+            "TranscodingUrl",
+            "TranscodingContainer",
+            "TranscodingSubProtocol",
+        ):
+            ms.pop(key, None)
+        ms.pop("DirectStreamUrl", None)
+        sid = ms.get("Id", "")
+        if not isinstance(sid, str) or not sid:
+            continue
+        qsid = quote(sid, safe="")
+        if str(ms.get("Type", "")).lower() == "audio":
+            ms["DirectStreamUrl"] = (
+                f"/audio/{item_id}/stream?Static=true&MediaSourceId={qsid}"
+            )
+        else:
+            ms["DirectStreamUrl"] = (
+                f"/videos/{item_id}/stream?Static=true&MediaSourceId={qsid}"
+            )
+
+
+def _build_forward_headers(request: Request) -> dict[str, str]:
+    """
+    构建转发请求头，排除 host 和 hop-by-hop 头
+
+    :param request: 当前请求
+    :return: 用于转发的请求头字典
+    """
+    return {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
+    }
+
+
+def _real_client_ip(request: Request) -> str:
+    """
+    获取真实客户端 IP
+
+    若 MoviePilot 前置有反向代理（nginx/Cloudflare 等），
+    `request.client.host` 会是上游代理的 IP，导致局域网内所有用户看起来
+    都来自同一 IP。优先读取 `X-Forwarded-For` / `X-Real-IP` 恢复真实 IP
+
+    :param request: 当前请求
+    :return: 客户端 IP 字符串，取不到时返回空串
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",", 1)[0].strip()
+    xri = request.headers.get("x-real-ip")
+    if xri:
+        return xri.strip()
+    return request.client.host if request.client else ""
+
+
+def _playback_user_key(request: Request, item_id: str) -> tuple[str, str, str]:
+    """
+    构造用于关联 PlaybackInfo → Stream 的复合 key
+
+    Stream 请求通常不携带任何 Emby 认证字段，但与其前置的 PlaybackInfo
+    来自同一浏览器/设备，因此可以用 (client_ip, user_agent, item_id)
+    三元组作为稳定关联键。同一设备下多用户互不影响：不同用户的
+    PlaybackInfo 分属不同 item_id 的播放动作，不会相互覆盖
+
+    :param request: 当前请求
+    :param item_id: 媒体项 ID
+    :return: 复合 key
+    """
+    ip = _real_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    return ip, ua, item_id
+
+
+def _header_hash(request: Request) -> str:
+    """
+    对缓存 key 白名单内的请求头做稳定序列化并哈希，用于区分认证/设备
+
+    :param request: 当前请求
+    :return: 十六进制摘要字符串
+    """
+    parts = []
+    for name in sorted(CACHE_KEY_HEADERS):
+        value = request.headers.get(name)
+        if value is not None:
+            parts.append(f"{name}:{value}")
+    return sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _apply_pin_rules(url_or_path: str, rules: List[Tuple[str, str]]) -> str:
+    """
+    对 PlaybackInfo 返回的 Path（URL 或路径）应用顶置规则：匹配前缀则替换为目标 URL
+
+    :param url_or_path: 完整 URL 或路径字符串
+    :param rules: 顶置规则列表 (路径前缀, 目标URL)
+    :return: 替换后的 URL，未命中则返回原串
+    """
+    if not url_or_path or not rules:
+        return url_or_path
+    path_component: str
+    original_query: str = ""
+    if url_or_path.startswith(("http://", "https://")):
+        parsed = urlparse(url_or_path)
+        path_component = parsed.path or "/"
+        original_query = parsed.query or ""
+    else:
+        path_component = (
+            url_or_path if url_or_path.startswith("/") else "/" + url_or_path
+        )
+    for path_prefix, target_url in rules:
+        if path_component != path_prefix and not path_component.startswith(
+            path_prefix + "/"
+        ):
+            continue
+        suffix = path_component[len(path_prefix) :].lstrip("/")
+        base = target_url.rstrip("/")
+        new_url = base + ("/" + suffix if suffix else "")
+        if original_query:
+            new_url += "?" + original_query
+        return new_url
+    return url_or_path
+
+
+def _current_port(request: Request) -> int:
+    """
+    从请求中解析当前代理端口（供客户端连回），优先 X-Forwarded-Port
+
+    :param request: 当前请求
+    :return: 端口号
+    """
+    forwarded = request.headers.get("x-forwarded-port")
+    if forwarded:
+        try:
+            return int(forwarded.split(",")[0].strip())
+        except (ValueError, AttributeError):
+            pass
+    server = request.scope.get("server")
+    if server and len(server) >= 2:
+        try:
+            return int(server[1])
+        except (ValueError, TypeError):
+            pass
+    return 80
+
+
 def create_app(
     emby_host: str,
     pin_rules: List[Tuple[str, str]] | None = None,
@@ -175,162 +465,6 @@ def create_app(
         _player_keys = []
 
     _external_player_script = build_external_player_script(_player_keys)
-
-    async def _read_request_body_safe(request: Request) -> bytes | None:
-        """
-        读取请求体；客户端已断开时返回 None，避免 ClientDisconnect 未处理导致 500
-
-        :param request: 当前请求
-        :return: 请求体字节串，或 None 表示客户端已断开
-        """
-        try:
-            return await request.body()
-        except ClientDisconnect:
-            logger.debug(
-                "客户端已断开: %s %s",
-                request.method,
-                request.scope.get("path", ""),
-            )
-            return None
-
-    def _strip_accept_encoding(headers: dict[str, str]) -> dict[str, str]:
-        """
-        去掉 Accept-Encoding，便于上游返回未压缩内容以便修改 body
-
-        :param headers: 原始转发头
-        :return: 不包含 accept-encoding 的头字典
-        """
-        return {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-
-    def _may_return_emby_html_shell(path: str) -> bool:
-        """
-        判断路径是否可能返回 Emby Web 的 HTML 壳（用于是否走缓冲并注入脚本）
-
-        :param path: 请求路径
-        :return: 若可能为 HTML 页面则 True
-        """
-        pl = path.lower()
-        if "playbackinfo" in pl:
-            return False
-        if path == "/" or path == "":
-            return True
-        if path.startswith("/web/") or path == "/web":
-            return True
-        if path.endswith(".html") or path.endswith(".htm"):
-            return True
-        if path.startswith(("/emby/", "/items/", "/videos/", "/audio/", "/sync/")):
-            return False
-        last = path.rsplit("/", 1)[-1]
-        if "." not in last:
-            return True
-        return False
-
-    def _inject_scripts_into_html(html: str) -> str | None:
-        """
-        在 HTML 的 head 中注入 crossOrigin 拦截脚本和外部播放器脚本；已注入则跳过
-
-        :param html: 页面 HTML 文本
-        :return: 注入后的 HTML；无需修改时返回 None
-        """
-        scripts = ""
-        if CROSS_ORIGIN_INTERCEPT_MARKER not in html:
-            scripts += CROSS_ORIGIN_INTERCEPT_SCRIPT
-        if _external_player_script and EXTERNAL_PLAYER_MARKER not in html:
-            scripts += _external_player_script
-        if not scripts:
-            return None
-        m = re_search(r"</head>", html, IGNORECASE)
-        if m:
-            i = m.start()
-            return html[:i] + scripts + html[i:]
-        m2 = re_search(r"<head[^>]*>", html, IGNORECASE)
-        if m2:
-            return html[: m2.end()] + scripts + html[m2.end() :]
-        return None
-
-    def _media_sources_indicate_strm(data: dict[str, Any]) -> bool:
-        """
-        根据 PlaybackInfo JSON 判断是否为 STRM
-        Emby 解析 .strm 后 Path 变为文件内的实际地址（HTTP URL），
-        因此通过 Protocol=Http + IsRemote=True 来识别
-
-        :param data: PlaybackInfo 解析后的字典
-        :return: 若任一 MediaSource 为 STRM 解析后的远程源则为 True
-        """
-        sources = data.get("MediaSources")
-        if not isinstance(sources, list):
-            return False
-        for ms in sources:
-            if not isinstance(ms, dict):
-                continue
-            if ms.get("IsRemote") is True and ms.get("Protocol") == "Http":
-                return True
-        return False
-
-    def _media_sources_match_pin_rules(
-        data: dict[str, Any], rules: List[Tuple[str, str]]
-    ) -> bool:
-        """
-        判断 PlaybackInfo 中是否有 MediaSource 的 Path 经 pin_rules 替换后变为 HTTP URL
-
-        :param data: PlaybackInfo 解析后的字典
-        :param rules: 顶置路径规则列表
-        :return: 若任一 MediaSource 命中规则且替换结果为 HTTP URL 则为 True
-        """
-        if not rules:
-            return False
-        sources = data.get("MediaSources")
-        if not isinstance(sources, list):
-            return False
-        for ms in sources:
-            if not isinstance(ms, dict):
-                continue
-            path = ms.get("Path")
-            if not isinstance(path, str):
-                continue
-            replaced = _apply_pin_rules(path, rules)
-            if replaced != path and replaced.startswith(("http://", "https://")):
-                return True
-        return False
-
-    def _apply_force_direct_play_to_media_sources(
-        data: dict[str, Any], item_id: str
-    ) -> None:
-        """
-        对 PlaybackInfo 中所有 MediaSource 强制 DirectPlay，去掉转码相关字段，
-        并将 DirectStreamUrl 设为相对直链（相对当前连接主机，便于走代理 302）
-
-        :param data: PlaybackInfo 字典（就地修改）
-        :param item_id: 条目 ID，用于拼 /videos 或 /audio 下的 stream 路径
-        """
-        sources = data.get("MediaSources")
-        if not isinstance(sources, list):
-            return
-        for ms in sources:
-            if not isinstance(ms, dict):
-                continue
-            ms["SupportsDirectPlay"] = True
-            ms["SupportsDirectStream"] = True
-            ms["SupportsTranscoding"] = False
-            for key in (
-                "TranscodingUrl",
-                "TranscodingContainer",
-                "TranscodingSubProtocol",
-            ):
-                ms.pop(key, None)
-            ms.pop("DirectStreamUrl", None)
-            sid = ms.get("Id", "")
-            if not isinstance(sid, str) or not sid:
-                continue
-            qsid = quote(sid, safe="")
-            if str(ms.get("Type", "")).lower() == "audio":
-                ms["DirectStreamUrl"] = (
-                    f"/audio/{item_id}/stream?Static=true&MediaSourceId={qsid}"
-                )
-            else:
-                ms["DirectStreamUrl"] = (
-                    f"/videos/{item_id}/stream?Static=true&MediaSourceId={qsid}"
-                )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -387,69 +521,6 @@ def create_app(
         if lower.startswith(_api_prefixes):
             request.scope["path"] = lower
         return await call_next(request)
-
-    def _build_forward_headers(request: Request) -> dict[str, str]:
-        """
-        构建转发请求头，排除 host 和 hop-by-hop 头
-
-        :param request: 当前请求
-        :return: 用于转发的请求头字典
-        """
-        return {
-            k: v
-            for k, v in request.headers.items()
-            if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
-        }
-
-    def _real_client_ip(request: Request) -> str:
-        """
-        获取真实客户端 IP
-
-        若 MoviePilot 前置有反向代理（nginx/Cloudflare 等），
-        `request.client.host` 会是上游代理的 IP，导致局域网内所有用户看起来
-        都来自同一 IP。优先读取 `X-Forwarded-For` / `X-Real-IP` 恢复真实 IP
-
-        :param request: 当前请求
-        :return: 客户端 IP 字符串，取不到时返回空串
-        """
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            return xff.split(",", 1)[0].strip()
-        xri = request.headers.get("x-real-ip")
-        if xri:
-            return xri.strip()
-        return request.client.host if request.client else ""
-
-    def _playback_user_key(request: Request, item_id: str) -> tuple[str, str, str]:
-        """
-        构造用于关联 PlaybackInfo → Stream 的复合 key
-
-        Stream 请求通常不携带任何 Emby 认证字段，但与其前置的 PlaybackInfo
-        来自同一浏览器/设备，因此可以用 (client_ip, user_agent, item_id)
-        三元组作为稳定关联键。同一设备下多用户互不影响：不同用户的
-        PlaybackInfo 分属不同 item_id 的播放动作，不会相互覆盖
-
-        :param request: 当前请求
-        :param item_id: 媒体项 ID
-        :return: 复合 key
-        """
-        ip = _real_client_ip(request)
-        ua = request.headers.get("user-agent", "")
-        return ip, ua, item_id
-
-    def _header_hash(request: Request) -> str:
-        """
-        对缓存 key 白名单内的请求头做稳定序列化并哈希，用于区分认证/设备
-
-        :param request: 当前请求
-        :return: 十六进制摘要字符串
-        """
-        parts = []
-        for name in sorted(CACHE_KEY_HEADERS):
-            value = request.headers.get(name)
-            if value is not None:
-                parts.append(f"{name}:{value}")
-        return sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
     async def _handle_media(
         request: Request, item_id: str, name: str = ""
@@ -520,39 +591,6 @@ def create_app(
                 logger.warning("解析重定向失败，使用原始 URL: %s", url, exc_info=True)
                 return url
         return url
-
-    def _apply_pin_rules(url_or_path: str, rules: List[Tuple[str, str]]) -> str:
-        """
-        对 PlaybackInfo 返回的 Path（URL 或路径）应用顶置规则：匹配前缀则替换为目标 URL
-
-        :param url_or_path: 完整 URL 或路径字符串
-        :param rules: 顶置规则列表 (路径前缀, 目标URL)
-        :return: 替换后的 URL，未命中则返回原串
-        """
-        if not url_or_path or not rules:
-            return url_or_path
-        path_component: str
-        original_query: str = ""
-        if url_or_path.startswith(("http://", "https://")):
-            parsed = urlparse(url_or_path)
-            path_component = parsed.path or "/"
-            original_query = parsed.query or ""
-        else:
-            path_component = (
-                url_or_path if url_or_path.startswith("/") else "/" + url_or_path
-            )
-        for path_prefix, target_url in rules:
-            if path_component != path_prefix and not path_component.startswith(
-                path_prefix + "/"
-            ):
-                continue
-            suffix = path_component[len(path_prefix) :].lstrip("/")
-            base = target_url.rstrip("/")
-            new_url = base + ("/" + suffix if suffix else "")
-            if original_query:
-                new_url += "?" + original_query
-            return new_url
-        return url_or_path
 
     async def _stream_from_cdn(
         cdn_url: str, request: Request
@@ -785,27 +823,6 @@ def create_app(
 
     app.websocket("/embywebsocket")(_ws_proxy)
     app.websocket("/emby/embywebsocket")(_ws_proxy)
-
-    def _current_port(request: Request) -> int:
-        """
-        从请求中解析当前代理端口（供客户端连回），优先 X-Forwarded-Port
-
-        :param request: 当前请求
-        :return: 端口号
-        """
-        forwarded = request.headers.get("x-forwarded-port")
-        if forwarded:
-            try:
-                return int(forwarded.split(",")[0].strip())
-            except (ValueError, AttributeError):
-                pass
-        server = request.scope.get("server")
-        if server and len(server) >= 2:
-            try:
-                return int(server[1])
-            except (ValueError, TypeError):
-                pass
-        return 80
 
     async def _system_info_handler(
         request: Request,
@@ -1097,7 +1114,7 @@ def create_app(
                 html = resp.text
             except Exception:
                 html = raw.decode("utf-8", errors="replace")
-            injected = _inject_scripts_into_html(html)
+            injected = _inject_scripts_into_html(html, _external_player_script)
             if injected is not None:
                 out = injected.encode("utf-8")
                 logger.info("已在 HTML 注入脚本: path=%s", path)

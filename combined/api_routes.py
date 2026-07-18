@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 import asyncio
@@ -7,6 +7,7 @@ import asyncio
 from logger import logger
 from config_manager import config_manager
 from database import db
+from exceptions import ClientNotReadyError, ServiceError, BadRequestError
 from p115_client_wrapper import P115ClientWrapper
 
 router = APIRouter(prefix="/api")
@@ -21,9 +22,9 @@ def set_client(client: P115ClientWrapper):
 
 def get_client() -> P115ClientWrapper:
     if _client is None:
-        raise HTTPException(status_code=503, detail="115 客户端未初始化，请先配置 Cookie")
+        raise ClientNotReadyError("115 客户端未初始化，请先配置 Cookie")
     if not _client.is_ready():
-        raise HTTPException(status_code=503, detail="115 客户端未就绪，请检查 Cookie 配置")
+        raise ClientNotReadyError()
     return _client
 
 
@@ -97,7 +98,7 @@ async def browse_directory(pid: str = "0", path: str = ""):
         return {"items": items, "path": path or "/"}
     except Exception as e:
         logger.error("浏览目录失败 pid=%s: %s", pid, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"浏览目录失败: {e}")
+        raise ServiceError(f"浏览目录失败: {e}")
 
 
 # ── 同步 ──
@@ -226,7 +227,7 @@ async def share_transfer(req: ShareTransferRequest) -> Dict:
         return {"status": "added", "share_url": req.share_url, "target_path": req.target_path}
     except Exception as e:
         logger.error("添加分享转存失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServiceError(str(e))
 
 
 # ── 离线下载 ──
@@ -254,7 +255,7 @@ async def add_offline_task(req: OfflineTaskRequest) -> Dict:
         return {"status": "added", "url": req.url}
     except Exception as e:
         logger.error("添加离线任务失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServiceError(str(e))
 
 
 # ── 签到 ──
@@ -293,9 +294,9 @@ async def get_qrcode(app: str = "alipaymini") -> Dict:
         result = client.get_qrcode(app)
         if result:
             return result
-        raise HTTPException(status_code=500, detail="获取二维码失败")
+        raise ServiceError("获取二维码失败")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServiceError(str(e))
 
 
 @router.post("/qrcode/check")

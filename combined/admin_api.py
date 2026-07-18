@@ -2,7 +2,9 @@ import sys
 from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+
+from exceptions import ServiceError
 
 from logger import LOG_DIR
 from pydantic import BaseModel
@@ -149,7 +151,7 @@ async def get_logs(lines: int = 200) -> Dict:
         log_lines = content.strip().split("\n")
         return {"logs": log_lines[-lines:]}
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"读取日志失败: {e}")
+        raise ServiceError(f"读取日志失败: {e}")
 
 
 # ── 系统自动启动 ──

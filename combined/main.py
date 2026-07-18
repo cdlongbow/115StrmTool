@@ -176,6 +176,17 @@ def _start_p115():
 def create_admin_app() -> FastAPI:
     app = FastAPI(title="115网盘STRM生成与302工具")
 
+    from fastapi.responses import JSONResponse
+    from exceptions import ServiceError
+
+    @app.exception_handler(ServiceError)
+    async def service_error_handler(request, exc: ServiceError):
+        logger.warning("ServiceError: %s", exc.message)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": exc.message},
+        )
+
     # 挂载 P115 API 路由
     from api_routes import router as p115_router
 
