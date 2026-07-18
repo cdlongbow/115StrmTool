@@ -38,7 +38,7 @@ class Database:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pickcode TEXT NOT NULL,
+                pickcode TEXT NOT NULL UNIQUE,
                 file_name TEXT NOT NULL,
                 file_size INTEGER DEFAULT 0,
                 file_type TEXT DEFAULT '',
@@ -88,6 +88,14 @@ class Database:
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
         """)
+        # 兼容旧数据库：为已有表添加 pickcode UNIQUE 约束
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_files_pickcode_unique "
+                "ON files(pickcode)"
+            )
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 

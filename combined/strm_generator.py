@@ -99,7 +99,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
                         "size": item.get("s") or item.get("size", 0),
                         "pickcode": item.get("pc") or item.get("pickcode") or "",
                         "pick_code": item.get("pc") or item.get("pickcode") or "",
-                        "sha1": item.get("sha") or item.get("sha", ""),
+                        "sha1": item.get("sha1") or item.get("sha", ""),
                         "path": "",
                         "id": child_cid if is_dir else item.get("fid", 0),
                         "parent_id": str(current_cid),
@@ -482,20 +482,21 @@ class StrmGenerator:
                         else:
                             total_unchanged += 1
 
-                    deleted_pickcodes = [
-                        pc for pc in existing_map if pc not in seen_pickcodes
-                    ]
-                    for pc in deleted_pickcodes:
-                        entry = existing_map[pc]
-                        strm_path = Path(entry["local_strm_path"])
-                        if strm_path.exists():
-                            try:
-                                strm_path.unlink()
-                                logger.info("已删除残留 STRM: %s", strm_path)
-                            except OSError as e:
-                                logger.warning("删除 STRM 文件失败 %s: %s", strm_path, e)
-                        db.mark_file_deleted(pc)
-                    total_deleted += len(deleted_pickcodes)
+                    if not self._cancel_flag.is_set():
+                        deleted_pickcodes = [
+                            pc for pc in existing_map if pc not in seen_pickcodes
+                        ]
+                        for pc in deleted_pickcodes:
+                            entry = existing_map[pc]
+                            strm_path = Path(entry["local_strm_path"])
+                            if strm_path.exists():
+                                try:
+                                    strm_path.unlink()
+                                    logger.info("已删除残留 STRM: %s", strm_path)
+                                except OSError as e:
+                                    logger.warning("删除 STRM 文件失败 %s: %s", strm_path, e)
+                            db.mark_file_deleted(pc)
+                        total_deleted += len(deleted_pickcodes)
 
                 except Exception as e:
                     logger.error("增量同步目录失败 %s: %s", pan_path, e, exc_info=True)
