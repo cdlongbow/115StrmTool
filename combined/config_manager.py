@@ -1,4 +1,8 @@
+import base64
+import hashlib
 import json
+import os
+import secrets
 import shutil
 import sys
 from pathlib import Path
@@ -15,6 +19,45 @@ else:
 CONFIG_FILE = _BASE_DIR / "config.json"
 
 PIN_RULES_SEP = " => "
+
+_COOKIE_ENCRYPTED_PREFIX = "#ENC#"
+
+
+def _get_encryption_key() -> bytes:
+    """
+    获取持久化的加密密钥，首次自动生成 32 字节随机密钥保存到 config.key
+    密钥文件与 config.json 同目录，两者缺一则无法解密
+    """
+    key_file = _BASE_DIR / "config.key"
+    if not key_file.exists():
+        key = os.urandom(32)
+        key_file.write_bytes(key)
+    else:
+        key = key_file.read_bytes()
+    return key
+
+
+def _encrypt_cookie(plaintext: str) -> str:
+    if not plaintext:
+        return plaintext
+    key = _get_encryption_key()
+    salt = os.urandom(16)
+    derived = hashlib.pbkdf2_hmac("sha256", key, salt, 100000)
+    data = plaintext.encode("utf-8")
+    encrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(data)])
+    return _COOKIE_ENCRYPTED_PREFIX + base64.b64encode(salt + encrypted).decode("ascii")
+
+
+def _decrypt_cookie(encoded: str) -> str:
+    if not encoded or not encoded.startswith(_COOKIE_ENCRYPTED_PREFIX):
+        return encoded
+    key = _get_encryption_key()
+    raw = base64.b64decode(encoded[len(_COOKIE_ENCRYPTED_PREFIX):])
+    salt = raw[:16]
+    encrypted = raw[16:]
+    derived = hashlib.pbkdf2_hmac("sha256", key, salt, 100000)
+    decrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(encrypted)])
+    return decrypted.decode("utf-8")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "admin_host": "0.0.0.0",
@@ -59,6 +102,12 @@ class ConfigManager:
                     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
                     self._config = _deep_merge(dict(DEFAULT_CONFIG), loaded)
+                    cookie = self._config.get("p115", {}).get("cookie", "")
+                    if cookie and cookie.startswith(_COOKIE_ENCRYPTED_PREFIX):
+                        try:
+                            self._config["p115"]["cookie"] = _decrypt_cookie(cookie)
+                        except Exception as e:
+                            logger.warning("Cookie 解密失败，保留原始值: %s", e)
                     logger.info("配置已加载: %s", CONFIG_FILE.resolve())
                 except (json.JSONDecodeError, OSError) as e:
                     logger.error("配置文件加载失败，使用默认配置: %s", e)
@@ -84,8 +133,12 @@ class ConfigManager:
 
     def _write(self) -> bool:
         try:
+            config_to_write = self._deep_copy(self._config)
+            cookie = config_to_write.get("p115", {}).get("cookie", "")
+            if cookie:
+                config_to_write["p115"]["cookie"] = _encrypt_cookie(cookie)
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self._config, f, ensure_ascii=False, indent=2)
+                json.dump(config_to_write, f, ensure_ascii=False, indent=2)
             logger.info("配置已保存: %s", CONFIG_FILE.resolve())
             return True
         except OSError as e:
@@ -118,8 +171,8 @@ class ConfigManager:
         try:
             shutil.copy2(CONFIG_FILE, backup_path)
             logger.info("损坏的配置文件已备份: %s", backup_path)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("备份损坏配置文件失败: %s", e)
         CONFIG_FILE.unlink(missing_ok=True)
 
     def _deep_copy(self, d: dict) -> dict:

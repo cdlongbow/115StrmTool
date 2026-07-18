@@ -107,48 +107,51 @@ class CheckinScheduler:
         return min(remaining, CHECKIN_POLL_INTERVAL)
 
     def _tick(self) -> None:
-        from config_manager import config_manager
-        cfg = config_manager.get().get("checkin", {})
-        enabled = cfg.get("enabled", False)
-        if not enabled or not self._client:
-            return
+        try:
+            from config_manager import config_manager
+            cfg = config_manager.get().get("checkin", {})
+            enabled = cfg.get("enabled", False)
+            if not enabled or not self._client:
+                return
 
-        from datetime import date, datetime, timezone, timedelta
-        tz = timezone(timedelta(hours=8))
-        now = datetime.now(tz)
-        today_str = now.strftime("%Y-%m-%d")
+            from datetime import date, datetime, timezone, timedelta
+            tz = timezone(timedelta(hours=8))
+            now = datetime.now(tz)
+            today_str = now.strftime("%Y-%m-%d")
 
-        last_done = self._state.get("last_done_date") or ""
-        next_ts = self._state.get("next_run_ts")
+            last_done = self._state.get("last_done_date") or ""
+            next_ts = self._state.get("next_run_ts")
 
-        if last_done == today_str:
-            if next_ts is not None:
-                nr = datetime.fromtimestamp(next_ts, tz=tz)
-                if nr.date() > now.date():
-                    return
-            tomorrow_d = (now + timedelta(days=1)).date()
-            self._set_next_run(self._random_epoch(tomorrow_d, cfg))
-            return
+            if last_done == today_str:
+                if next_ts is not None:
+                    nr = datetime.fromtimestamp(next_ts, tz=tz)
+                    if nr.date() > now.date():
+                        return
+                tomorrow_d = (now + timedelta(days=1)).date()
+                self._set_next_run(self._random_epoch(tomorrow_d, cfg))
+                return
 
-        if next_ts is None:
-            nxt = self._pick_next(now, cfg)
-            self._save_state_field("next_run_ts", nxt)
-            logger.debug("【115 签到】已安排下次执行 %s",
-                         datetime.fromtimestamp(nxt, tz=tz).strftime("%Y-%m-%d %H:%M"))
-            next_ts = nxt
+            if next_ts is None:
+                nxt = self._pick_next(now, cfg)
+                self._save_state_field("next_run_ts", nxt)
+                logger.debug("【115 签到】已安排下次执行 %s",
+                             datetime.fromtimestamp(nxt, tz=tz).strftime("%Y-%m-%d %H:%M"))
+                next_ts = nxt
 
-        if now.timestamp() < next_ts:
-            return
+            if now.timestamp() < next_ts:
+                return
 
-        ok, detail = run_p115_checkin_once(self._client)
-        if ok:
-            self._save_state_field("last_done_date", today_str)
-            self._save_state_field("last_detail", detail)
-            tomorrow_d = (now + timedelta(days=1)).date()
-            self._set_next_run(self._random_epoch(tomorrow_d, cfg))
-        else:
-            self._save_state_field("next_run_ts", None)
-            self._save_state_field("last_detail", detail)
+            ok, detail = run_p115_checkin_once(self._client)
+            if ok:
+                self._save_state_field("last_done_date", today_str)
+                self._save_state_field("last_detail", detail)
+                tomorrow_d = (now + timedelta(days=1)).date()
+                self._set_next_run(self._random_epoch(tomorrow_d, cfg))
+            else:
+                self._save_state_field("next_run_ts", None)
+                self._save_state_field("last_detail", detail)
+        except Exception as e:
+            logger.error("115 签到调度异常: %s", e, exc_info=True)
 
     def manual_checkin(self) -> Tuple[bool, str]:
         if not self._client:
@@ -225,8 +228,8 @@ class CheckinScheduler:
             try:
                 with open(CHECKIN_STATE_FILE, "r", encoding="utf-8") as f:
                     return json_load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载签到状态失败: %s", e)
         return {}
 
     def _write_state(self) -> None:

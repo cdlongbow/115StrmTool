@@ -147,11 +147,11 @@ class RedirectService:
                 url, fname, expiry = entry
                 if monotonic() < expiry:
                     return (url, fname)
-                del self._cache[key]
-                try:
-                    self._cache_order.remove(key)
-                except ValueError:
-                    pass
+                    del self._cache[key]
+                    try:
+                        self._cache_order.remove(key)
+                    except ValueError:
+                        pass  # 缓存排序列表中可能已无此 key
         return None
 
     async def _set_cache(self, key: str, url: str, file_name: str, ttl: int):
@@ -167,7 +167,7 @@ class RedirectService:
                 try:
                     self._cache_order.remove(k)
                 except ValueError:
-                    pass
+                    pass  # 缓存排序列表中可能已无此 key
             while len(self._cache) >= CACHE_MAX_SIZE and self._cache_order:
                 oldest = self._cache_order.pop(0)
                 self._cache.pop(oldest, None)

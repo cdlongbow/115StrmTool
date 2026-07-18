@@ -2,6 +2,7 @@ import argparse
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -22,14 +23,21 @@ EMBY_THREAD = None
 P115_REDIRECT_SERVER = None
 P115_REDIRECT_THREAD = None
 ADMIN_SERVER = None
+_shutdown_event = threading.Event()
 
 
 def signal_handler(sig, frame):
     logger.info("收到退出信号，正在关闭服务...")
+    _shutdown_event.set()
     _stop_emby()
     _stop_p115_redirect()
     if ADMIN_SERVER:
         ADMIN_SERVER.should_exit = True
+    # 给线程最多 3 秒退出，然后强制退出
+    for _ in range(30):
+        if not (EMBY_THREAD and EMBY_THREAD.is_alive()) and not (P115_REDIRECT_THREAD and P115_REDIRECT_THREAD.is_alive()):
+            break
+        time.sleep(0.1)
     sys.exit(0)
 
 
@@ -42,8 +50,8 @@ def _stop_emby():
                 EMBY_THREAD.join(timeout=5.0)
                 if EMBY_THREAD.is_alive():
                     logger.warning("Emby 服务线程在 5s 超时内未能退出")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("停止 Emby 服务时出现异常: %s", e, exc_info=True)
         EMBY_SERVER = None
         EMBY_THREAD = None
         set_emby_status(False)
@@ -58,8 +66,8 @@ def _stop_p115_redirect():
                 P115_REDIRECT_THREAD.join(timeout=5.0)
                 if P115_REDIRECT_THREAD.is_alive():
                     logger.warning("P115 Redirect 服务线程在 5s 超时内未能退出")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("停止 P115 跳转服务时出现异常: %s", e, exc_info=True)
         P115_REDIRECT_SERVER = None
         P115_REDIRECT_THREAD = None
         set_p115_status(False)

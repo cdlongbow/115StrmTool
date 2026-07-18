@@ -113,8 +113,8 @@ async def get_p115_status() -> Dict[str, Any]:
             stats = db.get_stats()
             user_info = client.get_user_info()
             storage = client.get_storage_info()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取 P115 统计/用户信息失败: %s", e, exc_info=True)
     return {
         "running": _p115_status["running"],
         "client_ready": client_ready,

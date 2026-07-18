@@ -587,6 +587,10 @@ def create_app(
         async def _cdn_stream():
             try:
                 async for chunk in cdn_resp.aiter_bytes(chunk_size=65536):
+                    # 客户端提前断开时停止拉取 CDN 数据，避免浪费带宽
+                    if await request.is_disconnected():
+                        logger.debug("客户端已断开，停止 CDN 流式拉取")
+                        break
                     yield chunk
             finally:
                 await cdn_resp.aclose()
@@ -602,7 +606,11 @@ def create_app(
     ) -> Response | None:
         """
         尝试获取媒体文件真实地址并从 CDN 流式代理到客户端
-        优先级：已解析 URL 缓存 → PlaybackInfo 实时查询 → STRM 源缓存
+
+        三级缓存策略，优先级递减：
+          1. playback_url_cache（90s TTL）— 已解析的重定向最终 URL
+          2. PlaybackInfo API 实时查询 — 从 Emby 获取 MediaSource Path
+          3. strm_source_cache（300s TTL）— STRM 文件的直链缓存
 
         :param item_id: 媒体项 ID
         :param api_key: Emby API Key，可为 None
@@ -612,6 +620,7 @@ def create_app(
         """
         media_source_id = request.query_params.get("MediaSourceId") or ""
 
+        # 第一级：用户缓存 — 从请求头提取用户 ID，用作后续缓存的 key 组成部分
         user_key = _playback_user_key(request, item_id)
         user_cache = request.app.state.playback_user_cache
         user_id: str | None = None
@@ -634,6 +643,7 @@ def create_app(
         order = request.app.state.playback_cache_order
         lock = request.app.state.playback_cache_lock
 
+        # 第二级：已解析 URL 缓存 — 命中则直接流式代理，跳过后续查询
         cached_final_url = None
         async with lock:
             if cache_key in cache:
@@ -645,13 +655,14 @@ def create_app(
                     try:
                         order.remove(cache_key)
                     except ValueError:
-                        pass
+                        pass  # 缓存排序列表中可能已无此 key
         if cached_final_url is not None:
             logger.debug("PlaybackInfo 使用缓存: item_id=%s", item_id)
             return await _stream_from_cdn(cached_final_url, request)
 
         http_path = None
 
+        # 第三级：PlaybackInfo API 实时查询 — 从 Emby 解析媒体源路径
         if api_key:
             url = f"{emby_host}/Items/{item_id}/PlaybackInfo?X-Emby-Token={api_key}"
             client_follow = request.app.state.http_client_follow
@@ -674,6 +685,7 @@ def create_app(
                     http_path = path
                     break
 
+        # 第四级：STRM 源缓存 — PlaybackInfo 未命中时使用
         if not http_path:
             strm_cache = request.app.state.strm_source_cache
             strm_lock = request.app.state.strm_source_lock
@@ -692,12 +704,14 @@ def create_app(
         if not http_path:
             return None
 
+        # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
         client_follow = request.app.state.http_client_follow
         fwd_headers = _build_forward_headers(request)
         final_url = await _resolve_redirect(
             client_follow, http_path, fwd_headers, user_id
         )
 
+        # 写入已解析 URL 缓存（LRU 淘汰）
         async with lock:
             now = monotonic()
             expiry = now + PLAYBACK_URL_CACHE_TTL_SECONDS

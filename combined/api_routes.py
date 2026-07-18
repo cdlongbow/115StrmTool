@@ -61,8 +61,8 @@ async def get_status() -> Dict[str, Any]:
         try:
             user_info = _client.get_user_info()
             storage = _client.get_storage_info()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取 115 用户信息失败: %s", e, exc_info=True)
     return {
         "client_ready": client_ready,
         "stats": stats,

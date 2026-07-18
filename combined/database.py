@@ -50,7 +50,6 @@ class Database:
                 updated_at TEXT DEFAULT (datetime('now','localtime')),
                 status TEXT DEFAULT 'active'
             );
-            CREATE INDEX IF NOT EXISTS idx_files_pickcode ON files(pickcode);
             CREATE INDEX IF NOT EXISTS idx_files_pan_path ON files(pan_path);
             CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 
@@ -88,19 +87,11 @@ class Database:
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
         """)
-        # 兼容旧数据库：为已有表添加 pickcode UNIQUE 约束
-        try:
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_files_pickcode_unique "
-                "ON files(pickcode)"
-            )
-        except Exception:
-            pass
         conn.commit()
         conn.close()
 
     def add_file(self, file_info: Dict[str, Any]) -> int:
-        self.conn.execute(
+        cursor = self.conn.execute(
             """INSERT OR REPLACE INTO files
                (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -116,7 +107,7 @@ class Database:
             ),
         )
         self.conn.commit()
-        return self.conn.lastrowid
+        return cursor.lastrowid
 
     def batch_add_files(self, files: List[Dict[str, Any]]):
         cursor = self.conn.cursor()
@@ -192,6 +183,8 @@ class Database:
 
     def clear_all_files(self):
         self.conn.execute("DELETE FROM files")
+        self.conn.commit()
+        self.conn.execute("VACUUM")
         self.conn.commit()
 
     def add_share_transfer(self, share_url: str, target_path: str) -> int:
