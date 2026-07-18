@@ -2,7 +2,7 @@ from json import dump as json_dump, load as json_load
 from pathlib import Path
 from random import uniform
 from re import fullmatch as re_fullmatch
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import sleep
 from typing import Dict, Optional, Tuple
 import sys
@@ -67,6 +67,7 @@ class CheckinScheduler:
         self._client = None
         self._thread: Optional[Thread] = None
         self._running = False
+        self._stop_event = Event()
 
     def set_client(self, client) -> None:
         self._client = client
@@ -75,12 +76,14 @@ class CheckinScheduler:
         if self._thread and self._thread.is_alive():
             return
         self._running = True
+        self._stop_event.clear()
         self._thread = Thread(target=self._loop, daemon=True)
         self._thread.start()
         logger.info("签到调度器已启动")
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
 
     def _loop(self) -> None:
         while self._running:
@@ -88,10 +91,20 @@ class CheckinScheduler:
                 self._tick()
             except Exception:
                 logger.error("签到调度异常", exc_info=True)
-            for _ in range(CHECKIN_POLL_INTERVAL):
-                if not self._running:
-                    return
-                sleep(1)
+            sleep_secs = self._compute_sleep()
+            self._stop_event.wait(timeout=sleep_secs)
+
+    def _compute_sleep(self) -> float:
+        next_ts = self._state.get("next_run_ts")
+        if next_ts is None:
+            return CHECKIN_POLL_INTERVAL
+        from datetime import datetime, timezone, timedelta
+        tz = timezone(timedelta(hours=8))
+        now = datetime.now(tz).timestamp()
+        remaining = next_ts - now
+        if remaining <= 0:
+            return 1
+        return min(remaining, CHECKIN_POLL_INTERVAL)
 
     def _tick(self) -> None:
         from config_manager import config_manager

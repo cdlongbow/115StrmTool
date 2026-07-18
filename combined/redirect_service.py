@@ -14,12 +14,15 @@ CACHE_TTL_DEFAULT = 90
 CACHE_MAX_SIZE = 1000
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 
+import asyncio
+
 
 class RedirectService:
     def __init__(self, client: P115ClientWrapper):
         self._client = client
         self._cache: Dict[str, Tuple[str, str, float]] = {}
         self._cache_order: list[str] = []
+        self._cache_lock = asyncio.Lock()
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
@@ -80,7 +83,7 @@ class RedirectService:
             )
 
         ckey = self._cache_key(pickcode, user_agent)
-        cached = self._get_cached(ckey)
+        cached = await self._get_cached(ckey)
         if cached:
             cached_url, cached_fname = cached
             logger.info(
@@ -102,7 +105,7 @@ class RedirectService:
 
         download_url, file_name, expires_time = result
         ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
-        self._set_cache(ckey, download_url, file_name, ttl)
+        await self._set_cache(ckey, download_url, file_name, ttl)
         logger.info(
             "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
             pickcode, file_name, ttl, client_ip,
@@ -137,37 +140,39 @@ class RedirectService:
             return path
         return None
 
-    def _get_cached(self, key: str) -> Optional[Tuple[str, str]]:
-        entry = self._cache.get(key)
-        if entry:
-            url, fname, expiry = entry
-            if monotonic() < expiry:
-                return (url, fname)
-            del self._cache[key]
-            try:
-                self._cache_order.remove(key)
-            except ValueError:
-                pass
+    async def _get_cached(self, key: str) -> Optional[Tuple[str, str]]:
+        async with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry:
+                url, fname, expiry = entry
+                if monotonic() < expiry:
+                    return (url, fname)
+                del self._cache[key]
+                try:
+                    self._cache_order.remove(key)
+                except ValueError:
+                    pass
         return None
 
-    def _set_cache(self, key: str, url: str, file_name: str, ttl: int):
-        expiry = monotonic() + ttl
-        now = monotonic()
-        expired_keys = [
-            k for k in self._cache_order
-            if k in self._cache and self._cache[k][2] < now
-        ]
-        for k in expired_keys:
-            del self._cache[k]
-            try:
-                self._cache_order.remove(k)
-            except ValueError:
-                pass
-        while len(self._cache) >= CACHE_MAX_SIZE and self._cache_order:
-            oldest = self._cache_order.pop(0)
-            self._cache.pop(oldest, None)
-        self._cache[key] = (url, file_name, expiry)
-        self._cache_order.append(key)
+    async def _set_cache(self, key: str, url: str, file_name: str, ttl: int):
+        async with self._cache_lock:
+            expiry = monotonic() + ttl
+            now = monotonic()
+            expired_keys = [
+                k for k in self._cache_order
+                if k in self._cache and self._cache[k][2] < now
+            ]
+            for k in expired_keys:
+                del self._cache[k]
+                try:
+                    self._cache_order.remove(k)
+                except ValueError:
+                    pass
+            while len(self._cache) >= CACHE_MAX_SIZE and self._cache_order:
+                oldest = self._cache_order.pop(0)
+                self._cache.pop(oldest, None)
+            self._cache[key] = (url, file_name, expiry)
+            self._cache_order.append(key)
 
     def clear_cache(self):
         self._cache.clear()

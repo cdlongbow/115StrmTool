@@ -2,6 +2,8 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+import asyncio
+
 from logger import logger
 from config_manager import config_manager
 from database import db
@@ -31,16 +33,21 @@ def get_client() -> P115ClientWrapper:
 @router.get("/select-directory")
 async def select_directory() -> Dict:
     try:
-        import tkinter
-        from tkinter import filedialog
-        root = tkinter.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        path = filedialog.askdirectory(title="选择 STRM 输出目录")
-        root.destroy()
+        path = await asyncio.to_thread(_select_directory_sync)
         return {"path": (path or "").replace("\\", "/")}
     except Exception as e:
         return {"path": ""}
+
+
+def _select_directory_sync() -> str:
+    import tkinter
+    from tkinter import filedialog
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    path = filedialog.askdirectory(title="选择 STRM 输出目录")
+    root.destroy()
+    return path or ""
 
 
 @router.get("/status")

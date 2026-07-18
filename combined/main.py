@@ -40,6 +40,8 @@ def _stop_emby():
             EMBY_SERVER.should_exit = True
             if EMBY_THREAD and EMBY_THREAD.is_alive():
                 EMBY_THREAD.join(timeout=5.0)
+                if EMBY_THREAD.is_alive():
+                    logger.warning("Emby 服务线程在 5s 超时内未能退出")
         except Exception:
             pass
         EMBY_SERVER = None
@@ -54,6 +56,8 @@ def _stop_p115_redirect():
             P115_REDIRECT_SERVER.should_exit = True
             if P115_REDIRECT_THREAD and P115_REDIRECT_THREAD.is_alive():
                 P115_REDIRECT_THREAD.join(timeout=5.0)
+                if P115_REDIRECT_THREAD.is_alive():
+                    logger.warning("P115 Redirect 服务线程在 5s 超时内未能退出")
         except Exception:
             pass
         P115_REDIRECT_SERVER = None

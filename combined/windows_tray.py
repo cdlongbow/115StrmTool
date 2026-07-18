@@ -89,7 +89,6 @@ def run_tray(
         icon.stop()
         if on_exit:
             on_exit()
-        os._exit(0)
 
     icon_image = _create_icon()
     menu = (
