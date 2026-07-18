@@ -4,21 +4,6 @@ import sys
 import threading
 from pathlib import Path
 
-import collections.abc as _cabc
-if not hasattr(_cabc, "_check_methods"):
-    def _check_methods(C, *methods):
-        mro = C.__mro__
-        for method in methods:
-            for B in mro:
-                if method in B.__dict__:
-                    if B.__dict__[method] is None:
-                        return NotImplemented
-                    break
-            else:
-                return NotImplemented
-        return True
-    _cabc._check_methods = _check_methods
-
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from uvicorn import Config, Server
