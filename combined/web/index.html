@@ -189,15 +189,15 @@ tr:hover{background:#f5f5f5}
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn btn-success" onclick="startFullSync()">启动全量同步</button>
     <button class="btn btn-success" onclick="startIncrementalSync()">启动增量同步</button>
-    <button class="btn btn-danger" onclick="cancelSync()">取消同步</button>
-    <button class="btn-sm btn-outline" onclick="resetSyncBaseline()" style="margin-left:auto">重置同步数据</button>
+    <button class="btn btn-outline" onclick="cancelSync()">取消同步</button>
+    <button class="btn btn-danger" onclick="resetSyncBaseline()">重置同步数据</button>
   </div>
   <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
     <b>增量同步说明：</b><br>
     基于上次同步记录对比 SHA1，仅处理新增/变更/删除的文件，跳过未变动文件。<br>
     首次运行时会自动执行全量同步建立基准，之后每次只处理差异。
   </div>
-  <div class="card"><h2>同步记录 <button class="btn-sm btn-outline" onclick="clearSyncHistory()" style="float:right">清空记录</button></h2><div id="syncHistory"><p>加载中...</p></div></div>
+  <div class="card"><h2>同步记录 <button class="btn-sm btn-outline" onclick="clearSyncHistory()" style="float:right;color:#ea4335">清空记录</button></h2><div id="syncHistory"><p>加载中...</p></div></div>
 </div>
 
 <!-- STRM -->
@@ -207,7 +207,7 @@ tr:hover{background:#f5f5f5}
       <h2 style="margin:0">STRM 文件列表</h2>
       <div style="display:flex;gap:8px;align-items:center">
         <span id="strmCount"></span>
-        <button class="btn-sm btn-outline" onclick="clearStrmFiles()">清空列表</button>
+        <button class="btn-sm btn-outline" onclick="clearStrmFiles()" style="color:#ea4335">清空列表</button>
       </div>
     </div>
     <div class="table-wrap" id="strmTable"><p>加载中...</p></div>
@@ -620,8 +620,8 @@ async function cancelSync() {
 }
 async function resetSyncBaseline() {
   if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;
-  if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步基准？')) return;
-  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); showToast('同步基准已重置', 'success'); }
+  if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步数据？')) return;
+  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); showToast('同步数据已重置', 'success'); }
   catch(e) { showToast('重置失败: ' + e.message, 'error'); }
 }
 async function loadSyncHistory() {
@@ -649,6 +649,11 @@ async function clearSyncHistory() {
 
 // ── STRM ──
 async function listStrmFiles(page=1) {
+  if (localStorage.getItem('strmListHidden') === '1') {
+    document.getElementById('strmCount').textContent = '';
+    document.getElementById('strmTable').innerHTML = '<p style="color:#999">STRM 列表已隐藏 <a href="#" onclick="clearStrmFiles();return false" style="color:#1a73e8">[恢复显示]</a></p>';
+    return;
+  }
   try {
     const r = await fetch(`/api/strm/list?page=${page}&page_size=20`);
     const d = await r.json();
@@ -663,10 +668,18 @@ async function listStrmFiles(page=1) {
   } catch(e) { document.getElementById('strmTable').innerHTML = '<p>加载失败</p>'; }
 }
 async function clearStrmFiles() {
-  if (!confirm('确定清空 STRM 文件列表显示？不会删除任何数据库记录，不影响增量同步。')) return;
+  const hidden = localStorage.getItem('strmListHidden') === '1';
+  if (hidden) {
+    localStorage.removeItem('strmListHidden');
+    listStrmFiles();
+    showToast('STRM 列表已恢复', 'success');
+    return;
+  }
+  if (!confirm('清空后切换标签页也不会再自动加载。可通过再次点击"清空列表"恢复显示。\n\n不影响增量同步，不会删除任何数据库记录和磁盘文件。')) return;
+  localStorage.setItem('strmListHidden', '1');
   document.getElementById('strmCount').textContent = '';
-  document.getElementById('strmTable').innerHTML = '<p style="color:#999">暂无 STRM 文件</p>';
-  showToast('STRM 列表已清空', 'success');
+  document.getElementById('strmTable').innerHTML = '<p style="color:#999">STRM 列表已隐藏 <a href="#" onclick="clearStrmFiles();return false" style="color:#1a73e8">[恢复显示]</a></p>';
+  showToast('STRM 列表已隐藏', 'success');
 }
 
 // ── 工具 ──

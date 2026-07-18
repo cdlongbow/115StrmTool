@@ -191,9 +191,7 @@ class Database:
         self.conn.commit()
 
     def clear_all_files(self):
-        self.conn.execute(
-            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE status='active'"
-        )
+        self.conn.execute("DELETE FROM files")
         self.conn.commit()
 
     def add_share_transfer(self, share_url: str, target_path: str) -> int:
