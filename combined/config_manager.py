@@ -87,10 +87,12 @@ class RootConfig(BaseModel):
 
 
 def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """通过 Pydantic 模型校验并修复配置"""
+    """通过 Pydantic 模型校验并修复配置，保留未知字段防止数据丢失"""
     try:
         validated = RootConfig(**raw)
-        return validated.model_dump(by_alias=True)
+        known = validated.model_dump(by_alias=True, exclude_unset=True)
+        merged = _deep_merge(raw, known)
+        return merged
     except Exception as e:
         logger.warning("配置校验失败，使用默认值: %s", e)
         return RootConfig().model_dump(by_alias=True)
