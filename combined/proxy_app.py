@@ -1,10 +1,12 @@
-from asyncio import Lock, gather
+from asyncio import gather
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
 from time import monotonic
 from typing import Any, List, Tuple
 from urllib.parse import quote, urlparse
+
+from utils import AsyncTtlCache
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -476,13 +478,9 @@ def create_app(
         app.state.http_client_no_follow = AsyncClient(
             follow_redirects=False, limits=limits
         )
-        app.state.playback_url_cache = {}
-        app.state.playback_cache_order = []
-        app.state.playback_cache_lock = Lock()
-        app.state.strm_source_cache = {}
-        app.state.strm_source_lock = Lock()
-        app.state.playback_user_cache = {}
-        app.state.playback_user_lock = Lock()
+        app.state.playback_url_cache = AsyncTtlCache(ttl=PLAYBACK_URL_CACHE_TTL_SECONDS, max_size=PLAYBACK_URL_CACHE_MAX_SIZE)
+        app.state.strm_source_cache = AsyncTtlCache(ttl=PLAYBACK_STRM_CACHE_TTL_SECONDS, max_size=500)
+        app.state.playback_user_cache = AsyncTtlCache(ttl=PLAYBACK_USER_CACHE_TTL_SECONDS, max_size=500)
         yield
         await app.state.http_client_follow.aclose()
         await app.state.http_client_no_follow.aclose()
@@ -662,14 +660,12 @@ def create_app(
         user_key = _playback_user_key(request, item_id)
         user_cache = request.app.state.playback_user_cache
         user_id: str | None = None
-        async with request.app.state.playback_user_lock:
+        async with user_cache.lock:
             user_entry = user_cache.get(user_key)
             if user_entry:
                 uid, user_expiry = user_entry
                 if monotonic() < user_expiry:
                     user_id = uid
-                else:
-                    user_cache.pop(user_key, None)
 
         cache_key = (
             item_id,
@@ -678,22 +674,11 @@ def create_app(
             _header_hash(request),
         )
         cache = request.app.state.playback_url_cache
-        order = request.app.state.playback_cache_order
-        lock = request.app.state.playback_cache_lock
 
         # 第二级：已解析 URL 缓存 — 命中则直接流式代理，跳过后续查询
         cached_final_url = None
-        async with lock:
-            if cache_key in cache:
-                final_url, expiry_ts = cache[cache_key]
-                if monotonic() < expiry_ts:
-                    cached_final_url = final_url
-                else:
-                    del cache[cache_key]
-                    try:
-                        order.remove(cache_key)
-                    except ValueError:
-                        pass  # 缓存排序列表中可能已无此 key
+        async with cache.lock:
+            cached_final_url = cache.get(cache_key)
         if cached_final_url is not None:
             logger.debug("PlaybackInfo 使用缓存: item_id=%s", item_id)
             return await _stream_from_cdn(cached_final_url, request)
@@ -726,18 +711,15 @@ def create_app(
         # 第四级：STRM 源缓存 — PlaybackInfo 未命中时使用
         if not http_path:
             strm_cache = request.app.state.strm_source_cache
-            strm_lock = request.app.state.strm_source_lock
-            async with strm_lock:
-                entry = strm_cache.get(item_id)
-            if entry:
-                sources_map, expiry_ts = entry
-                if monotonic() < expiry_ts:
-                    if media_source_id and media_source_id in sources_map:
-                        http_path = sources_map[media_source_id]
-                    elif sources_map:
-                        http_path = next(iter(sources_map.values()))
-                    if http_path:
-                        logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
+            async with strm_cache.lock:
+                sources_map = strm_cache.get(item_id)
+            if sources_map:
+                if media_source_id and media_source_id in sources_map:
+                    http_path = sources_map[media_source_id]
+                elif sources_map:
+                    http_path = next(iter(sources_map.values()))
+                if http_path:
+                    logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
 
         if not http_path:
             return None
@@ -750,18 +732,8 @@ def create_app(
         )
 
         # 写入已解析 URL 缓存（LRU 淘汰）
-        async with lock:
-            now = monotonic()
-            expiry = now + PLAYBACK_URL_CACHE_TTL_SECONDS
-            expired = [k for k in order if cache.get(k) and cache[k][1] < now]
-            for k in expired:
-                cache.pop(k, None)
-            order[:] = [k for k in order if k not in frozenset(expired)]
-            while len(cache) >= PLAYBACK_URL_CACHE_MAX_SIZE and order:
-                oldest = order.pop(0)
-                cache.pop(oldest, None)
-            cache[cache_key] = (final_url, expiry)
-            order.append(cache_key)
+        async with cache.lock:
+            cache.put(cache_key, final_url)
 
         logger.info("媒体流代理: item_id=%s -> %s", item_id, final_url)
         return await _stream_from_cdn(final_url, request)
@@ -1031,22 +1003,15 @@ def create_app(
                 strm_sources[ms.get("Id", "")] = ms_path_applied
         if strm_sources:
             strm_cache = request.app.state.strm_source_cache
-            strm_lock = request.app.state.strm_source_lock
-            async with strm_lock:
-                strm_cache[item_id] = (
-                    strm_sources,
-                    monotonic() + PLAYBACK_STRM_CACHE_TTL_SECONDS,
-                )
+            async with strm_cache.lock:
+                strm_cache.put(item_id, strm_sources)
 
         uid = request.query_params.get("UserId")
         if uid:
             user_key = _playback_user_key(request, item_id)
             user_cache = request.app.state.playback_user_cache
-            async with request.app.state.playback_user_lock:
-                user_cache[user_key] = (
-                    uid,
-                    monotonic() + PLAYBACK_USER_CACHE_TTL_SECONDS,
-                )
+            async with user_cache.lock:
+                user_cache.put(user_key, (uid, monotonic() + PLAYBACK_USER_CACHE_TTL_SECONDS))
 
         reason = "STRM" if is_strm else "路径替换"
         logger.info(

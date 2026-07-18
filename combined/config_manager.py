@@ -2,12 +2,14 @@ import base64
 import hashlib
 import json
 import os
-import secrets
+import re
 import shutil
 import sys
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from pydantic import BaseModel, Field, field_validator
 
 from logger import logger
 
@@ -21,6 +23,68 @@ CONFIG_FILE = _BASE_DIR / "config.json"
 PIN_RULES_SEP = " => "
 
 _COOKIE_ENCRYPTED_PREFIX = "#ENC#"
+
+
+# ── Pydantic 配置模型 ──
+
+
+class EmbyConfig(BaseModel):
+    enabled: bool = False
+    emby_host: str = "http://192.168.2.100:8096"
+    proxy_host: str = "0.0.0.0"
+    proxy_port: int = 8097
+    pin_rules: str = ""
+    external_player_url: bool = False
+    external_player_list: List[str] = Field(default_factory=list)
+
+
+class P115Config(BaseModel):
+    enabled: bool = False
+    cookie: str = ""
+    redirect_host: str = "0.0.0.0"
+    redirect_port: int = 3333
+    strm_url_prefix: str = "http://192.168.2.100:3333"
+    rmt_mediaext: str = "mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm"
+    download_mediaext: str = "srt,ssa,ass,sup,pgs,sub,idx"
+    auto_download_mediainfo: bool = False
+    overwrite_mode: str = "never"
+
+    @field_validator("overwrite_mode")
+    @classmethod
+    def _validate_overwrite_mode(cls, v: str) -> str:
+        if v not in ("never", "always"):
+            return "never"
+        return v
+
+
+class CheckinConfig(BaseModel):
+    enabled: bool = False
+    time_range: str = "06:00-09:00"
+
+    @field_validator("time_range")
+    @classmethod
+    def _validate_time_range(cls, v: str) -> str:
+        if not re.match(r"^\d{2}:\d{2}-\d{2}:\d{2}$", v):
+            return "06:00-09:00"
+        return v
+
+
+class RootConfig(BaseModel):
+    admin_host: str = "0.0.0.0"
+    admin_port: int = 8100
+    emby: EmbyConfig = Field(default_factory=EmbyConfig)
+    p115: P115Config = Field(default_factory=P115Config)
+    checkin: CheckinConfig = Field(default_factory=CheckinConfig)
+
+
+def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """通过 Pydantic 模型校验并修复配置"""
+    try:
+        validated = RootConfig(**raw)
+        return validated.model_dump()
+    except Exception as e:
+        logger.warning("配置校验失败，使用默认值: %s", e)
+        return RootConfig().model_dump()
 
 
 def _get_encryption_key() -> bytes:
@@ -59,34 +123,7 @@ def _decrypt_cookie(encoded: str) -> str:
     decrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(encrypted)])
     return decrypted.decode("utf-8")
 
-DEFAULT_CONFIG: Dict[str, Any] = {
-    "admin_host": "0.0.0.0",
-    "admin_port": 8100,
-    "emby": {
-        "enabled": False,
-        "emby_host": "http://192.168.2.100:8096",
-        "proxy_host": "0.0.0.0",
-        "proxy_port": 8097,
-        "pin_rules": "",
-        "external_player_url": False,
-        "external_player_list": [],
-    },
-    "p115": {
-        "enabled": False,
-        "cookie": "",
-        "redirect_host": "0.0.0.0",
-        "redirect_port": 3333,
-        "strm_url_prefix": "http://192.168.2.100:3333",
-        "rmt_mediaext": "mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm",
-        "download_mediaext": "srt,ssa,ass,sup,pgs,sub,idx",
-        "auto_download_mediainfo": False,
-        "overwrite_mode": "never",
-    },
-    "checkin": {
-        "enabled": False,
-        "time_range": "06:00-09:00",
-    },
-}
+DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump()
 
 
 class ConfigManager:
@@ -102,6 +139,7 @@ class ConfigManager:
                     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
                     self._config = _deep_merge(dict(DEFAULT_CONFIG), loaded)
+                    self._config = _validate_config(self._config)
                     cookie = self._config.get("p115", {}).get("cookie", "")
                     if cookie and cookie.startswith(_COOKIE_ENCRYPTED_PREFIX):
                         try:
@@ -125,6 +163,7 @@ class ConfigManager:
     def update(self, new_config: Dict[str, Any]) -> bool:
         with self._lock:
             self._config = _deep_merge(self._config, new_config)
+            self._config = _validate_config(self._config)
         return self._write()
 
     def get(self) -> Dict[str, Any]:

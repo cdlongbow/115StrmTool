@@ -1,6 +1,6 @@
 from hashlib import sha256
 from json import dumps as json_dumps
-from time import monotonic, time
+from time import time
 from typing import Dict, Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
@@ -9,9 +9,9 @@ from fastapi.responses import RedirectResponse, JSONResponse, Response
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
+from utils import AsyncTtlCache, retry_with_backoff
 
 CACHE_TTL_DEFAULT = 90
-CACHE_MAX_SIZE = 1000
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 
 import asyncio
@@ -20,9 +20,7 @@ import asyncio
 class RedirectService:
     def __init__(self, client: P115ClientWrapper):
         self._client = client
-        self._cache: Dict[str, Tuple[str, str, float]] = {}
-        self._cache_order: list[str] = []
-        self._cache_lock = asyncio.Lock()
+        self._cache = AsyncTtlCache(ttl=CACHE_TTL_DEFAULT, max_size=1000)
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
@@ -83,7 +81,8 @@ class RedirectService:
             )
 
         ckey = self._cache_key(pickcode, user_agent)
-        cached = await self._get_cached(ckey)
+        async with self._cache.lock:
+            cached = self._cache.get(ckey)
         if cached:
             cached_url, cached_fname = cached
             logger.info(
@@ -92,7 +91,11 @@ class RedirectService:
             )
             return self._build_302(cached_url, pickcode, cached_fname)
 
-        result = self._client.get_download_url_with_ua(pickcode, user_agent)
+        result = await retry_with_backoff(
+            lambda: self._client.get_download_url_with_ua(pickcode, user_agent),
+            max_retries=2,
+            base_delay=0.5,
+        )
         if not result:
             logger.error(
                 "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
@@ -105,7 +108,10 @@ class RedirectService:
 
         download_url, file_name, expires_time = result
         ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
-        await self._set_cache(ckey, download_url, file_name, ttl)
+        async with self._cache.lock:
+            self._cache.ttl = ttl
+            self._cache.put(ckey, (download_url, file_name))
+            self._cache.ttl = CACHE_TTL_DEFAULT
         logger.info(
             "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
             pickcode, file_name, ttl, client_ip,
@@ -140,41 +146,6 @@ class RedirectService:
             return path
         return None
 
-    async def _get_cached(self, key: str) -> Optional[Tuple[str, str]]:
-        async with self._cache_lock:
-            entry = self._cache.get(key)
-            if entry:
-                url, fname, expiry = entry
-                if monotonic() < expiry:
-                    return (url, fname)
-                    del self._cache[key]
-                    try:
-                        self._cache_order.remove(key)
-                    except ValueError:
-                        pass  # 缓存排序列表中可能已无此 key
-        return None
-
-    async def _set_cache(self, key: str, url: str, file_name: str, ttl: int):
-        async with self._cache_lock:
-            expiry = monotonic() + ttl
-            now = monotonic()
-            expired_keys = [
-                k for k in self._cache_order
-                if k in self._cache and self._cache[k][2] < now
-            ]
-            for k in expired_keys:
-                del self._cache[k]
-                try:
-                    self._cache_order.remove(k)
-                except ValueError:
-                    pass  # 缓存排序列表中可能已无此 key
-            while len(self._cache) >= CACHE_MAX_SIZE and self._cache_order:
-                oldest = self._cache_order.pop(0)
-                self._cache.pop(oldest, None)
-            self._cache[key] = (url, file_name, expiry)
-            self._cache_order.append(key)
-
     def clear_cache(self):
         self._cache.clear()
-        self._cache_order.clear()
         logger.info("302 缓存已清理")
