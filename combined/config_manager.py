@@ -38,6 +38,14 @@ class EmbyConfig(BaseModel):
     external_player_list: List[str] = Field(default_factory=list)
 
 
+class PathMapping(BaseModel):
+    from_path: str = Field(default="", alias="from")
+    to: str = ""
+    enabled: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
 class P115Config(BaseModel):
     enabled: bool = False
     cookie: str = ""
@@ -48,6 +56,7 @@ class P115Config(BaseModel):
     download_mediaext: str = "srt,ssa,ass,sup,pgs,sub,idx"
     auto_download_mediainfo: bool = False
     overwrite_mode: str = "never"
+    paths: List[PathMapping] = Field(default_factory=list)
 
     @field_validator("overwrite_mode")
     @classmethod
@@ -81,10 +90,10 @@ def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     """通过 Pydantic 模型校验并修复配置"""
     try:
         validated = RootConfig(**raw)
-        return validated.model_dump()
+        return validated.model_dump(by_alias=True)
     except Exception as e:
         logger.warning("配置校验失败，使用默认值: %s", e)
-        return RootConfig().model_dump()
+        return RootConfig().model_dump(by_alias=True)
 
 
 def _get_encryption_key() -> bytes:
@@ -123,7 +132,7 @@ def _decrypt_cookie(encoded: str) -> str:
     decrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(encrypted)])
     return decrypted.decode("utf-8")
 
-DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump()
+DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump(by_alias=True)
 
 
 class ConfigManager:
