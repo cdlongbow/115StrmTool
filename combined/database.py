@@ -204,6 +204,30 @@ class Database:
         self.conn.commit()
         return cursor.lastrowid
 
+    def get_active_files_by_parent(self, parent_prefix: str) -> List[Dict]:
+        cursor = self.conn.execute(
+            "SELECT pickcode, pan_path, local_strm_path, sha1 FROM files WHERE status='active' AND pan_path LIKE ?",
+            (parent_prefix + "%",),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_file_deleted(self, pickcode: str):
+        self.conn.execute(
+            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE pickcode=? AND status='active'",
+            (pickcode,),
+        )
+        self.conn.commit()
+
+    def batch_mark_deleted(self, pickcodes: List[str]):
+        if not pickcodes:
+            return
+        cursor = self.conn.cursor()
+        cursor.executemany(
+            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE pickcode=? AND status='active'",
+            [(pc,) for pc in pickcodes],
+        )
+        self.conn.commit()
+
     def get_stats(self) -> Dict:
         total = self.count_active_files()
         cursor = self.conn.execute(

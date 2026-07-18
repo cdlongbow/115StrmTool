@@ -72,6 +72,11 @@ def run_tray(
         logger.info("托盘菜单 - 全量同步: %s", result)
         icon.notify("全量同步结果\n" + result[:80], app_name)
 
+    def _incr_sync(icon, item):
+        result = _post_api("/api/sync/incremental")
+        logger.info("托盘菜单 - 增量同步: %s", result)
+        icon.notify("增量同步结果\n" + result[:80], app_name)
+
     def _checkin(icon, item):
         result = _post_api("/api/checkin/run")
         logger.info("托盘菜单 - 立即签到: %s", result)
@@ -91,6 +96,7 @@ def run_tray(
         pystray.MenuItem(f"打开管理界面", _open_admin, default=True),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("全量同步", _sync),
+        pystray.MenuItem("增量同步", _incr_sync),
         pystray.MenuItem("立即签到", _checkin),
         pystray.MenuItem("打开日志目录", _open_logs),
         pystray.Menu.SEPARATOR,

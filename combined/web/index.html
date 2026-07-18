@@ -188,7 +188,13 @@ tr:hover{background:#f5f5f5}
 <div id="tab-sync" class="tab-content">
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn btn-success" onclick="startFullSync()">启动全量同步</button>
+    <button class="btn btn-success" onclick="startIncrementalSync()">启动增量同步</button>
     <button class="btn btn-danger" onclick="cancelSync()">取消同步</button>
+  </div>
+  <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
+    <b>增量同步说明：</b><br>
+    基于上次同步记录对比 SHA1，仅处理新增/变更/删除的文件，跳过未变动文件。<br>
+    首次运行时会自动执行全量同步建立基准，之后每次只处理差异。
   </div>
   <div class="card"><h2>同步记录 <button class="btn-sm btn-outline" onclick="clearSyncHistory()" style="float:right">清空记录</button></h2><div id="syncHistory"><p>加载中...</p></div></div>
 </div>
@@ -596,7 +602,17 @@ async function startFullSync() {
     const d = await r.json();
     showToast('同步结果: ' + JSON.stringify(d), d.status==='completed'?'success':'info');
     updateDashboard();
+    loadSyncHistory();
   } catch(err) { showToast('同步失败: ' + err.message, 'error'); }
+}
+async function startIncrementalSync() {
+  try {
+    const r = await fetch('/api/sync/incremental', {method:'POST'});
+    const d = await r.json();
+    showToast('增量同步结果: ' + JSON.stringify(d), d.status==='completed'?'success':'info');
+    updateDashboard();
+    loadSyncHistory();
+  } catch(err) { showToast('增量同步失败: ' + err.message, 'error'); }
 }
 async function cancelSync() {
   try { await fetch('/api/sync/cancel', {method:'POST'}); showToast('已取消', 'info'); } catch(e) {}
