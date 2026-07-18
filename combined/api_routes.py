@@ -177,6 +177,12 @@ async def clear_sync_history() -> Dict[str, Any]:
     return {"success": True}
 
 
+@router.post("/sync/reset-baseline")
+async def reset_sync_baseline() -> Dict[str, Any]:
+    db.clear_all_files()
+    return {"success": True}
+
+
 # ── STRM 管理 ──
 
 
@@ -199,7 +205,6 @@ async def count_strm_files() -> Dict:
 
 @router.post("/strm/clear")
 async def clear_strm_files() -> Dict[str, Any]:
-    db.clear_all_files()
     return {"success": True}
 
 

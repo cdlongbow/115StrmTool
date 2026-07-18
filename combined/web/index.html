@@ -190,6 +190,7 @@ tr:hover{background:#f5f5f5}
     <button class="btn btn-success" onclick="startFullSync()">启动全量同步</button>
     <button class="btn btn-success" onclick="startIncrementalSync()">启动增量同步</button>
     <button class="btn btn-danger" onclick="cancelSync()">取消同步</button>
+    <button class="btn-sm btn-outline" onclick="resetSyncBaseline()" style="margin-left:auto">重置同步数据</button>
   </div>
   <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
     <b>增量同步说明：</b><br>
@@ -617,6 +618,12 @@ async function startIncrementalSync() {
 async function cancelSync() {
   try { await fetch('/api/sync/cancel', {method:'POST'}); showToast('已取消', 'info'); } catch(e) {}
 }
+async function resetSyncBaseline() {
+  if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;
+  if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步基准？')) return;
+  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); showToast('同步基准已重置', 'success'); }
+  catch(e) { showToast('重置失败: ' + e.message, 'error'); }
+}
 async function loadSyncHistory() {
   try {
     const r = await fetch('/api/sync/history');
@@ -656,9 +663,10 @@ async function listStrmFiles(page=1) {
   } catch(e) { document.getElementById('strmTable').innerHTML = '<p>加载失败</p>'; }
 }
 async function clearStrmFiles() {
-  if (!confirm('确定清空 STRM 文件列表？仅清除数据库记录，不会删除磁盘上的 .strm 文件。')) return;
-  try { await fetch('/api/strm/clear', {method:'POST'}); listStrmFiles(); showToast('STRM 列表已清空', 'success'); }
-  catch(e) { showToast('清空失败: ' + e.message, 'error'); }
+  if (!confirm('确定清空 STRM 文件列表显示？不会删除任何数据库记录，不影响增量同步。')) return;
+  document.getElementById('strmCount').textContent = '';
+  document.getElementById('strmTable').innerHTML = '<p style="color:#999">暂无 STRM 文件</p>';
+  showToast('STRM 列表已清空', 'success');
 }
 
 // ── 工具 ──
