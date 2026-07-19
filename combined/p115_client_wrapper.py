@@ -56,6 +56,42 @@ class P115ClientWrapper:
         try:
             from p115client import P115Client
             self._client = P115Client(cookies=self._cookie)
+
+            _orig_request = self._client.request
+
+            def _patched_request(
+                url,
+                method="GET",
+                payload=None,
+                *,
+                check=False,
+                ecdh_encrypt=False,
+                request=None,
+                async_=False,
+                **kwargs,
+            ):
+                if (
+                    method == "GET"
+                    and isinstance(url, str)
+                    and "/files" in url
+                    and "proapi.115.com" not in url
+                ):
+                    method = "POST"
+                    if "params" in kwargs and "data" not in kwargs:
+                        kwargs["data"] = kwargs.pop("params")
+                return _orig_request(
+                    url=url,
+                    method=method,
+                    payload=payload,
+                    check=check,
+                    ecdh_encrypt=ecdh_encrypt,
+                    request=request,
+                    async_=async_,
+                    **kwargs,
+                )
+
+            self._client.request = _patched_request
+
             self._http_client = Client(
                 cookies=self._parse_cookie(self._cookie),
                 follow_redirects=True,
