@@ -92,7 +92,9 @@ class RedirectService:
             return self._build_302(cached_url, pickcode, cached_fname)
 
         result = await retry_with_backoff(
-            lambda: self._client.get_download_url_with_ua(pickcode, user_agent),
+            lambda: asyncio.to_thread(
+                self._client.get_download_url_with_ua, pickcode, user_agent
+            ),
             max_retries=2,
             base_delay=0.5,
         )
