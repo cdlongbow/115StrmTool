@@ -55,42 +55,41 @@ class P115ClientWrapper:
             return
         try:
             from p115client import P115Client
+            from p115client.tool.fs_files import get_webapi_origin
+
             self._client = P115Client(cookies=self._cookie)
 
-            _orig_request = self._client.request
+            _orig_fs_files = self._client.fs_files
+            _orig_fs_dir_getid = self._client.fs_dir_getid
 
-            def _patched_request(
-                url,
-                method="GET",
+            def _fs_files_rotating(
                 payload=None,
+                base_url=None,
                 *,
-                check=False,
-                ecdh_encrypt=False,
-                request=None,
                 async_=False,
                 **kwargs,
             ):
-                if (
-                    method == "GET"
-                    and isinstance(url, str)
-                    and "/files" in url
-                    and "proapi.115.com" not in url
-                ):
-                    method = "POST"
-                    if "params" in kwargs and "data" not in kwargs:
-                        kwargs["data"] = kwargs.pop("params")
-                return _orig_request(
-                    url=url,
-                    method=method,
-                    payload=payload,
-                    check=check,
-                    ecdh_encrypt=ecdh_encrypt,
-                    request=request,
-                    async_=async_,
-                    **kwargs,
+                if base_url is None:
+                    base_url = get_webapi_origin()
+                return _orig_fs_files(
+                    payload, base_url=base_url, async_=async_, **kwargs,
                 )
 
-            self._client.request = _patched_request
+            def _fs_dir_getid_rotating(
+                payload,
+                base_url=None,
+                *,
+                async_=False,
+                **kwargs,
+            ):
+                if base_url is None:
+                    base_url = get_webapi_origin()
+                return _orig_fs_dir_getid(
+                    payload, base_url=base_url, async_=async_, **kwargs,
+                )
+
+            self._client.fs_files = _fs_files_rotating
+            self._client.fs_dir_getid = _fs_dir_getid_rotating
 
             self._http_client = Client(
                 cookies=self._parse_cookie(self._cookie),
