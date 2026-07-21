@@ -257,46 +257,51 @@ class P115ClientWrapper:
         self, pickcode: str, user_agent: str = ""
     ) -> Optional[Tuple[str, str, int]]:
         """
-        获取 115 下载地址，优先使用 SDK 无 UA 绑定，失败时回退加密 API 并内置重试
+        获取 115 下载地址，优先使用加密 API（UA 绑定），失败时回退 SDK 并内置重试
 
-        SDK 返回的 URL 不绑定 UA，更适合 302 重定向场景；
-        加密 API 返回的 URL 绑定指定 UA，需要客户端 UA 匹配
+        加密 API 返回的 URL 绑定指定 UA，浏览器跟随 302 时 UA 匹配，
+        CDN 不会拒绝；SDK 返回无 UA 绑定的 URL，CDN 可能拦截浏览器请求
 
         :param pickcode (str): 文件 pickcode
-        :param user_agent (str): 客户端 User-Agent（加密 API 降级时使用）
+        :param user_agent (str): 客户端 User-Agent（加密 API 绑定用）
 
         :return Tuple: (下载 URL, 文件名, 过期时间戳), 失败返回 None
         """
         if not user_agent:
             user_agent = generate_u115_ios()
 
-        # 第一级：SDK 优先（不绑定 UA，302 场景更优）
-        sdk_result = self._try_sdk_download_url(pickcode)
-        if sdk_result:
-            return sdk_result
-
-        # 第二级：加密 API，带重试
-        if not self._http_client:
-            logger.warning("115 HTTP 客户端未初始化")
-            return None
-
-        for retry_index in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
-            try:
-                result = self._raw_download_url_encrypted(pickcode, user_agent)
-                if result is not None:
-                    if retry_index > 0:
-                        logger.info(
-                            "加密 API 重试成功: pickcode=%s attempt=%s/%s",
+        # 第一级：加密 API 优先（UA 绑定，浏览器 302 场景更可靠）
+        if self._http_client:
+            for retry_index in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+                try:
+                    result = self._raw_download_url_encrypted(pickcode, user_agent)
+                    if result is not None:
+                        if retry_index > 0:
+                            logger.info(
+                                "加密 API 重试成功: pickcode=%s attempt=%s/%s",
+                                pickcode,
+                                retry_index + 1,
+                                len(_DOWNLOAD_RETRY_DELAYS) + 1,
+                            )
+                        return result
+                except IncompleteUploadError:
+                    if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
+                        delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
+                        logger.warning(
+                            "文件上传不完整，%gs 后重试: pickcode=%s attempt=%s/%s",
+                            delay,
                             pickcode,
                             retry_index + 1,
-                            len(_DOWNLOAD_RETRY_DELAYS) + 1,
+                            len(_DOWNLOAD_RETRY_DELAYS),
                         )
-                    return result
-            except IncompleteUploadError:
+                        sleep(delay)
+                        continue
+                    return None
+
                 if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
                     delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
                     logger.warning(
-                        "文件上传不完整，%gs 后重试: pickcode=%s attempt=%s/%s",
+                        "加密 API 获取失败，%gs 后重试: pickcode=%s attempt=%s/%s",
                         delay,
                         pickcode,
                         retry_index + 1,
@@ -306,18 +311,14 @@ class P115ClientWrapper:
                     continue
                 return None
 
-            if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
-                delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
-                logger.info(
-                    "加密 API 失败，%gs 后重试: pickcode=%s attempt=%s/%s",
-                    delay,
-                    pickcode,
-                    retry_index + 1,
-                    len(_DOWNLOAD_RETRY_DELAYS),
-                )
-                sleep(delay)
+        logger.warning("加密 API 全部重试失败，尝试 SDK 降级: pickcode=%s", pickcode)
 
-        logger.error("加密 API 全部重试失败: pickcode=%s", pickcode)
+        # 第二级：SDK 降级（无 UA 绑定，非浏览器客户端可能仍可用）
+        sdk_result = self._try_sdk_download_url(pickcode)
+        if sdk_result:
+            return sdk_result
+
+        logger.error("所有下载方式均失败: pickcode=%s", pickcode)
         return None
 
     def close(self):
