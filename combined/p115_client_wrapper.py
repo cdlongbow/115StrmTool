@@ -13,6 +13,14 @@ from logger import logger
 
 
 P115_DOWNLOAD_API = "http://proapi.115.com/android/2.0/ufile/download"
+_DOWNLOAD_RETRY_DELAYS = (0.5, 1.0, 2.0)
+_INCOMPLETE_UPLOAD_ERROR = "文件上传不完整"
+
+
+class IncompleteUploadError(Exception):
+    """文件上传不完整异常，用于触发重试"""
+
+
 DEFAULT_ENDPOINT_COOLDOWNS = {
     "fs_files": 0.5,
     "fs_dir_getid": 0.5,
@@ -99,7 +107,7 @@ class P115ClientWrapper:
             )
             logger.info("115 客户端初始化成功")
         except ImportError:
-            logger.error("p115client 库未安装，请执行: pip install p115client==0.0.8.10")
+            logger.error("p115client 库未安装，请执行: pip install p115client==0.0.9.4.6.1")
             self._client = None
         except Exception as e:
             logger.error("115 客户端初始化失败: %s", e, exc_info=True)
@@ -129,40 +137,65 @@ class P115ClientWrapper:
     def is_ready(self) -> bool:
         return self._client is not None
 
-    def get_download_url(self, pickcode: str) -> Optional[str]:
+    @staticmethod
+    def _extract_url_info(url: str) -> Optional[Tuple[str, str, int]]:
+        """
+        从 CDN URL 中提取文件名和过期时间
+
+        :param url (str): CDN 直链 URL
+
+        :return Tuple: (URL, 文件名, 过期时间戳) 或 None
+        """
+        if not url:
+            return None
+        try:
+            file_name = unquote(urlsplit(url).path.rpartition("/")[-1])
+            query_params = parse_qs(urlsplit(url).query)
+            t_values = query_params.get("t", [])
+            t = int(t_values[0]) if t_values else 0
+            expires_time = t - 300
+            return (url, file_name, expires_time)
+        except Exception:
+            return None
+
+    def _try_sdk_download_url(self, pickcode: str) -> Optional[Tuple[str, str, int]]:
+        """
+        使用 p115client SDK 获取下载地址（不绑定 UA，适配 302 重定向场景）
+
+        :param pickcode (str): 文件 pickcode
+
+        :return Tuple: (URL, 文件名, 过期时间戳) 或 None
+        """
         if not self._client:
-            logger.warning("115 客户端未初始化")
             return None
         try:
             self._wait_cooling("download_url")
             result = self._client.download_url(pickcode)
+            url = None
             if isinstance(result, dict):
                 url = result.get("url") or result.get("file_url")
-                if url:
-                    return url
             elif isinstance(result, str):
-                return result
-            return None
-        except Exception as e:
-            logger.error("获取下载地址失败 pickcode=%s: %s", pickcode, e, exc_info=True)
+                url = result
+            if not url:
+                return None
+            return self._extract_url_info(url)
+        except Exception:
+            logger.debug("SDK 下载地址获取失败，回退加密 API", exc_info=True)
             return None
 
-    def get_download_url_with_ua(
-        self, pickcode: str, user_agent: str = ""
+    def _raw_download_url_encrypted(
+        self, pickcode: str, user_agent: str
     ) -> Optional[Tuple[str, str, int]]:
         """
-        使用加密 API 获取 115 下载地址，URL 绑定指定的 User-Agent
+        单次调用加密 API 获取 115 下载地址（不重试）
 
         :param pickcode (str): 文件 pickcode
-        :param user_agent (str): 客户端 User-Agent，URL 将绑定此 UA
+        :param user_agent (str): 客户端 User-Agent
 
-        :return Tuple: (下载 URL, 文件名, 过期时间戳), 失败返回 None
+        :return Tuple: (URL, 文件名, 过期时间戳) 或 None
         """
         if not self._http_client:
-            logger.warning("115 HTTP 客户端未初始化")
             return None
-        if not user_agent:
-            user_agent = generate_u115_ios()
         try:
             payload = rsa_encrypt(
                 f'{{"pick_code":"{pickcode}"}}'.encode("utf-8")
@@ -172,22 +205,38 @@ class P115ClientWrapper:
                 data={"data": payload},
                 headers={"User-Agent": user_agent},
             )
+            if resp.status_code == 405:
+                logger.warning("Android 下载 API 返回 405，尝试 SDK 降级")
+                sdk_result = self._try_sdk_download_url(pickcode)
+                if sdk_result:
+                    return sdk_result
+                return None
             if resp.status_code != 200:
-                logger.error(
+                logger.warning(
                     "115 下载 API 返回非 200: status=%s pickcode=%s",
                     resp.status_code,
                     pickcode,
                 )
                 return None
-            json = resp.json()
-            if not json.get("state"):
-                logger.error(
-                    "115 下载 API 返回失败: pickcode=%s resp=%s",
-                    pickcode,
-                    json,
-                )
+            json_data = resp.json()
+            if not json_data.get("state"):
+                error_msg = json_data.get("error", "")
+                if error_msg:
+                    logger.warning(
+                        "115 下载 API state=false: pickcode=%s error=%s",
+                        pickcode,
+                        error_msg,
+                    )
+                    if error_msg == _INCOMPLETE_UPLOAD_ERROR:
+                        raise IncompleteUploadError(error_msg)
+                else:
+                    logger.warning(
+                        "115 下载 API state=false: pickcode=%s resp=%s",
+                        pickcode,
+                        json_data,
+                    )
                 return None
-            decrypted = rsa_decrypt(json["data"]).decode("utf-8")
+            decrypted = rsa_decrypt(json_data["data"]).decode("utf-8")
             data = json_loads(decrypted)
             url = data.get("url") or ""
             if not url:
@@ -197,23 +246,79 @@ class P115ClientWrapper:
                     data,
                 )
                 return None
-            file_name = unquote(urlsplit(url).path.rpartition("/")[-1])
-            t = int(
-                next(
-                    (v[0] for k, v in parse_qs(urlsplit(url).query).items() if k == "t"),
-                    0,
-                )
-            )
-            expires_time = t - 300
-            return (url, file_name, expires_time)
-        except Exception as e:
-            logger.error(
-                "加密获取下载地址失败 pickcode=%s: %s",
-                pickcode,
-                e,
-                exc_info=True,
-            )
+            return self._extract_url_info(url)
+        except IncompleteUploadError:
+            raise
+        except Exception:
+            logger.debug("加密 API 请求异常", exc_info=True)
             return None
+
+    def get_download_url_with_ua(
+        self, pickcode: str, user_agent: str = ""
+    ) -> Optional[Tuple[str, str, int]]:
+        """
+        获取 115 下载地址，优先使用 SDK 无 UA 绑定，失败时回退加密 API 并内置重试
+
+        SDK 返回的 URL 不绑定 UA，更适合 302 重定向场景；
+        加密 API 返回的 URL 绑定指定 UA，需要客户端 UA 匹配
+
+        :param pickcode (str): 文件 pickcode
+        :param user_agent (str): 客户端 User-Agent（加密 API 降级时使用）
+
+        :return Tuple: (下载 URL, 文件名, 过期时间戳), 失败返回 None
+        """
+        if not user_agent:
+            user_agent = generate_u115_ios()
+
+        # 第一级：SDK 优先（不绑定 UA，302 场景更优）
+        sdk_result = self._try_sdk_download_url(pickcode)
+        if sdk_result:
+            return sdk_result
+
+        # 第二级：加密 API，带重试
+        if not self._http_client:
+            logger.warning("115 HTTP 客户端未初始化")
+            return None
+
+        for retry_index in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+            try:
+                result = self._raw_download_url_encrypted(pickcode, user_agent)
+                if result is not None:
+                    if retry_index > 0:
+                        logger.info(
+                            "加密 API 重试成功: pickcode=%s attempt=%s/%s",
+                            pickcode,
+                            retry_index + 1,
+                            len(_DOWNLOAD_RETRY_DELAYS) + 1,
+                        )
+                    return result
+            except IncompleteUploadError:
+                if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
+                    delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
+                    logger.warning(
+                        "文件上传不完整，%gs 后重试: pickcode=%s attempt=%s/%s",
+                        delay,
+                        pickcode,
+                        retry_index + 1,
+                        len(_DOWNLOAD_RETRY_DELAYS),
+                    )
+                    sleep(delay)
+                    continue
+                return None
+
+            if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
+                delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
+                logger.info(
+                    "加密 API 失败，%gs 后重试: pickcode=%s attempt=%s/%s",
+                    delay,
+                    pickcode,
+                    retry_index + 1,
+                    len(_DOWNLOAD_RETRY_DELAYS),
+                )
+                sleep(delay)
+
+        logger.error("加密 API 全部重试失败: pickcode=%s", pickcode)
+        return None
 
     def close(self):
         if self._http_client:

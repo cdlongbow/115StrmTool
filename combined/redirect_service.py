@@ -1,20 +1,20 @@
 from hashlib import sha256
 from json import dumps as json_dumps
 from time import time
-from typing import Dict, Optional, Tuple
+from typing import Optional
 from urllib.parse import quote, unquote, urlsplit
 
+import asyncio
+
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
-from utils import AsyncTtlCache, retry_with_backoff
+from utils import AsyncTtlCache
 
 CACHE_TTL_DEFAULT = 90
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
-
-import asyncio
 
 
 class RedirectService:
@@ -91,12 +91,8 @@ class RedirectService:
             )
             return self._build_302(cached_url, pickcode, cached_fname)
 
-        result = await retry_with_backoff(
-            lambda: asyncio.to_thread(
-                self._client.get_download_url_with_ua, pickcode, user_agent
-            ),
-            max_retries=2,
-            base_delay=0.5,
+        result = await asyncio.to_thread(
+            self._client.get_download_url_with_ua, pickcode, user_agent
         )
         if not result:
             logger.error(
