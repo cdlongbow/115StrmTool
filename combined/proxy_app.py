@@ -547,13 +547,17 @@ def create_app(
         user_id: str | None = None,
     ) -> str:
         """
-        跟随重定向链，返回最终 URL
+        解析重定向链，返回最终直链 URL
 
-        :param client: 共享的 httpx 客户端（follow_redirects=True）
+        使用 follow_redirects=False 手动解析 Location 头，避免实际请求到 CDN
+        消除 HEAD 方式请求 CDN 导致的方法差异问题
+
+        :param client: httpx 客户端（建议 follow_redirects=False）
         :param url: 起始 URL
         :param headers: 请求头
         :param user_id: Emby 用户 ID，可为 None
-        :return: 最终 URL；失败时返回原始 url
+
+        :return str: 最终 URL；失败时返回原始 url
         """
         if user_id:
             headers = {**headers, "X-Emby-UserId": user_id}
@@ -567,6 +571,15 @@ def create_app(
                     headers=headers,
                     timeout=Timeout(read_timeout, connect=connect_timeout),
                 )
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if location:
+                        return location
+                    logger.warning(
+                        "重定向响应缺少 Location 头: url=%s status=%s",
+                        url, resp.status_code,
+                    )
+                    return url
                 return str(resp.url)
             except TimeoutException as e:
                 if attempt >= max_attempts:
@@ -742,10 +755,11 @@ def create_app(
             return None
 
         # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
-        client_follow = request.app.state.http_client_follow
+        # 使用 follow_redirects=False 避免实际请求 CDN
+        client_no_follow = request.app.state.http_client_no_follow
         fwd_headers = _build_forward_headers(request)
         final_url = await _resolve_redirect(
-            client_follow, http_path, fwd_headers, user_id
+            client_no_follow, http_path, fwd_headers, user_id
         )
 
         # 写入已解析 URL 缓存（LRU 淘汰）
