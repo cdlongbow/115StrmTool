@@ -154,6 +154,25 @@ async def get_logs(lines: int = 200) -> Dict:
         raise ServiceError(f"读取日志失败: {e}")
 
 
+@router.delete("/logs")
+async def clear_logs() -> Dict:
+    """
+    清空日志文件
+    """
+    log_path = LOG_DIR / "combined.log"
+    try:
+        if log_path.exists():
+            log_path.write_text("", encoding="utf-8")
+        # 清理轮转备份（主日志由 RotatingFileHandler 持有，不能 unlink）
+        for f in LOG_DIR.glob("combined.log.*"):
+            if f.is_file():
+                f.unlink()
+        logger.info("日志已清空")
+        return {"status": "ok", "message": "日志已清空"}
+    except OSError as e:
+        raise ServiceError(f"清空日志失败: {e}")
+
+
 # ── 系统自动启动 ──
 
 
