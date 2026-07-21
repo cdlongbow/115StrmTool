@@ -96,6 +96,7 @@ def _start_emby():
         pin_rules=pin_rules,
         external_player_url=config.get("external_player_url", False),
         external_player_list=config.get("external_player_list", []),
+        redirect_mode=config.get("redirect_mode", False),
     )
     try:
         uv_config = Config(

@@ -36,6 +36,7 @@ class EmbyConfig(BaseModel):
     pin_rules: str = ""
     external_player_url: bool = False
     external_player_list: List[str] = Field(default_factory=list)
+    redirect_mode: bool = False
 
 
 class PathMapping(BaseModel):

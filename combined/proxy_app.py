@@ -444,6 +444,7 @@ def create_app(
     pin_rules: List[Tuple[str, str]] | None = None,
     external_player_url: bool = False,
     external_player_list: List[str] | None = None,
+    redirect_mode: bool = False,
 ) -> FastAPI:
     """
     创建 Emby 反向代理 FastAPI 应用
@@ -667,6 +668,9 @@ def create_app(
 
         :return Response: 302 重定向响应，或 None 表示回退到反向代理
         """
+        if not redirect_mode:
+            return None
+
         media_source_id = request.query_params.get("MediaSourceId") or ""
 
         # 第一级：用户缓存 — 从请求头提取用户 ID，用作后续缓存的 key 组成部分

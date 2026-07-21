@@ -64,6 +64,7 @@ class EmbyConfigRequest(BaseModel):
     pin_rules: Optional[str] = None
     external_player_url: Optional[bool] = None
     external_player_list: Optional[List[str]] = None
+    redirect_mode: Optional[bool] = None
 
 
 @router.get("/emby/config")
