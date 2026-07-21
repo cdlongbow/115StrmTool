@@ -637,33 +637,18 @@ def create_app(
             headers=resp_headers,
         )
 
-    def _build_302_redirect(url: str, request: Request) -> Response:
+    def _build_302_redirect(url: str, request: Request) -> RedirectResponse:
         """
         构建 302 重定向响应，让客户端直连 CDN
+
+        不加 Content-Disposition 头，避免浏览器将视频播放误当下载
 
         :param url (str): CDN 直链 URL
         :param request (Request): 原始客户端请求
 
-        :return Response: 302 重定向响应
+        :return RedirectResponse: 302 重定向响应
         """
-        headers: dict[str, str] = {"Location": url}
-        try:
-            raw_name = urlparse(url).path.rpartition("/")[-1]
-            if raw_name:
-                from urllib.parse import unquote as _unquote
-                file_name = _unquote(raw_name)
-                try:
-                    file_name.encode("ascii")
-                    headers["Content-Disposition"] = (
-                        f'attachment; filename="{file_name}"'
-                    )
-                except UnicodeEncodeError:
-                    headers["Content-Disposition"] = (
-                        f"attachment; filename*=UTF-8''{quote(file_name, safe='')}"
-                    )
-        except Exception:
-            pass
-        return Response(status_code=302, headers=headers)
+        return RedirectResponse(url=url, status_code=302)
 
     async def _try_media_response(
         item_id: str, api_key: str | None, request: Request
