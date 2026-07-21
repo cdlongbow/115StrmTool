@@ -24,7 +24,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 模块 | 描述 | 位置 |
 |------|------|------|
 | 应用入口与编排 | 服务启动/停止、生命周期管理 | `combined/main.py` |
-| Emby 反向代理 | 媒体流代理、PlaybackInfo 拦截、JS 修补 | `combined/proxy_app.py` |
+| Emby 反向代理 | 302 直链重定向、PlaybackInfo 拦截、JS 修补 | `combined/proxy_app.py` |
 | 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存 | `combined/redirect_service.py` |
 | STRM 文件生成器 | 目录遍历、STRM 写入、附属元数据下载 | `combined/strm_generator.py` |
 | 115 客户端封装 | 加密下载 API、二维码登录、文件浏览 | `combined/p115_client_wrapper.py` |
@@ -84,7 +84,7 @@ pip install combined/wheels/*.whl
 | 文件 | 目的 |
 |------|------|
 | `combined/main.py` | 应用入口 |
-| `combined/proxy_app.py` | 反向代理核心（1434 行） |
+| `combined/proxy_app.py` | 反向代理核心（1458 行） |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
 | `.github/workflows/release.yml` | CI/CD 发布工作流 |
 | `combined/requirements.txt` | 运行时依赖 |

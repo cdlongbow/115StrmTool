@@ -183,7 +183,7 @@ Content-Type: application/json
 ### 获取下载重定向
 
 ```
-GET /api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<17位字母数字>
+GET|POST /api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<17位字母数字>
 ```
 
 返回：

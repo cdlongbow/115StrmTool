@@ -9,7 +9,8 @@ redirect_service.py
 ├── 常量            # CACHE_TTL_DEFAULT, CACHE_MAX_SIZE, DOWNLOAD_API_PATH
 ├── RedirectService（class）
 │   ├── create_app()          # FastAPI 应用工厂
-│   ├── _do_redirect()        # 核心跳转/代理逻辑
+│   ├── _do_redirect()        # 核心 302 跳转逻辑（pickcode 解析 + 缓存 + 302 响应）
+│   │   ├── _real_client_ip()  # 获取真实客户端 IP（支持反向代理场景）
 │   ├── _build_302()          # 构建 302 响应
 │   ├── _extract_pickcode_from_path() # 从路径兜底提取
 │   ├── _cache_key()          # 缓存键构建（pickcode:UA_HASH）
@@ -24,10 +25,12 @@ redirect_service.py
 
 1. 验证 pickcode 格式（17 位字母数字）
 2. 检查缓存（key = `pickcode:sha256(ua)[:16]`）
-3. 缓存命中 → 直接跳转/代理
+3. 缓存命中 → 直接返回 302 跳转
 4. 缓存未命中 → 调用 `get_download_url_with_ua` 获取新 URL
 5. 写入缓存（TTL = expires_time - 300，max 90s）
-6. 返回跳转/代理响应
+6. 返回 302 重定向响应
+
+**重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（SDK 优先 + 加密 API 4 次阶梯重试 + 405 自适应切换），保持跳转服务简洁。
 
 ## 路由
 

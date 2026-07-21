@@ -7,7 +7,7 @@
 **核心职责**:
 - 将 115 网盘目录结构映射为本地媒体库路径
 - 生成 STRM 占位文件供 Emby 扫描
-- 在播放时将 115 CDN 媒体流通过反向代理送达客户端
+- 在播放时通过 302 重定向让客户端直连 115 CDN 获取媒体流
 - 提供管理 Web UI 控制整条链路
 
 **相关系统**:
@@ -122,7 +122,17 @@ Co-authored-by: <AI Name> <email>
 2. 在 `_build_player_target_url` 中添加对应平台的 URL 构建逻辑
 3. 在 `build_external_player_script` 中添加 JS 按钮模板
 
-### 修改流式代理行为
+### 修改媒体流重定向行为
+
+**需修改的文件**：
+1. `combined/proxy_app.py` — `_try_media_response()` 和 `_build_302_redirect()` 方法
+
+**关键点**：
+- `_try_media_response()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链
+- `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL
+- `_stream_from_cdn()` 保留作为流式代理备选方案
+
+### 修改流式代理备选行为
 
 **需修改的文件**：
 1. `combined/proxy_app.py` — `_stream_from_cdn()` 方法

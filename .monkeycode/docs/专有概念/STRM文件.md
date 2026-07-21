@@ -35,7 +35,7 @@ http://<redirect_host>:3333/api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<
 1. Emby 客户端请求播放 STRM 对应的媒体条目
 2. 反向代理拦截 PlaybackInfo，检测 MediaSource 为远程 HTTP 源
 3. 代理强制 DirectPlay 并解析 Path 中的 pickcode
-4. 代理通过流式代理从 115 CDN 获取媒体数据并返回客户端
+4. 代理解析 STRM 跳转链后返回 302 重定向，客户端直连 115 CDN 获取媒体数据
 
 ## 附属于 STRM 的元数据文件
 

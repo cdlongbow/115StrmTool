@@ -4,7 +4,7 @@
 
 115网盘STRM生成与302工具是一个面向 Windows 桌面用户的媒体流代理工具，解决 Emby 媒体服务器播放 115 网盘中视频文件时的转码和跨域问题。用户通过 Emby Web UI 或客户端直接播放 115 网盘中的影片，无需中转下载。
 
-系统将 115 网盘的目录结构映射为本地 Emby 媒体库路径，生成 STRM 占位文件，并在播放时将 115 CDN 媒体流通过流式代理直接送达客户端。同时提供了管理 Web UI、二维码登录、外部播放器注入等配套能力。
+系统将 115 网盘的目录结构映射为本地 Emby 媒体库路径，生成 STRM 占位文件，并在播放时通过 302 重定向让客户端直连 115 CDN 下载媒体流。同时提供了管理 Web UI、二维码登录、外部播放器注入等配套能力。
 
 ## 技术栈
 
@@ -45,7 +45,7 @@ MoviePilot-Windows/
 ├── combined/                   # 主应用包
 │   ├── main.py                 # 应用入口点与服务编排
 │   ├── proxy_app.py            # Emby 反向代理核心
-│   ├── redirect_service.py     # 115 CDN URL 跳转/流式代理服务
+│   ├── redirect_service.py     # 115 CDN URL 跳转服务
 │   ├── strm_generator.py       # STRM 文件生成器
 │   ├── p115_client_wrapper.py  # 115 网盘 API 客户端封装
 │   ├── api_routes.py           # P115 REST API 端点
@@ -79,7 +79,7 @@ MoviePilot-Windows/
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
-**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、流式代理 115 CDN 媒体流
+**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向到 115 CDN 媒体直链
 **位置**: `combined/proxy_app.py`
 **关键文件**: `proxy_app.py`（1434 行，最大模块）
 **依赖**: `external_players`, `config_manager`, `redirect_service`
@@ -154,12 +154,11 @@ sequenceDiagram
     Client->>Proxy: GET /videos/{id}/stream
     Proxy->>EmbySrv: POST /Items/{id}/PlaybackInfo
     EmbySrv-->>Proxy: MediaSources[].Path = STRM URL
-    Proxy->>Proxy: 检测 STRM，强制 DirectPlay
-    Proxy->>Proxy: 解析 Path 中的 pickcode
-    Proxy->>Proxy: 从缓存/CDN 流式获取媒体
-    Proxy-->>CDN: GET 115 CDN URL（带 Range/UA）
-    CDN-->>Proxy: 206 Partial Content
-    Proxy-->>Client: StreamingResponse（逐块转发）
+    Proxy->>Proxy: 检测 STRM / 三级缓存查询
+    Proxy->>Proxy: 跟随 STRM 重定向链解析 CDN URL
+    Proxy-->>Client: 302 Location: CDN URL
+    Client-->>CDN: GET CDN URL（带 Range/UA）
+    CDN-->>Client: 媒体数据
 ```
 
 ### STRM 生成流程
@@ -187,8 +186,8 @@ sequenceDiagram
 
 ## 设计决策
 
-### 流式代理替代 302 重定向
-最初 `_try_media_response` 返回 302 跳转到 115 CDN URL。Web 浏览器跟随跳转后直接访问 CDN，触发 CORS 拦截。改为 `_stream_from_cdn`：代理层用 httpx 从 CDN 拉数据，流式返回客户端，完全消除跨域问题。同时转发原始 Range 头支持拖放进度，转发 UA 头满足 115 CDN 的 UA 绑定校验。
+### 302 重定向 + crossOrigin 拦截
+当前 `_try_media_response` 解析 STRM URL 后返回 302 重定向，让客户端直连 115 CDN。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截。通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。流式代理 `_stream_from_cdn` 保留作为备选方案。
 
 ### UA 绑定的加密下载 API
 115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115rsacipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。

@@ -1,11 +1,11 @@
 # proxy_app
 
-Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，流式代理 115 CDN 媒体流，注入 crossOrigin 拦截脚本和外部播放器按钮。
+Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，302 重定向到 115 CDN 直链（流式代理作为备选），注入 crossOrigin 拦截脚本和外部播放器按钮。
 
 ## 结构
 
 ```
-proxy_app.py（1434 行，最大模块）
+proxy_app.py（1458 行，最大模块）
 ├── create_app()             # FastAPI 应用工厂
 ├── 路由处理程序
 │   ├── _handle_media()              # 媒体路由：/videos/, /audio/, /items/download
@@ -17,11 +17,11 @@ proxy_app.py（1434 行，最大模块）
 │   ├── _reverse_proxy()             # 通用反向代理
 │   └── catch_all()                  # 兜底路由
 ├── 辅助方法
-│   ├── _stream_from_cdn()           # 115 CDN 流式代理（核心修复）
+│   ├── _build_302_redirect()        # 构建 302 重定向到 CDN 直链
 │   ├── _resolve_redirect()          # 重定向链解析
-│   ├── _try_media_response()        # 媒体 URL 解析入口
-│   ├── _build_forward_headers()     # 转发请求头构建
-│   └── _stream_from_cdn()           # CDN→客户端流式传输
+│   ├── _stream_from_cdn()           # 115 CDN 流式代理（备选方案）
+│   ├── _try_media_response()        # 媒体 URL 解析入口（三级缓存 → 302）
+│   └── _build_forward_headers()     # 转发请求头构建
 └── 常量
     ├── MEDIA_ROUTES                 # 媒体路由前缀列表
     ├── CACHE_KEY_HEADERS            # 缓存 key 白名单头
@@ -36,9 +36,9 @@ proxy_app.py（1434 行，最大模块）
 Client → /videos/{id}/stream
   ↓
 _handle_media()
-  ├─ _try_media_response()      # 检查缓存 / PlaybackInfo / STRM 缓存
-  │   └─ _stream_from_cdn()     # httpx GET CDN URL → StreamingResponse
-  └─ _reverse_proxy()            # 回退到 Emby 服务器
+  ├─ _try_media_response()      # 三级缓存查询 → 解析 STRM 跳转链 → 302 重定向到 CDN 直链
+  │   └─ _build_302_redirect()  # 构建 302 响应，Location 头指向 CDN URL
+  └─ _reverse_proxy()            # 回退到 Emby 服务器（含流式代理备选）
 ```
 
 ### PlaybackInfo 拦截
@@ -55,9 +55,9 @@ _playback_info_strm_direct_play()
   6. 返回修改后的 PlaybackInfo
 ```
 
-## CDN 流式代理
+## CDN 流式代理（备选方案）
 
-`_stream_from_cdn()` 是解决 CORS 问题的核心。
+`_stream_from_cdn()` 在 302 重定向路径不可用时作为备选方案，由服务器端拉取 CDN 数据流式返回客户端。
 
 **输入**：115 CDN URL + 原始请求
 
