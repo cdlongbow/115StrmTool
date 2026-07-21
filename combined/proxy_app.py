@@ -637,11 +637,39 @@ def create_app(
             headers=resp_headers,
         )
 
+    def _build_302_redirect(url: str, request: Request) -> Response:
+        """
+        构建 302 重定向响应，让客户端直连 CDN
+
+        :param url (str): CDN 直链 URL
+        :param request (Request): 原始客户端请求
+
+        :return Response: 302 重定向响应
+        """
+        headers: dict[str, str] = {"Location": url}
+        try:
+            raw_name = urlparse(url).path.rpartition("/")[-1]
+            if raw_name:
+                from urllib.parse import unquote as _unquote
+                file_name = _unquote(raw_name)
+                try:
+                    file_name.encode("ascii")
+                    headers["Content-Disposition"] = (
+                        f'attachment; filename="{file_name}"'
+                    )
+                except UnicodeEncodeError:
+                    headers["Content-Disposition"] = (
+                        f"attachment; filename*=UTF-8''{quote(file_name, safe='')}"
+                    )
+        except Exception:
+            pass
+        return Response(status_code=302, headers=headers)
+
     async def _try_media_response(
         item_id: str, api_key: str | None, request: Request
     ) -> Response | None:
         """
-        尝试获取媒体文件真实地址并从 CDN 流式代理到客户端
+        尝试获取媒体文件真实地址并 302 重定向客户端到 CDN 直链
 
         三级缓存策略，优先级递减：
           1. playback_url_cache（90s TTL）— 已解析的重定向最终 URL
@@ -652,7 +680,7 @@ def create_app(
         :param api_key: Emby API Key，可为 None
         :param request: 当前请求
 
-        :return Response: 流式代理响应，或 None 表示回退到反向代理
+        :return Response: 302 重定向响应，或 None 表示回退到反向代理
         """
         media_source_id = request.query_params.get("MediaSourceId") or ""
 
@@ -675,13 +703,13 @@ def create_app(
         )
         cache = request.app.state.playback_url_cache
 
-        # 第二级：已解析 URL 缓存 — 命中则直接流式代理，跳过后续查询
+        # 第二级：已解析 URL 缓存 — 命中则直接 302 跳转，跳过后续查询
         cached_final_url = None
         async with cache.lock:
             cached_final_url = cache.get(cache_key)
         if cached_final_url is not None:
-            logger.debug("PlaybackInfo 使用缓存: item_id=%s", item_id)
-            return await _stream_from_cdn(cached_final_url, request)
+            logger.info("302 直链: item_id=%s -> %s", item_id, cached_final_url)
+            return _build_302_redirect(cached_final_url, request)
 
         http_path = None
 
@@ -735,8 +763,8 @@ def create_app(
         async with cache.lock:
             cache.put(cache_key, final_url)
 
-        logger.info("媒体流代理: item_id=%s -> %s", item_id, final_url)
-        return await _stream_from_cdn(final_url, request)
+        logger.info("302 直链: item_id=%s -> %s", item_id, final_url)
+        return _build_302_redirect(final_url, request)
 
     for route in MEDIA_ROUTES:
         app.api_route(route, methods=["GET", "HEAD"], response_model=None)(
