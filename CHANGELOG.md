@@ -15,6 +15,9 @@
 3. **修复部分客户端（如王二小放牛娃）直链播放失败问题**
    在 PlaybackInfo 拦截时，当 `redirect_mode=True`，将 `Path` 替换为已解析的 CDN 直链。兼容使用 `Path`（而非 `DirectStreamUrl`）播放的客户端。
 
+4. **修复 _resolve_redirect 的 h11 协议错误**
+   `_build_forward_headers` 排除 `content-length` 头，避免 HEAD 请求携带 POST 的 `Content-Length` 导致 `h11._util.LocalProtocolError: Too little data for declared Content-Length`。
+
 ## [2026-07-21]
 
 1. **播放流量不再经过服务器**

@@ -326,7 +326,8 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     return {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
+        if k.lower() not in HOP_BY_HOP_HEADERS
+        and k.lower() not in ("host", "content-length")
     }
 
 
