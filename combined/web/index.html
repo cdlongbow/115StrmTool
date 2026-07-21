@@ -219,7 +219,10 @@ tr:hover{background:#f5f5f5}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0">运行日志</h2>
-      <button class="btn btn-outline" onclick="refreshLogs()">刷新</button>
+      <div>
+        <button class="btn btn-outline" onclick="refreshLogs()">刷新</button>
+        <button class="btn btn-outline" onclick="clearLogs()" style="color:#ea4335;border-color:#ea4335">清空</button>
+      </div>
     </div>
     <div class="log-box" id="logBox">加载中...</div>
   </div>
@@ -751,6 +754,18 @@ async function refreshLogs() {
     document.getElementById('logBox').textContent = (d.logs||[]).join('\n') || '暂无日志';
   } catch(e) {
     document.getElementById('logBox').textContent = '加载日志失败';
+  }
+}
+
+async function clearLogs() {
+  if (!confirm('确定清空所有日志吗？')) return;
+  try {
+    const r = await fetch('/admin/api/logs', { method: 'DELETE' });
+    const d = await r.json();
+    showToast(d.message, 'success');
+    document.getElementById('logBox').textContent = '暂无日志';
+  } catch(e) {
+    showToast('清空失败: ' + e.message, 'error');
   }
 }
 
