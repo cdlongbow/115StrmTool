@@ -12,6 +12,9 @@
 2. **修复 302 直链模式下拖拽进度卡顿问题**
    `_resolve_redirect` 改用 `follow_redirects=False` + 手动解析 `Location` 头，避免实际请求 CDN。消除 HEAD 方式请求 CDN 导致的方法差异问题（CDN 可能拒绝 HEAD 或返回方法绑定签名 URL）。
 
+3. **修复部分客户端（如王二小放牛娃）直链播放失败问题**
+   在 PlaybackInfo 拦截时，当 `redirect_mode=True`，将 `Path` 替换为已解析的 CDN 直链。兼容使用 `Path`（而非 `DirectStreamUrl`）播放的客户端。
+
 ## [2026-07-21]
 
 1. **播放流量不再经过服务器**

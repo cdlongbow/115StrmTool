@@ -1037,6 +1037,20 @@ def create_app(
             async with strm_cache.lock:
                 strm_cache.put(item_id, strm_sources)
 
+        if redirect_mode:
+            fwd_headers = _build_forward_headers(request)
+            client_no_follow = request.app.state.http_client_no_follow
+            for ms in data.get("MediaSources", []):
+                if not isinstance(ms, dict):
+                    continue
+                ms_path = ms.get("Path", "")
+                if ms_path.startswith(("http://", "https://")):
+                    resolved = await _resolve_redirect(
+                        client_no_follow, ms_path, fwd_headers
+                    )
+                    if resolved:
+                        ms["Path"] = resolved
+
         uid = request.query_params.get("UserId")
         if uid:
             user_key = _playback_user_key(request, item_id)
