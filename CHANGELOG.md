@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
-- 无
+1. **文件遍历改用 Android API（proapi.115.com）**
+    `_iter_files_115` 从手动分页+递归的 `fs_files`（webapi.115.com）改为 `iter_files_with_path`（Android API, proapi.115.com），避免 webapi 域名被风控返回 405 导致同步失败。`browse_directory` 同步切换为 `fs_files_app` 且字段适配。
+2. **302 Location 头非 ASCII 字符百分号编码**
+    `_build_302_redirect` 对 Location URL 中的非 ASCII 字符做百分号编码，避免某些 HTTP 客户端无法解析含中文的 CDN 直链，同时保留签名查询串不变。
+3. **升级 p115client 到 0.0.9.5.2**
+    从 0.0.9.4.6.1 升级，依赖无 breaking change。
 
 ## [2026-07-22]
 

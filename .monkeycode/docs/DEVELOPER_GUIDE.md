@@ -129,7 +129,7 @@ Co-authored-by: <AI Name> <email>
 
 **关键点**：
 - `_try_media_response()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链
-- `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL
+- `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
 - `_stream_from_cdn()` 保留作为流式代理备选方案
 
 ### 修改流式代理备选行为
