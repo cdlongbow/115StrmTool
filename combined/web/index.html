@@ -198,8 +198,8 @@ tr:hover{background:#f5f5f5}
   </div>
   <div class="card" style="display:flex;flex-direction:row;align-items:center;gap:8px;padding:12px 16px;font-size:13px">
     <input type="checkbox" id="p115_cleanup_deleted_strm" style="width:auto">
-    <label for="p115_cleanup_deleted_strm" style="margin:0">全量同步后清理残留 STRM 文件</label>
-    <span style="color:#999;margin-left:4px">（高风险，开启后全量同步会自动删除已不存在的文件的 STRM 文件）</span>
+    <label for="p115_cleanup_deleted_strm" style="margin:0" title="开启后，全量同步完成时会自动删除本地残留的 .strm 文件（这些文件对应的视频在 115 网盘里已经被删除了）。如果同步过程中网络不稳定，可能误删文件，建议确认同步稳定后再开启。">全量同步后清理残留 STRM 文件</label>
+    <span style="color:#999;margin-left:4px">（高危！开启后会自动删除网盘已不存在的文件的 .strm）</span>
   </div>
   <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
     <b>增量同步说明：</b><br>
