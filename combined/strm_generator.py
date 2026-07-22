@@ -184,6 +184,7 @@ class StrmGenerator:
 
     def cancel(self):
         self._cancel_flag.set()
+        self._set_progress("cancelling", message="正在取消同步...")
         logger.info("同步已请求取消")
 
     def reset_cancel(self):

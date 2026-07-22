@@ -644,6 +644,9 @@ function startSyncProgressPoll() {
           updateDashboard();
           loadSyncHistory();
         }
+        if (p.phase === 'cancelled') {
+          showToast('同步已取消', 'info');
+        }
         setTimeout(() => { el.style.display = 'none'; }, 5000);
       }
     } catch(e) {}
@@ -667,7 +670,8 @@ async function startIncrementalSync() {
   } catch(err) { showToast('增量同步失败: ' + err.message, 'error'); }
 }
 async function cancelSync() {
-  try { await fetch('/api/sync/cancel', {method:'POST'}); showToast('已取消', 'info'); } catch(e) {}
+  showToast('正在取消...', 'info');
+  try { await fetch('/api/sync/cancel', {method:'POST'}); } catch(e) {}
 }
 async function resetSyncBaseline() {
   if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;

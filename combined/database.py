@@ -111,13 +111,18 @@ class Database:
 
     def batch_add_files(self, files: List[Dict[str, Any]]):
         cursor = self.conn.cursor()
-        cursor.executemany(
-            """INSERT OR REPLACE INTO files
-               (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
-               VALUES (:pickcode, :file_name, :file_size, :file_type, :pan_path, :local_strm_path, :sha1, :parent_id)""",
-            files,
-        )
-        self.conn.commit()
+        cursor.execute("BEGIN")
+        try:
+            cursor.executemany(
+                """INSERT OR REPLACE INTO files
+                   (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
+                   VALUES (:pickcode, :file_name, :file_size, :file_type, :pan_path, :local_strm_path, :sha1, :parent_id)""",
+                files,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def remove_file_by_pan_path(self, pan_path: str):
         self.conn.execute(
