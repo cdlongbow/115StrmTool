@@ -18,6 +18,12 @@
 4. **修复 _resolve_redirect 的 h11 协议错误**
    `_build_forward_headers` 排除 `content-length` 头，避免 HEAD 请求携带 POST 的 `Content-Length` 导致 `h11._util.LocalProtocolError: Too little data for declared Content-Length`。
 
+5. **全量同步后清理残留记录**
+   全量同步完成后，自动检测并标记数据库中已删除的文件的记录为 `deleted`，同时删除磁盘上对应的残留 STRM 文件。
+
+6. **同步锁防止并发冲突**
+   全量同步和增量同步添加 `threading.RLock` 互斥锁，防止用户快速多次触发同步导致数据混乱。
+
 ## [2026-07-21]
 
 1. **播放流量不再经过服务器**
