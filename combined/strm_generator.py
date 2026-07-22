@@ -1,7 +1,6 @@
 import threading
 from os import name as os_name
 from pathlib import Path
-from time import monotonic, sleep
 from typing import Any, Callable, Dict, List, Optional
 
 from logger import logger
@@ -34,80 +33,23 @@ def sanitize_path_parts(rel_path: Path) -> Path:
 def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dict[int, str] = None):
     """
     递归遍历 115 目录下的所有文件（非目录）
-    使用 fs_files API 分页获取，递归子目录
+
+    使用 iter_files_with_path（Android API, proapi.115.com）替代 fs_files（webapi.115.com），
+    避免 webapi 域名被风控返回 405 的问题
 
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
-    :param path_cache: 可选，用于追踪目录 CID 到路径的映射，在遍历过程中填充
+    :param path_cache: 可选，保留参数用于兼容，不再填充
     """
-    from app_ver import get_real_app_ver
-    app_ver = get_real_app_ver()
-    http_client = client_wrapper.client
-    if http_client is None:
+    from p115client.tool.iterdir import iter_files_with_path
+    client = client_wrapper.client
+    if client is None:
         return
-    if path_cache is None:
-        path_cache = {}
-    path_cache[cid] = ""
-    stack = [(cid, "")]
-    _fs_files_cooldown = 0.5
-    _last_call = 0.0
-    while stack:
-        current_cid, current_rel = stack.pop()
-        offset = 0
-        limit = 1000
-        while True:
-            try:
-                now = monotonic()
-                remaining = _fs_files_cooldown - (now - _last_call)
-                if remaining > 0:
-                    sleep(remaining)
-                resp = http_client.fs_files({
-                    "cid": current_cid,
-                    "limit": limit,
-                    "offset": offset,
-                    "app_ver": app_ver,
-                    "cur": 1,
-                    "fc_mix": 1,
-                })
-                _last_call = monotonic()
-            except Exception as e:
-                logger.warning("遍历目录失败 cid=%s: %s", current_cid, e)
-                break
-            if not isinstance(resp, dict):
-                logger.warning("遍历目录响应不是 dict cid=%s: %s", current_cid, type(resp))
-                break
-            items = resp.get("data") or resp.get("Data") or []
-            if not items:
-                break
-            for item in items:
-                is_dir = False
-                if "fid" not in item:
-                    is_dir = True
-                child_cid = item.get("cid")
-                if is_dir:
-                    if not child_cid or str(child_cid) == "0":
-                        logger.warning("跳过无效子目录 cid=%s name=%s", child_cid, item.get("n", ""))
-                        continue
-                    dir_name = item.get("n", "")
-                    child_rel = f"{current_rel}/{dir_name}" if current_rel else dir_name
-                    path_cache[child_cid] = child_rel
-                    stack.append((child_cid, child_rel))
-                else:
-                    attr = {
-                        "name": item.get("n") or item.get("name", ""),
-                        "is_dir": is_dir,
-                        "size": item.get("s") or item.get("size", 0),
-                        "pickcode": item.get("pc") or item.get("pickcode") or "",
-                        "pick_code": item.get("pc") or item.get("pickcode") or "",
-                        "sha1": item.get("sha1") or item.get("sha", ""),
-                        "path": "",
-                        "id": child_cid if is_dir else item.get("fid", 0),
-                        "parent_id": str(current_cid),
-                    }
-                    yield attr
-            if len(items) < limit:
-                break
-            offset += limit
+    for attr in iter_files_with_path(
+        client, cid, type=99, cur=0, app="android",
+        cooldown=0.5, escape=None,
+    ):
+        yield attr
 
 
 class StrmGenerator:
@@ -242,9 +184,8 @@ class StrmGenerator:
 
                     try:
                         cid = self._resolve_pan_path(pan_path)
-                        path_cache: Dict[int, str] = {}
 
-                        for attr in _iter_files_115(self._client, cid, path_cache):
+                        for attr in _iter_files_115(self._client, cid):
                             if self._cancel_flag.is_set():
                                 break
                             if attr.get("is_dir"):
@@ -253,9 +194,7 @@ class StrmGenerator:
                             ext = Path(name).suffix.lower()
                             pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
                             file_id = attr.get("id", 0)
-                            parent_id = attr.get("parent_id", 0)
-                            rel_path = path_cache.get(parent_id, "")
-                            pan_full_path = f"{pan_path}/{rel_path}/{name}" if rel_path else f"{pan_path}/{name}"
+                            pan_full_path = attr.get("path", "")
 
                             if self._auto_download_mediainfo and ext in self._download_mediaext:
                                 local_file_path = self._to_local_path(
@@ -432,9 +371,8 @@ class StrmGenerator:
 
                     try:
                         cid = self._resolve_pan_path(pan_path)
-                        path_cache: Dict[int, str] = {}
 
-                        for attr in _iter_files_115(self._client, cid, path_cache):
+                        for attr in _iter_files_115(self._client, cid):
                             if self._cancel_flag.is_set():
                                 break
                             if attr.get("is_dir"):
@@ -443,9 +381,7 @@ class StrmGenerator:
                             ext = Path(name).suffix.lower()
                             pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
                             file_id = attr.get("id", 0)
-                            parent_id = attr.get("parent_id", 0)
-                            rel_path = path_cache.get(parent_id, "")
-                            pan_full_path = f"{pan_path}/{rel_path}/{name}" if rel_path else f"{pan_path}/{name}"
+                            pan_full_path = attr.get("path", "")
 
                             if self._auto_download_mediainfo and ext in self._download_mediaext:
                                 local_file_path = self._to_local_path(

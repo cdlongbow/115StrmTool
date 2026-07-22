@@ -82,9 +82,11 @@ class TestIncrementalSync:
         import strm_generator as sg
         sg._iter_files_115 = _build_fake_iter_files([
             {"name": "old.mp4", "is_dir": False, "pickcode": "old001",
-             "pick_code": "old001", "sha1": "sha_old", "id": 1, "parent_id": 0, "size": 100},
+             "pick_code": "old001", "sha1": "sha_old", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/old.mp4"},
             {"name": "new.mkv", "is_dir": False, "pickcode": "new001",
-             "pick_code": "new001", "sha1": "sha_new", "id": 2, "parent_id": 0, "size": 200},
+             "pick_code": "new001", "sha1": "sha_new", "id": 2, "parent_id": 0, "size": 200,
+             "path": "/test/new.mkv"},
         ])
         r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
         assert r["new"] == 1, f"r={r}"
@@ -105,7 +107,8 @@ class TestIncrementalSync:
         import strm_generator as sg
         sg._iter_files_115 = _build_fake_iter_files([
             {"name": "movie.mkv", "is_dir": False, "pickcode": "pc001",
-             "pick_code": "pc001", "sha1": "v2", "id": 1, "parent_id": 0, "size": 100},
+             "pick_code": "pc001", "sha1": "v2", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/movie.mkv"},
         ])
         r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
         assert r["changed"] == 1, f"r={r}"
@@ -124,7 +127,8 @@ class TestIncrementalSync:
         import strm_generator as sg
         sg._iter_files_115 = _build_fake_iter_files([
             {"name": "keep.mp4", "is_dir": False, "pickcode": "pc002",
-             "pick_code": "pc002", "sha1": "sha_keep", "id": 1, "parent_id": 0, "size": 100},
+             "pick_code": "pc002", "sha1": "sha_keep", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/keep.mp4"},
         ])
         r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
         assert r["unchanged"] == 1, f"r={r}"
@@ -158,7 +162,8 @@ class TestIncrementalSync:
         def cancel_during_iter(*a, **kw):
             gen.cancel()
             yield {"name": "a.mp4", "is_dir": False, "pickcode": "pc003",
-                   "pick_code": "pc003", "sha1": "sha_a", "id": 1, "parent_id": 0, "size": 100}
+                   "pick_code": "pc003", "sha1": "sha_a", "id": 1, "parent_id": 0, "size": 100,
+                   "path": "/test/a.mp4"}
         sg._iter_files_115 = cancel_during_iter
         r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
         assert r["cancelled"] is True
@@ -195,11 +200,14 @@ class TestIncrementalSync:
         import strm_generator as sg
         sg._iter_files_115 = _build_fake_iter_files([
             {"name": "keep.mp4", "is_dir": False, "pickcode": "keep",
-             "pick_code": "keep", "sha1": "sha1", "id": 1, "parent_id": 0, "size": 100},
+             "pick_code": "keep", "sha1": "sha1", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/keep.mp4"},
             {"name": "change.mkv", "is_dir": False, "pickcode": "change",
-             "pick_code": "change", "sha1": "new_sha", "id": 2, "parent_id": 0, "size": 100},
+             "pick_code": "change", "sha1": "new_sha", "id": 2, "parent_id": 0, "size": 100,
+             "path": "/test/change.mkv"},
             {"name": "newfile.mp4", "is_dir": False, "pickcode": "new001",
-             "pick_code": "new001", "sha1": "sha_new", "id": 3, "parent_id": 0, "size": 100},
+             "pick_code": "new001", "sha1": "sha_new", "id": 3, "parent_id": 0, "size": 100,
+             "path": "/test/newfile.mp4"},
         ])
         r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
         assert r["new"] == 1, f"r={r}"
