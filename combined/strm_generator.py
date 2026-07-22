@@ -116,6 +116,7 @@ class StrmGenerator:
         self._url_prefix = url_prefix.rstrip("/")
         self._cancel_flag = threading.Event()
         self._progress_callback: Optional[Callable] = None
+        self._progress: Dict[str, Any] = {"phase": "idle", "current": 0, "total": 0, "message": ""}
         self._rmt_mediaext: set = {
             ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
             ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".tp", ".f4v", ".webm",
@@ -132,6 +133,12 @@ class StrmGenerator:
 
     def set_progress_callback(self, cb: Callable):
         self._progress_callback = cb
+
+    def get_progress(self) -> Dict[str, Any]:
+        return dict(self._progress)
+
+    def _set_progress(self, phase: str, current: int = 0, total: int = 0, message: str = ""):
+        self._progress.update({"phase": phase, "current": current, "total": total, "message": message})
 
     def set_config(
         self,
@@ -212,6 +219,7 @@ class StrmGenerator:
                     auto_download_mediainfo=kwargs.get("auto_download_mediainfo", False),
                 )
             history_id = db.add_sync_history("full")
+            self._set_progress("scanning", message="准备开始全量同步...")
             total_new = 0
             total_deleted = 0
             total_failed = 0
@@ -222,11 +230,13 @@ class StrmGenerator:
                 rust_items = []
                 for mapping in path_mappings:
                     if self._cancel_flag.is_set():
+                        self._set_progress("cancelled", message="全量同步已取消")
                         break
                     if mapping.get("enabled") is False:
                         continue
                     pan_path = mapping["from"]
                     local_path = mapping["to"]
+                    self._set_progress("scanning", message=f"正在扫描目录: {pan_path}")
                     logger.info("开始同步目录: %s -> %s", pan_path, local_path)
 
                     try:
@@ -293,6 +303,7 @@ class StrmGenerator:
                                     "sha1": attr.get("sha1", ""),
                                     "parent_id": pan_path,
                                 })
+                                self._set_progress("scanning", current=len(all_files), message=f"已扫描 {len(all_files)} 个文件")
                     except Exception as e:
                         logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                         total_failed += 1
@@ -342,15 +353,18 @@ class StrmGenerator:
                                             pass
                                     total_deleted += 1
 
+                self._set_progress("processing", current=total_count, total=total_count, message="同步完成，正在写入数据库...")
                 db.finish_sync_history(
                     history_id, total_count, total_new, total_deleted, total_failed
                 )
 
+                self._set_progress("completed", current=total_count, total=total_count, message=f"全量同步完成: 新增 {total_new}，删除 {total_deleted}，失败 {total_failed}")
                 logger.info(
                     "全量同步完成: 新增=%d, 删除=%d, 失败=%d",
                     total_new, total_deleted, total_failed,
                 )
             except Exception as e:
+                self._set_progress("error", message=f"全量同步异常: {e}")
                 logger.error("全量同步异常: %s", e, exc_info=True)
                 db.finish_sync_history(
                     history_id, total_count, total_new, total_deleted, total_failed, str(e)
@@ -384,6 +398,7 @@ class StrmGenerator:
                 return self.full_sync(path_mappings, **kwargs)
 
             history_id = db.add_sync_history("incremental")
+            self._set_progress("scanning", message="准备开始增量同步...")
             total_new = 0
             total_changed = 0
             total_deleted = 0
@@ -397,11 +412,13 @@ class StrmGenerator:
 
                 for mapping in path_mappings:
                     if self._cancel_flag.is_set():
+                        self._set_progress("cancelled", message="增量同步已取消")
                         break
                     if mapping.get("enabled") is False:
                         continue
                     pan_path = mapping["from"]
                     local_path = mapping["to"]
+                    self._set_progress("scanning", message=f"正在扫描目录: {pan_path}")
                     logger.info("开始增量同步目录: %s -> %s", pan_path, local_path)
 
                     existing_map: Dict[str, Dict] = {}
@@ -513,6 +530,8 @@ class StrmGenerator:
                                 total_changed += 1
                             else:
                                 total_unchanged += 1
+                            processed = total_new + total_changed + total_unchanged
+                            self._set_progress("scanning", current=processed, message=f"已扫描 {processed} 个文件")
 
                         if not self._cancel_flag.is_set():
                             deleted_pickcodes = [
@@ -556,6 +575,7 @@ class StrmGenerator:
                         except Exception as e:
                             logger.error("Rust 批处理失败: %s", e, exc_info=True)
 
+                self._set_progress("processing", message="正在写入数据库...")
                 if not self._cancel_flag.is_set() and all_new_files:
                     db.batch_add_files(all_new_files)
 
@@ -564,11 +584,13 @@ class StrmGenerator:
                     history_id, total_count, total_new + total_changed, total_deleted, total_failed
                 )
 
+                self._set_progress("completed", current=total_count, total=total_count, message=f"增量同步完成: 新增 {total_new}，变更 {total_changed}，删除 {total_deleted}，失败 {total_failed}")
                 logger.info(
                     "增量同步完成: 新增=%d, 变更=%d, 未变=%d, 删除=%d, 失败=%d",
                     total_new, total_changed, total_unchanged, total_deleted, total_failed,
                 )
             except Exception as e:
+                self._set_progress("error", message=f"增量同步异常: {e}")
                 logger.error("增量同步异常: %s", e, exc_info=True)
                 db.finish_sync_history(
                     history_id, 0, 0, 0, total_failed, str(e)

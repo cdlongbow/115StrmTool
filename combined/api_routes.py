@@ -107,6 +107,13 @@ async def browse_directory(pid: str = "0", path: str = ""):
 _sync_in_progress = False
 
 
+@router.get("/sync/progress")
+async def get_sync_progress() -> Dict[str, Any]:
+    from strm_generator import get_strm_generator
+    gen = get_strm_generator(_client, "")
+    return gen.get_progress()
+
+
 @router.post("/sync/start")
 async def start_full_sync() -> Dict[str, Any]:
     global _sync_in_progress
