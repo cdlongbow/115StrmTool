@@ -123,6 +123,7 @@ async def start_full_sync() -> Dict[str, Any]:
             download_mediaext=p115_cfg.get("download_mediaext", ""),
             auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
             overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
+            cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
         )
         result = gen.full_sync(p115_cfg.get("paths", []))
         return {"status": "completed", **result}
@@ -149,6 +150,7 @@ async def start_incremental_sync() -> Dict[str, Any]:
             download_mediaext=p115_cfg.get("download_mediaext", ""),
             auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
             overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
+            cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
         )
         result = gen.incremental_sync(p115_cfg.get("paths", []))
         return {"status": "completed", **result}

@@ -125,6 +125,7 @@ class StrmGenerator:
         }
         self._auto_download_mediainfo = False
         self._overwrite_mode = "never"
+        self._cleanup_deleted = False
         self._use_rust = False
         self._rust_processor = None
         self._sync_lock = threading.RLock()
@@ -138,6 +139,7 @@ class StrmGenerator:
         download_mediaext: str = "",
         auto_download_mediainfo: bool = False,
         overwrite_mode: str = "never",
+        cleanup_deleted: bool = False,
     ):
         if rmt_mediaext:
             self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
@@ -145,6 +147,7 @@ class StrmGenerator:
             self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()}
         self._auto_download_mediainfo = auto_download_mediainfo
         self._overwrite_mode = overwrite_mode
+        self._cleanup_deleted = cleanup_deleted
 
     def set_use_rust(self, enabled: bool):
         self._use_rust = enabled
@@ -321,23 +324,23 @@ class StrmGenerator:
                     total_new = len(all_files)
                     total_count = total_new
 
-                    # 清理已删除文件：标记数据库中不在本次同步结果中的记录为 deleted
-                    seen_pickcodes = {f["pickcode"] for f in all_files}
-                    for mapping in path_mappings:
-                        if mapping.get("enabled") is False:
-                            continue
-                        pan_path = mapping["from"]
-                        for f in db.get_active_files_by_parent(pan_path):
-                            if f["pickcode"] not in seen_pickcodes:
-                                db.mark_file_deleted(f["pickcode"])
-                                strm_path = Path(f["local_strm_path"])
-                                if strm_path.exists():
-                                    try:
-                                        strm_path.unlink()
-                                        logger.info("已删除残留 STRM: %s", strm_path)
-                                    except OSError:
-                                        pass
-                                total_deleted += 1
+                    if self._cleanup_deleted:
+                        seen_pickcodes = {f["pickcode"] for f in all_files}
+                        for mapping in path_mappings:
+                            if mapping.get("enabled") is False:
+                                continue
+                            pan_path = mapping["from"]
+                            for f in db.get_active_files_by_parent(pan_path):
+                                if f["pickcode"] not in seen_pickcodes:
+                                    db.mark_file_deleted(f["pickcode"])
+                                    strm_path = Path(f["local_strm_path"])
+                                    if strm_path.exists():
+                                        try:
+                                            strm_path.unlink()
+                                            logger.info("已删除残留 STRM: %s", strm_path)
+                                        except OSError:
+                                            pass
+                                    total_deleted += 1
 
                 db.finish_sync_history(
                     history_id, total_count, total_new, total_deleted, total_failed

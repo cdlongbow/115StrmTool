@@ -57,6 +57,7 @@ class P115Config(BaseModel):
     download_mediaext: str = "srt,ssa,ass,sup,pgs,sub,idx"
     auto_download_mediainfo: bool = False
     overwrite_mode: str = "never"
+    cleanup_deleted_strm: bool = False
     paths: List[PathMapping] = Field(default_factory=list)
 
     @field_validator("overwrite_mode")
