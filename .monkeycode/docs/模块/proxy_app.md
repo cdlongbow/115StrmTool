@@ -1,11 +1,11 @@
 # proxy_app
 
-Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，302 重定向到 115 CDN 直链（流式代理作为备选），注入 crossOrigin 拦截脚本和外部播放器按钮。
+Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，支持 302 重定向模式（默认）和流式代理模式可切换，注入 crossOrigin 拦截脚本和外部播放器按钮。
 
 ## 结构
 
 ```
-proxy_app.py（1458 行，最大模块）
+proxy_app.py（最大模块）
 ├── create_app()             # FastAPI 应用工厂
 ├── 路由处理程序
 │   ├── _handle_media()              # 媒体路由：/videos/, /audio/, /items/download
@@ -36,9 +36,10 @@ proxy_app.py（1458 行，最大模块）
 Client → /videos/{id}/stream
   ↓
 _handle_media()
-  ├─ _try_media_response()      # 三级缓存查询 → 解析 STRM 跳转链 → 302 重定向到 CDN 直链
-  │   └─ _build_302_redirect()  # 构建 302 响应，Location 头指向 CDN URL
-  └─ _reverse_proxy()            # 回退到 Emby 服务器（含流式代理备选）
+  ├─ _try_media_response()      # 三级缓存查询 → 解析 STRM 跳转链
+  │   ├─ redirect_mode=true     → _build_302_redirect()  # 302 重定向到 CDN 直链
+  │   └─ redirect_mode=false    → _stream_from_cdn()     # 流式代理
+  └─ _reverse_proxy()            # 回退到 Emby 服务器
 ```
 
 ### PlaybackInfo 拦截
@@ -51,9 +52,21 @@ _playback_info_strm_direct_play()
   2. 检测 MediaSources 是否为 STRM（IsRemote=true, Protocol=Http）
   3. 强制 DirectPlay：SupportsTranscoding=false
   4. 构建 DirectStreamUrl 相对路径
-  5. 缓存 STRM 源 URL 供后续媒体请求使用
-  6. 返回修改后的 PlaybackInfo
+  5. 替换 MediaSources[].Path 为 CDN 直链（兼容使用 Path 播放的客户端）
+  6. 缓存 STRM 源 URL 供后续媒体请求使用
+  7. 返回修改后的 PlaybackInfo
 ```
+
+## 重定向模式与流式代理模式
+
+通过 `redirect_mode` 配置项切换两种播放模式：
+
+- **302 重定向模式**（`redirect_mode=true`，默认）：`_try_media_response` 调用 `_build_302_redirect` 返回 302 响应，客户端直连 115 CDN。媒体流量不经过代理服务器。
+- **流式代理模式**（`redirect_mode=false`）：`_try_media_response` 调用 `_stream_from_cdn`，由服务端拉取 CDN 数据流式返回客户端。
+
+## 手动解析 Location 头
+
+`_resolve_redirect()` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应头中的 `Location` 字段获取 CDN URL，不实际请求 CDN。这避免了 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL 导致客户端后续 GET Range 请求失败的问题。
 
 ## CDN 流式代理（备选方案）
 
@@ -91,6 +104,7 @@ _playback_info_strm_direct_play()
 | playback_url_cache | 全局 | 90s | 媒体 URL 缓存 |
 | strm_source_cache | 全局 | 300s | STRM 源 URL 缓存 |
 | playback_user_cache | 全局 | 300s | 用户关联缓存 |
+| redirect_url_cache | 全局 | 600s | 解析后的 CDN 直链缓存 |
 
 ## 依赖
 

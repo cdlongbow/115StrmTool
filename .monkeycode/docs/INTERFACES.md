@@ -43,16 +43,56 @@ Content-Type: application/json
 启动全量 STRM 同步。遍历 115 目录，为媒体文件生成 .strm 文件。返回 `{"message": "同步任务已启动"}`。
 
 ```
+POST /api/sync/incremental
+Content-Type: application/json
+
+{"path_mappings": {"115_path": "local_path", ...}}
+```
+
+启动增量同步。对比上次同步 SHA1，仅处理新增/变更/删除文件。返回 `{"message": "同步任务已启动"}`。
+
+```
+POST /api/sync/reset-baseline
+Content-Type: application/json
+
+{"path_mappings": {"115_path": "local_path", ...}}
+```
+
+重置基线并重新全量同步。清空上次同步记录，下次增量从零开始。返回 `{"message": "重置基线成功，下次同步将执行全量同步"}`。
+
+```
 POST /api/sync/cancel
 ```
 
-取消正在进行的同步任务。
+取消正在进行的同步任务。返回 `{"message": "正在取消同步任务..."}`。
+
+```
+GET /api/sync/progress
+```
+
+轮询同步进度。返回：
+
+```json
+{
+  "running": true,
+  "progress": 0.65,
+  "current": 650,
+  "total": 1000,
+  "phase": "scanning|syncing|cleaning|done"
+}
+```
 
 ```
 GET /api/sync/history
 ```
 
 返回同步历史记录列表。
+
+```
+POST /api/sync/history/clear
+```
+
+清空同步历史记录。返回 `{"message": "同步历史已清空"}`。
 
 ### STRM 文件列表
 
@@ -133,9 +173,13 @@ Content-Type: application/json
   "proxy_host": "0.0.0.0",
   "proxy_port": 8097,
   "pin_rules": "",
+  "redirect_mode": true,
   "external_player_url": false,
   "external_player_list": []
 }
+```
+
+- `redirect_mode`: `true` 为 302 重定向模式（客户端直连 CDN），`false` 为流式代理模式（服务端中转）
 ```
 
 ```

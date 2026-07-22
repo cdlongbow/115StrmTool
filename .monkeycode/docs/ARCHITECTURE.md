@@ -79,18 +79,19 @@ MoviePilot-Windows/
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
-**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向到 115 CDN 媒体直链
+**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向（默认）或流式代理两种模式，将 115 CDN 媒体流返回客户端
 **位置**: `combined/proxy_app.py`
-**关键文件**: `proxy_app.py`（1434 行，最大模块）
+**关键文件**: `proxy_app.py`（最大模块）
 **依赖**: `external_players`, `config_manager`, `redirect_service`
 **被依赖**: Emby 客户端（浏览器/桌面）
+**配置项**: `redirect_mode` — `true` 为 302 直链模式，`false` 为流式代理模式
 
 ### 115 跳转服务（端口 3333）
-**目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API
+**目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）
 **位置**: `combined/redirect_service.py` + `p115_client_wrapper.py`
 **关键文件**: `redirect_service.py`, `p115_client_wrapper.py`
 **依赖**: `p115rsacipher`, `p115client`
-**被依赖**: `strm_generator`（写入 STRM 时使用此服务地址）
+**被依赖**: `strm_generator`（写入 STRM 时使用此服务地址），`proxy_app`（播放时解析跳转）
 
 ### STRM 文件生成器
 **目的**: 遍历 115 网盘目录，为媒体文件生成 STRM 占位文件
@@ -155,10 +156,15 @@ sequenceDiagram
     Proxy->>EmbySrv: POST /Items/{id}/PlaybackInfo
     EmbySrv-->>Proxy: MediaSources[].Path = STRM URL
     Proxy->>Proxy: 检测 STRM / 三级缓存查询
-    Proxy->>Proxy: 跟随 STRM 重定向链解析 CDN URL
-    Proxy-->>Client: 302 Location: CDN URL
-    Client-->>CDN: GET CDN URL（带 Range/UA）
-    CDN-->>Client: 媒体数据
+    alt redirect_mode = true
+        Proxy->>Proxy: 手动解析 Location 头（不请求 CDN）
+        Proxy-->>Client: 302 Location: CDN URL
+        Client-->>CDN: GET CDN URL（带 Range/UA）
+        CDN-->>Client: 媒体数据
+    else redirect_mode = false
+        Proxy->>Proxy: 流式拉取 CDN 数据
+        Proxy-->>Client: 分块传输媒体数据
+    end
 ```
 
 ### STRM 生成流程
@@ -187,13 +193,16 @@ sequenceDiagram
 ## 设计决策
 
 ### 302 重定向 + crossOrigin 拦截
-当前 `_try_media_response` 解析 STRM URL 后返回 302 重定向，让客户端直连 115 CDN。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截。通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。流式代理 `_stream_from_cdn` 保留作为备选方案。
+`_try_media_response` 解析 STRM URL 后，根据 `redirect_mode` 配置决定返回 302 重定向或流式代理。302 模式下客户端直连 115 CDN，媒体流量不经过代理服务器。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截，通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。流式代理 `_stream_from_cdn` 保留作为备选方案。
+
+### 手动解析 Location 头（302 模式）
+`_resolve_redirect` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应 `Location` 头获取 CDN URL，避免实际请求 CDN。这是为了防止 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL，导致客户端后续 GET Range 请求失败。
 
 ### UA 绑定的加密下载 API
 115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115rsacipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。
 
 ### PlaybackInfo 强制 DirectPlay
-Emby 默认可能对远程媒体源启用转码（HLS），导致 302 直链失效。代理拦截 `/Items/{item_id}/PlaybackInfo`，检测 STRM 媒体源后将 `SupportsTranscoding` 设为 false，强制 DirectPlay。
+Emby 默认可能对远程媒体源启用转码（HLS），导致 302 直链失效。代理拦截 `/Items/{item_id}/PlaybackInfo`，检测 STRM 媒体源后将 `SupportsTranscoding` 设为 false，强制 DirectPlay。同时替换 `MediaSources[].Path` 为 CDN 直链，兼容使用 `Path` 而非 `DirectStreamUrl` 播放的客户端（如王二小放牛娃）。
 
 ### JS 修补与 crossOrigin 拦截
 代理注入两个脚本到 Emby Web UI：
