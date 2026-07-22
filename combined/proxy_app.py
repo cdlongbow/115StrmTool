@@ -656,14 +656,15 @@ def create_app(
         """
         构建 302 重定向响应，让客户端直连 CDN
 
-        不加 Content-Disposition 头，避免浏览器将视频播放误当下载
+        URL 中的非 ASCII 字符做百分号编码，避免某些 HTTP 客户端无法解析
 
         :param url (str): CDN 直链 URL
         :param request (Request): 原始客户端请求
 
         :return RedirectResponse: 302 重定向响应
         """
-        return RedirectResponse(url=url, status_code=302)
+        encoded_url = quote(url, safe=":/?#@!$&'()*+,;=%")
+        return RedirectResponse(url=encoded_url, status_code=302)
 
     async def _try_media_response(
         item_id: str, api_key: str | None, request: Request
