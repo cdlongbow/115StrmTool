@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2026-07-22]
 
 1. **文件遍历改用 Android API（proapi.115.com）**
     `_iter_files_115` 从手动分页+递归的 `fs_files`（webapi.115.com）改为 `iter_files_with_path`（Android API, proapi.115.com），避免 webapi 域名被风控返回 405 导致同步失败。`browse_directory` 同步切换为 `fs_files_app` 且字段适配。
@@ -8,35 +8,32 @@
     `_build_302_redirect` 对 Location URL 中的非 ASCII 字符做百分号编码，避免某些 HTTP 客户端无法解析含中文的 CDN 直链，同时保留签名查询串不变。
 3. **升级 p115client 到 0.0.9.5.2**
     从 0.0.9.4.6.1 升级，依赖无 breaking change。
+4. **新增 302 直链模式开关**
+    管理界面 Emby 配置新增"302 直链模式"开关，默认关闭。关闭时走老的流式代理，开启时走 302 直链。
 
-## [2026-07-22]
+5. **修复 302 直链模式下拖拽进度卡顿问题**
+    `_resolve_redirect` 改用 `follow_redirects=False` + 手动解析 `Location` 头，避免实际请求 CDN。消除 HEAD 方式请求 CDN 导致的方法差异问题（CDN 可能拒绝 HEAD 或返回方法绑定签名 URL）。
 
-1. **新增 302 直链模式开关**
-   管理界面 Emby 配置新增"302 直链模式"开关，默认关闭。关闭时走老的流式代理，开启时走 302 直链。
+6. **修复部分客户端（如王二小放牛娃）直链播放失败问题**
+    在 PlaybackInfo 拦截时，当 `redirect_mode=True`，将 `Path` 替换为已解析的 CDN 直链。兼容使用 `Path`（而非 `DirectStreamUrl`）播放的客户端。
 
-2. **修复 302 直链模式下拖拽进度卡顿问题**
-   `_resolve_redirect` 改用 `follow_redirects=False` + 手动解析 `Location` 头，避免实际请求 CDN。消除 HEAD 方式请求 CDN 导致的方法差异问题（CDN 可能拒绝 HEAD 或返回方法绑定签名 URL）。
+7. **修复 _resolve_redirect 的 h11 协议错误**
+    `_build_forward_headers` 排除 `content-length` 头，避免 HEAD 请求携带 POST 的 `Content-Length` 导致 `h11._util.LocalProtocolError: Too little data for declared Content-Length`。
 
-3. **修复部分客户端（如王二小放牛娃）直链播放失败问题**
-   在 PlaybackInfo 拦截时，当 `redirect_mode=True`，将 `Path` 替换为已解析的 CDN 直链。兼容使用 `Path`（而非 `DirectStreamUrl`）播放的客户端。
+8. **全量同步后清理残留记录（默认关闭，需手动开启）**
+    全量同步完成后，自动检测并标记数据库中已删除的文件的记录为 `deleted`，同时删除磁盘上对应的残留 STRM 文件。默认关闭，需在配置中设置 `cleanup_deleted_strm: true` 开启。
 
-4. **修复 _resolve_redirect 的 h11 协议错误**
-   `_build_forward_headers` 排除 `content-length` 头，避免 HEAD 请求携带 POST 的 `Content-Length` 导致 `h11._util.LocalProtocolError: Too little data for declared Content-Length`。
+9. **同步锁防止并发冲突**
+    全量同步和增量同步添加 `threading.RLock` 互斥锁，防止用户快速多次触发同步导致数据混乱。
 
-5. **全量同步后清理残留记录（默认关闭，需手动开启）**
-   全量同步完成后，自动检测并标记数据库中已删除的文件的记录为 `deleted`，同时删除磁盘上对应的残留 STRM 文件。默认关闭，需在配置中设置 `cleanup_deleted_strm: true` 开启。
+10. **同步进度实时显示**
+    同步页面新增进度条，实时显示扫描进度和当前状态。后端每 1 秒轮询一次进度，同步完成后自动刷新同步记录。
 
-6. **同步锁防止并发冲突**
-   全量同步和增量同步添加 `threading.RLock` 互斥锁，防止用户快速多次触发同步导致数据混乱。
+11. **批量写入加显式事务**
+    `batch_add_files` 使用 `BEGIN/COMMIT/ROLLBACK` 显式事务，确保数据库写入原子性，避免部分写入导致数据不一致。
 
-7. **同步进度实时显示**
-   同步页面新增进度条，实时显示扫描进度和当前状态。后端每 1 秒轮询一次进度，同步完成后自动刷新同步记录。
-
-8. **批量写入加显式事务**
-   `batch_add_files` 使用 `BEGIN/COMMIT/ROLLBACK` 显式事务，确保数据库写入原子性，避免部分写入导致数据不一致。
-
-9. **取消同步实时反馈**
-   点击取消同步后，进度条显示"正在取消..."，取消完成后自动弹出提示。
+12. **取消同步实时反馈**
+    点击取消同步后，进度条显示"正在取消..."，取消完成后自动弹出提示。
 
 ## [2026-07-21]
 
