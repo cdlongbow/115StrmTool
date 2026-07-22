@@ -86,7 +86,7 @@ async def browse_directory(pid: str = "0", path: str = ""):
         items = []
         data = resp.get("data") or resp.get("Data") or []
         for item in data:
-            if item.get("fc") == 0:  # directory
+            if str(item.get("fc", "")) == "0":  # directory
                 items.append({
                     "id": str(item.get("fid", "")),
                     "name": item.get("fn", ""),
