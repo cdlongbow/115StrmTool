@@ -21,6 +21,7 @@ class ConfigUpdateRequest(BaseModel):
 
 _restart_emby_callback: Callable = None
 _emby_status = {"running": False}
+_restart_p115_callback: Callable = None
 
 
 # ── 全局配置 ──
@@ -41,12 +42,20 @@ async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
     if updates:
         config_manager.update(updates)
         logger.info("配置已更新: %s", updates)
+    if req.p115 is not None and "cookie" in req.p115 and _restart_p115_callback:
+        _restart_p115_callback()
+        logger.info("P115 Cookie 已更新，客户端已重建")
     return config_manager.get()
 
 
 def set_emby_restart_callback(cb: Callable):
     global _restart_emby_callback
     _restart_emby_callback = cb
+
+
+def set_p115_restart_callback(cb: Callable):
+    global _restart_p115_callback
+    _restart_p115_callback = cb
 
 
 def set_emby_status(running: bool):

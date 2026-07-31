@@ -15,6 +15,7 @@ from admin_api import (
     set_emby_status,
     set_emby_restart_callback,
     set_p115_client_ref,
+    set_p115_restart_callback,
     set_p115_status,
 )
 
@@ -171,6 +172,13 @@ def _start_p115():
         set_p115_status(False)
 
 
+def _restart_p115():
+    logger.info("正在重启 P115 服务...")
+    _stop_p115_redirect()
+    config_manager.load()
+    _start_p115()
+
+
 # ── 管理服务 ──
 
 
@@ -242,6 +250,7 @@ def main():
 
     config = config_manager.get()
     set_emby_restart_callback(_restart_emby)
+    set_p115_restart_callback(_restart_p115)
 
     logger.info("管理界面: http://%s:%s/", config.get("admin_host"), config.get("admin_port"))
 
