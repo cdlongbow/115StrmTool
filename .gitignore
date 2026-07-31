@@ -183,3 +183,6 @@ data/
 
 # Runtime data
 data/
+
+# Old wheel backups
+combined/wheels_backup_old/
