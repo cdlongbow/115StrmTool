@@ -81,15 +81,17 @@ async def browse_directory(pid: str = "0", path: str = ""):
     client = get_client()
     try:
         from p115client import check_response
+        from p115client.tool.attr import normalize_attr
         resp = client._client.fs_files_app({"cid": pid, "limit": 1000})
         check_response(resp)
         items = []
         data = resp.get("data") or resp.get("Data") or []
-        for item in data:
-            if str(item.get("fc", "")) == "0":  # directory
+        for raw_item in data:
+            item = normalize_attr(raw_item)
+            if item["is_dir"]:
                 items.append({
-                    "id": str(item.get("fid", "")),
-                    "name": item.get("fn", ""),
+                    "id": str(item["id"]),
+                    "name": item["name"],
                     "is_dir": True,
                 })
         if not items:
