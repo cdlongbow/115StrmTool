@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
-from utils import AsyncTtlCache
+from utils import AsyncKeyLock, AsyncTtlCache
 
 CACHE_TTL_DEFAULT = 90
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
@@ -21,6 +21,7 @@ class RedirectService:
     def __init__(self, client: P115ClientWrapper):
         self._client = client
         self._cache = AsyncTtlCache(ttl=CACHE_TTL_DEFAULT, max_size=1000)
+        self._key_lock = AsyncKeyLock()
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
@@ -81,40 +82,41 @@ class RedirectService:
             )
 
         ckey = self._cache_key(pickcode, user_agent)
-        async with self._cache.lock:
-            cached = self._cache.get(ckey)
-        if cached:
-            cached_url, cached_fname = cached
+        # 缓存击穿防护：同一 pickcode+UA 并发回源只执行一次，
+        # 其余请求在锁内二次检查缓存后直接复用结果
+        async with self._key_lock.acquire(ckey):
+            async with self._cache.lock:
+                cached = self._cache.get(ckey)
+            if cached:
+                cached_url, cached_fname = cached
+                logger.info(
+                    "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
+                    pickcode, cached_fname, client_ip,
+                )
+                return self._build_302(cached_url, pickcode, cached_fname)
+
+            result = await asyncio.to_thread(
+                self._client.get_download_url_with_ua, pickcode, user_agent
+            )
+            if not result:
+                logger.error(
+                    "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
+                    pickcode, client_ip,
+                )
+                return JSONResponse(
+                    status_code=502,
+                    content={"code": -1, "msg": "Failed to resolve download URL", "data": None},
+                )
+
+            download_url, file_name, expires_time = result
+            ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
+            async with self._cache.lock:
+                self._cache.put(ckey, (download_url, file_name), ttl=ttl)
             logger.info(
-                "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
-                pickcode, cached_fname, client_ip,
+                "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
+                pickcode, file_name, ttl, client_ip,
             )
-            return self._build_302(cached_url, pickcode, cached_fname)
-
-        result = await asyncio.to_thread(
-            self._client.get_download_url_with_ua, pickcode, user_agent
-        )
-        if not result:
-            logger.error(
-                "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
-                pickcode, client_ip,
-            )
-            return JSONResponse(
-                status_code=502,
-                content={"code": -1, "msg": "Failed to resolve download URL", "data": None},
-            )
-
-        download_url, file_name, expires_time = result
-        ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
-        async with self._cache.lock:
-            self._cache.ttl = ttl
-            self._cache.put(ckey, (download_url, file_name))
-            self._cache.ttl = CACHE_TTL_DEFAULT
-        logger.info(
-            "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
-            pickcode, file_name, ttl, client_ip,
-        )
-        return self._build_302(download_url, pickcode, file_name)
+            return self._build_302(download_url, pickcode, file_name)
 
     def _build_302(self, url: str, pickcode: str, file_name: str = "") -> Response:
         if not file_name:

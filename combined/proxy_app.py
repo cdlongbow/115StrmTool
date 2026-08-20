@@ -6,7 +6,7 @@ from time import monotonic
 from typing import Any, List, Tuple
 from urllib.parse import quote, urlparse
 
-from utils import AsyncTtlCache
+from utils import AsyncKeyLock, AsyncTtlCache
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -483,6 +483,7 @@ def create_app(
         app.state.playback_url_cache = AsyncTtlCache(ttl=PLAYBACK_URL_CACHE_TTL_SECONDS, max_size=PLAYBACK_URL_CACHE_MAX_SIZE)
         app.state.strm_source_cache = AsyncTtlCache(ttl=PLAYBACK_STRM_CACHE_TTL_SECONDS, max_size=500)
         app.state.playback_user_cache = AsyncTtlCache(ttl=PLAYBACK_USER_CACHE_TTL_SECONDS, max_size=500)
+        app.state.playback_url_key_lock = AsyncKeyLock()
         yield
         await app.state.http_client_follow.aclose()
         await app.state.http_client_no_follow.aclose()
@@ -706,70 +707,74 @@ def create_app(
             _header_hash(request),
         )
         cache = request.app.state.playback_url_cache
+        key_lock = request.app.state.playback_url_key_lock
 
-        # 第二级：已解析 URL 缓存 — 命中则直接 302 跳转，跳过后续查询
-        cached_final_url = None
-        async with cache.lock:
-            cached_final_url = cache.get(cache_key)
-        if cached_final_url is not None:
-            logger.info("302 直链: item_id=%s -> %s", item_id, cached_final_url)
-            return _build_302_redirect(cached_final_url, request)
+        # 缓存击穿防护：同一 item_id+MediaSourceId 并发解析只执行一次，
+        # 其余请求在锁内二次检查缓存后直接复用结果
+        async with key_lock.acquire(cache_key):
+            # 第二级：已解析 URL 缓存 — 命中则直接 302 跳转，跳过后续查询
+            cached_final_url = None
+            async with cache.lock:
+                cached_final_url = cache.get(cache_key)
+            if cached_final_url is not None:
+                logger.info("302 直链: item_id=%s -> %s", item_id, cached_final_url)
+                return _build_302_redirect(cached_final_url, request)
 
-        http_path = None
+            http_path = None
 
-        # 第三级：PlaybackInfo API 实时查询 — 从 Emby 解析媒体源路径
-        if api_key:
-            url = f"{emby_host}/Items/{item_id}/PlaybackInfo?X-Emby-Token={api_key}"
-            client_follow = request.app.state.http_client_follow
-            try:
-                resp = await client_follow.post(url, timeout=10)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception:
-                logger.warning(
-                    "PlaybackInfo 请求失败: item_id=%s", item_id, exc_info=True
-                )
-                data = {}
-            for source in data.get("MediaSources", []):
-                sid = source.get("Id", "")
-                if media_source_id and sid != media_source_id:
-                    continue
-                path = source.get("Path", "")
-                path = _apply_pin_rules(path, pin_rules)
-                if path.startswith(("http://", "https://")):
-                    http_path = path
-                    break
+            # 第三级：PlaybackInfo API 实时查询 — 从 Emby 解析媒体源路径
+            if api_key:
+                url = f"{emby_host}/Items/{item_id}/PlaybackInfo?X-Emby-Token={api_key}"
+                client_follow = request.app.state.http_client_follow
+                try:
+                    resp = await client_follow.post(url, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception:
+                    logger.warning(
+                        "PlaybackInfo 请求失败: item_id=%s", item_id, exc_info=True
+                    )
+                    data = {}
+                for source in data.get("MediaSources", []):
+                    sid = source.get("Id", "")
+                    if media_source_id and sid != media_source_id:
+                        continue
+                    path = source.get("Path", "")
+                    path = _apply_pin_rules(path, pin_rules)
+                    if path.startswith(("http://", "https://")):
+                        http_path = path
+                        break
 
-        # 第四级：STRM 源缓存 — PlaybackInfo 未命中时使用
-        if not http_path:
-            strm_cache = request.app.state.strm_source_cache
-            async with strm_cache.lock:
-                sources_map = strm_cache.get(item_id)
-            if sources_map:
-                if media_source_id and media_source_id in sources_map:
-                    http_path = sources_map[media_source_id]
-                elif sources_map:
-                    http_path = next(iter(sources_map.values()))
-                if http_path:
-                    logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
+            # 第四级：STRM 源缓存 — PlaybackInfo 未命中时使用
+            if not http_path:
+                strm_cache = request.app.state.strm_source_cache
+                async with strm_cache.lock:
+                    sources_map = strm_cache.get(item_id)
+                if sources_map:
+                    if media_source_id and media_source_id in sources_map:
+                        http_path = sources_map[media_source_id]
+                    elif sources_map:
+                        http_path = next(iter(sources_map.values()))
+                    if http_path:
+                        logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
 
-        if not http_path:
-            return None
+            if not http_path:
+                return None
 
-        # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
-        # 使用 follow_redirects=False 避免实际请求 CDN
-        client_no_follow = request.app.state.http_client_no_follow
-        fwd_headers = _build_forward_headers(request)
-        final_url = await _resolve_redirect(
-            client_no_follow, http_path, fwd_headers, user_id
-        )
+            # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
+            # 使用 follow_redirects=False 避免实际请求 CDN
+            client_no_follow = request.app.state.http_client_no_follow
+            fwd_headers = _build_forward_headers(request)
+            final_url = await _resolve_redirect(
+                client_no_follow, http_path, fwd_headers, user_id
+            )
 
-        # 写入已解析 URL 缓存（LRU 淘汰）
-        async with cache.lock:
-            cache.put(cache_key, final_url)
+            # 写入已解析 URL 缓存（LRU 淘汰）
+            async with cache.lock:
+                cache.put(cache_key, final_url)
 
-        logger.info("302 直链: item_id=%s -> %s", item_id, final_url)
-        return _build_302_redirect(final_url, request)
+            logger.info("302 直链: item_id=%s -> %s", item_id, final_url)
+            return _build_302_redirect(final_url, request)
 
     for route in MEDIA_ROUTES:
         app.api_route(route, methods=["GET", "HEAD"], response_model=None)(

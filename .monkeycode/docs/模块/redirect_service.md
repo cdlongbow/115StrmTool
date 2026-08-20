@@ -47,8 +47,10 @@ redirect_service.py
 - TTL = CDN URL 过期时间 - 300 秒（留安全余量），上限 90 秒
 - 最多 1000 个条目，超出时淘汰最旧的
 - 每次写缓存前清理已过期的条目
+- **缓存击穿防护**：对同一 `pickcode:UA_HASH` 的并发请求，仅第一个执行回源获取下载地址（`AsyncKeyLock` 按 key 互斥），其余请求在锁内二次检查缓存后直接复用结果；锁在无使用者时自动清理
 
 ## 依赖
 
 - **p115_client_wrapper** — 加密下载 API
+- **utils** — `AsyncTtlCache`、`AsyncKeyLock`（缓存击穿防护）
 - **logger** — 日志

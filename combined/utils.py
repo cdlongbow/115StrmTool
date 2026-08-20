@@ -1,10 +1,11 @@
 """
-通用工具模块：重试机制、异步 TTL 缓存
+通用工具模块：重试机制、异步 TTL 缓存、按 key 互斥锁
 """
 import asyncio
 from asyncio import Lock
+from contextlib import asynccontextmanager
 from time import monotonic
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from logger import logger
 
@@ -90,9 +91,9 @@ class AsyncTtlCache:
         self._evict_key(key)
         return None
 
-    def put(self, key: Any, value: Any):
+    def put(self, key: Any, value: Any, ttl: Optional[float] = None):
         now = monotonic()
-        expiry = now + self._ttl
+        expiry = now + (ttl if ttl is not None else self._ttl)
         if key not in self._data:
             self._order.append(key)
         self._data[key] = (value, expiry)
@@ -124,3 +125,53 @@ class AsyncTtlCache:
         for k in expired:
             self._data.pop(k, None)
         self._order[:] = [k for k in self._order if k not in frozenset(expired)]
+
+
+class AsyncKeyLock:
+    """
+    按 key 隔离的异步互斥锁，无使用者时自动清理
+
+    用于防止缓存击穿：同一 key 的并发请求只允许一个执行耗时的回源逻辑，
+    其余请求在锁内二次检查缓存后直接复用结果
+
+    用法:
+        lock = AsyncKeyLock()
+        async with lock.acquire("some-key"):
+            ...
+    """
+
+    def __init__(self):
+        self._locks: Dict[Any, Tuple[Lock, int]] = {}
+        self._guard = Lock()
+
+    @asynccontextmanager
+    async def acquire(self, key: Any) -> AsyncIterator[None]:
+        """
+        获取指定 key 的互斥锁，并在无使用者时清理该锁
+
+        :param key (Any): 锁的隔离键
+
+        :yields None: 获取互斥锁后的执行上下文
+        """
+        async with self._guard:
+            lock_info = self._locks.get(key)
+            if lock_info:
+                lock, users = lock_info
+            else:
+                lock, users = Lock(), 0
+            self._locks[key] = (lock, users + 1)
+
+        acquired = False
+        try:
+            await lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                lock.release()
+            async with self._guard:
+                current_lock, users = self._locks[key]
+                if users == 1:
+                    self._locks.pop(key)
+                else:
+                    self._locks[key] = (current_lock, users - 1)

@@ -106,8 +106,11 @@ _playback_info_strm_direct_play()
 | playback_user_cache | 全局 | 300s | 用户关联缓存 |
 | redirect_url_cache | 全局 | 600s | 解析后的 CDN 直链缓存 |
 
+`playback_url_cache` 的写入由 `playback_url_key_lock`（按 `item_id + MediaSourceId + 用户 + 请求头` 隔离的互斥锁）保护，同一媒体源并发播放时仅第一个请求执行 PlaybackInfo 回源与重定向链解析，其余请求复用缓存结果。
+
 ## 依赖
 
 - **external_players** — 外部播放器注入
 - **config_manager** — pin_rules 解析
+- **utils** — `AsyncTtlCache`、`AsyncKeyLock`（缓存击穿防护）
 - **logger** — 日志
