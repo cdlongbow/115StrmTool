@@ -364,6 +364,7 @@ class StrmGenerator:
                     existing_map: Dict[str, Dict] = {}
                     for f in db.get_active_files_by_parent(pan_path):
                         existing_map[f["pickcode"]] = {
+                            "pickcode": f["pickcode"],
                             "sha1": f["sha1"],
                             "pan_path": f["pan_path"],
                             "local_strm_path": f["local_strm_path"],
@@ -465,6 +466,26 @@ class StrmGenerator:
                                     "parent_id": pan_path,
                                 })
                                 total_changed += 1
+                            elif existing_map[pickcode]["pan_path"] != pan_full_path:
+                                # 115 中文件被移动或重命名：pickcode 与 sha1 未变但路径已变
+                                local_strm_path_orig = self._to_local_path(
+                                    pan_full_path, pan_path, local_path
+                                )
+                                local_strm_path = local_strm_path_orig.with_suffix(".strm")
+                                self._migrate_strm_file(
+                                    existing_map[pickcode], local_strm_path
+                                )
+                                all_new_files.append({
+                                    "pickcode": pickcode,
+                                    "file_name": name,
+                                    "file_size": attr.get("size", 0),
+                                    "file_type": ext,
+                                    "pan_path": pan_full_path,
+                                    "local_strm_path": str(local_strm_path),
+                                    "sha1": sha1,
+                                    "parent_id": pan_path,
+                                })
+                                total_changed += 1
                             else:
                                 total_unchanged += 1
                             processed = total_new + total_changed + total_unchanged
@@ -549,6 +570,33 @@ class StrmGenerator:
     def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Path:
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
         return sanitize_path_parts(Path(local_strm_dir) / rel_path)
+
+    def _migrate_strm_file(self, old_entry: Dict[str, str], new_strm_path: Path):
+        """
+        迁移本地 STRM 文件到新路径（115 中文件被移动或重命名时）
+
+        优先移动原 STRM 文件以保留内容；移动失败时按现有内容规则重新生成
+
+        :param old_entry (Dict): 数据库中旧文件记录
+        :param new_strm_path (Path): 新 STRM 文件路径
+        """
+        old_strm_path = Path(old_entry["local_strm_path"])
+        if old_strm_path != new_strm_path:
+            new_strm_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if old_strm_path.exists():
+                    if new_strm_path.exists():
+                        new_strm_path.unlink()
+                    old_strm_path.replace(new_strm_path)
+                    logger.info(
+                        "已迁移 STRM: %s -> %s", old_strm_path, new_strm_path
+                    )
+                    return
+            except OSError as e:
+                logger.warning(
+                    "迁移 STRM 失败 %s -> %s: %s", old_strm_path, new_strm_path, e
+                )
+        self._ensure_strm_file(new_strm_path, old_entry.get("pickcode", ""))
 
     def _ensure_strm_file(self, strm_path: Path, pickcode: str, force: bool = False):
         if not force and self._overwrite_mode == "never" and strm_path.exists():

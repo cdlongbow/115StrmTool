@@ -134,6 +134,57 @@ class TestIncrementalSync:
         assert r["unchanged"] == 1, f"r={r}"
         assert sp.read_text(encoding="utf-8") == "keep"
 
+    def test_moved_rename(self, gen, db):
+        _reset_db(db)
+        old_sp = tmp_dir / "old.strm"
+        old_sp.write_text("http://127.0.0.1:8100/redirect?pickcode=move001", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "move001", "file_name": "movie.mp4", "file_size": 100,
+            "file_type": ".mp4", "pan_path": "/test/old/movie.mp4",
+            "local_strm_path": str(old_sp), "sha1": "sha_same", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "movie.mp4", "is_dir": False, "pickcode": "move001",
+             "pick_code": "move001", "sha1": "sha_same", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/newdir/movie.mp4"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["changed"] == 1, f"r={r}"
+        assert r["unchanged"] == 0
+        assert not old_sp.exists(), "旧 STRM 应被迁移移除"
+        new_sp = tmp_dir / "newdir" / "movie.strm"
+        assert new_sp.exists(), f"新 STRM 应存在: {new_sp}"
+        assert new_sp.read_text(encoding="utf-8") == "http://127.0.0.1:8100/redirect?pickcode=move001"
+        rec = db.get_file_by_pickcode("move001")
+        assert rec is not None
+        assert rec["pan_path"] == "/test/newdir/movie.mp4"
+        assert rec["local_strm_path"] == str(new_sp)
+
+    def test_renamed_file(self, gen, db):
+        _reset_db(db)
+        old_sp = tmp_dir / "oldname.strm"
+        old_sp.write_text("http://127.0.0.1:8100/redirect?pickcode=ren001", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "ren001", "file_name": "oldname.mp4", "file_size": 100,
+            "file_type": ".mp4", "pan_path": "/test/oldname.mp4",
+            "local_strm_path": str(old_sp), "sha1": "sha_ren", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "newname.mp4", "is_dir": False, "pickcode": "ren001",
+             "pick_code": "ren001", "sha1": "sha_ren", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/newname.mp4"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["changed"] == 1, f"r={r}"
+        assert not old_sp.exists(), "旧 STRM 应被迁移移除"
+        new_sp = tmp_dir / "newname.strm"
+        assert new_sp.exists(), f"新 STRM 应存在: {new_sp}"
+        rec = db.get_file_by_pickcode("ren001")
+        assert rec["file_name"] == "newname.mp4"
+        assert rec["local_strm_path"] == str(new_sp)
+
     def test_deleted(self, gen, db):
         _reset_db(db)
         sp = tmp_dir / "dead.strm"

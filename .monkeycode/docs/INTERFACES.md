@@ -49,7 +49,7 @@ Content-Type: application/json
 {"path_mappings": {"115_path": "local_path", ...}}
 ```
 
-启动增量同步。对比上次同步 SHA1，仅处理新增/变更/删除文件。返回 `{"message": "同步任务已启动"}`。
+启动增量同步。对比上次同步 SHA1，处理新增/变更/删除文件，并自动迁移网盘内被移动或重命名的文件对应的本地 STRM。返回 `{"message": "同步任务已启动"}`。
 
 ```
 POST /api/sync/reset-baseline

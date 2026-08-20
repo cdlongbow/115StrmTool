@@ -30,6 +30,8 @@ http://<redirect_host>:3333/api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<
 4. 文件元数据（pickcode、大小、sha1 等）记录到 SQLite 数据库
 5. Emby 扫描本地路径时自动发现 STRM 文件并入库
 
+增量同步在对比 SHA1 的基础上，还会识别网盘内被移动或重命名的文件（pickcode 与 SHA1 未变但路径已变），自动把本地 STRM 迁移到新位置并更新数据库记录，避免残留旧路径等待全量同步。
+
 ## 播放流程
 
 1. Emby 客户端请求播放 STRM 对应的媒体条目
