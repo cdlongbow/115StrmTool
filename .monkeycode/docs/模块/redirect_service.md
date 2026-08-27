@@ -15,8 +15,7 @@ redirect_service.py
 │   ├── _extract_pickcode_from_path() # 从路径兜底提取
 │   ├── _cache_key()          # 缓存键构建（pickcode:UA_HASH）
 │   ├── _ua_hash()            # UA 的 SHA256 摘要
-│   ├── _get_cached() / _set_cache() # 缓存读写
-│   └── clear_cache()         # 缓存清理
+│   └── _get_cached() / _set_cache() # 缓存读写
 ```
 
 ## 关键方法
@@ -30,7 +29,7 @@ redirect_service.py
 5. 写入缓存（TTL = expires_time - 300，max 90s）
 6. 返回 302 重定向响应
 
-**重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（SDK 优先 + 加密 API 4 次阶梯重试 + 405 自适应切换），保持跳转服务简洁。
+**重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（加密 API 优先 + 4 次阶梯重试 + 405 自适应切换 SDK），保持跳转服务简洁。
 
 ## 路由
 

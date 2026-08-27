@@ -152,7 +152,3 @@ class RedirectService:
         if path and len(path) == 17 and path.isalnum():
             return path
         return None
-
-    def clear_cache(self):
-        self._cache.clear()
-        logger.info("302 缓存已清理")

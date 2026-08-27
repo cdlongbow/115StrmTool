@@ -1,52 +1,10 @@
 """
-通用工具模块：重试机制、异步 TTL 缓存、按 key 互斥锁
+通用工具模块：异步 TTL 缓存、按 key 互斥锁
 """
-import asyncio
 from asyncio import Lock
 from contextlib import asynccontextmanager
 from time import monotonic
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
-
-from logger import logger
-
-
-async def retry_with_backoff(
-    fn: Callable,
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 30.0,
-    backoff: float = 2.0,
-    exc_types: tuple = (Exception,),
-) -> Any:
-    """
-    带指数退避的异步重试
-
-    :param fn: 异步可调用对象
-    :param max_retries: 最大重试次数
-    :param base_delay: 初始延迟（秒）
-    :param max_delay: 最大延迟（秒）
-    :param backoff: 退避倍数
-    :param exc_types: 可捕获的异常类型元组
-
-    :return: fn 的返回值
-
-    :raises: 最后一次异常
-    """
-    last_exc = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except exc_types as e:
-            last_exc = e
-            if attempt < max_retries:
-                delay = min(base_delay * (backoff ** attempt), max_delay)
-                logger.warning(
-                    "重试 %s/%s (%s) 失败: %s，%.1fs 后重试",
-                    attempt + 1, max_retries + 1,
-                    getattr(fn, "__name__", "task"), e, delay,
-                )
-                await asyncio.sleep(delay)
-    raise last_exc
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 
 class AsyncTtlCache:

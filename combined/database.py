@@ -1,8 +1,6 @@
 import sqlite3
-import json
 import sys
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -65,27 +63,6 @@ class Database:
                 status TEXT DEFAULT 'running',
                 error_message TEXT DEFAULT ''
             );
-
-            CREATE TABLE IF NOT EXISTS share_transfer_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                share_url TEXT NOT NULL,
-                source_path TEXT DEFAULT '',
-                target_path TEXT DEFAULT '',
-                status TEXT DEFAULT 'pending',
-                file_count INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now','localtime'))
-            );
-
-            CREATE TABLE IF NOT EXISTS offline_tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL,
-                name TEXT DEFAULT '',
-                status TEXT DEFAULT 'pending',
-                progress INTEGER DEFAULT 0,
-                file_size INTEGER DEFAULT 0,
-                save_path TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now','localtime'))
-            );
         """)
         conn.commit()
         conn.close()
@@ -124,23 +101,9 @@ class Database:
             self.conn.rollback()
             raise
 
-    def remove_file_by_pan_path(self, pan_path: str):
-        self.conn.execute(
-            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE pan_path=?",
-            (pan_path,),
-        )
-        self.conn.commit()
-
     def get_file_by_pickcode(self, pickcode: str) -> Optional[Dict]:
         cursor = self.conn.execute(
             "SELECT * FROM files WHERE pickcode=? AND status='active'", (pickcode,)
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
-
-    def get_file_by_path(self, pan_path: str) -> Optional[Dict]:
-        cursor = self.conn.execute(
-            "SELECT * FROM files WHERE pan_path=? AND status='active'", (pan_path,)
         )
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -192,22 +155,6 @@ class Database:
         self.conn.execute("VACUUM")
         self.conn.commit()
 
-    def add_share_transfer(self, share_url: str, target_path: str) -> int:
-        cursor = self.conn.execute(
-            "INSERT INTO share_transfer_history (share_url, target_path) VALUES (?, ?)",
-            (share_url, target_path),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
-    def add_offline_task(self, url: str, name: str, save_path: str) -> int:
-        cursor = self.conn.execute(
-            "INSERT INTO offline_tasks (url, name, save_path) VALUES (?, ?, ?)",
-            (url, name, save_path),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
     def get_active_files_by_parent(self, parent_prefix: str) -> List[Dict]:
         """
         查询指定网盘目录及子目录下的活动文件记录
@@ -242,16 +189,6 @@ class Database:
         self.conn.execute(
             "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE pickcode=? AND status='active'",
             (pickcode,),
-        )
-        self.conn.commit()
-
-    def batch_mark_deleted(self, pickcodes: List[str]):
-        if not pickcodes:
-            return
-        cursor = self.conn.cursor()
-        cursor.executemany(
-            "UPDATE files SET status='deleted', updated_at=datetime('now','localtime') WHERE pickcode=? AND status='active'",
-            [(pc,) for pc in pickcodes],
         )
         self.conn.commit()
 

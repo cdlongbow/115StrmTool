@@ -1,14 +1,14 @@
 from typing import Any, Dict, List
-from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from fastapi import APIRouter
 
 import asyncio
 import threading
 
+from checkin_scheduler import checkin_scheduler
 from logger import logger
 from config_manager import config_manager
 from database import db
-from exceptions import ClientNotReadyError, ServiceError, BadRequestError
+from exceptions import ClientNotReadyError, ServiceError
 from p115_client_wrapper import P115ClientWrapper
 
 router = APIRouter(prefix="/api")
@@ -29,7 +29,7 @@ def get_client() -> P115ClientWrapper:
     return _client
 
 
-# ── 浏览目录 ──
+# ── 目录选择与状态 ──
 
 
 @router.get("/select-directory")
@@ -216,63 +216,7 @@ async def count_strm_files() -> Dict:
     return {"total": db.count_active_files()}
 
 
-@router.post("/strm/clear")
-async def clear_strm_files() -> Dict[str, Any]:
-    return {"success": True}  # deprecated: 前端已改为纯 UI 操作
-
-
-# ── 分享转存 ──
-
-
-class ShareTransferRequest(BaseModel):
-    share_url: str
-    target_path: str = "/"
-
-
-@router.post("/share/transfer")
-async def share_transfer(req: ShareTransferRequest) -> Dict:
-    client = get_client()
-    try:
-        db.add_share_transfer(req.share_url, req.target_path)
-        logger.info("分享转存请求已记录: %s -> %s", req.share_url, req.target_path)
-        return {"status": "added", "share_url": req.share_url, "target_path": req.target_path}
-    except Exception as e:
-        logger.error("添加分享转存失败: %s", e, exc_info=True)
-        raise ServiceError(str(e))
-
-
-# ── 离线下载 ──
-
-
-class OfflineTaskRequest(BaseModel):
-    url: str
-    name: str = ""
-    save_path: str = "/"
-
-
-@router.get("/offline/list")
-async def get_offline_tasks() -> List[Dict]:
-    cursor = db.conn.execute(
-        "SELECT * FROM offline_tasks ORDER BY id DESC LIMIT 50"
-    )
-    return [dict(r) for r in cursor.fetchall()]
-
-
-@router.post("/offline/add")
-async def add_offline_task(req: OfflineTaskRequest) -> Dict:
-    try:
-        db.add_offline_task(req.url, req.name, req.save_path)
-        logger.info("离线任务已添加: %s (%s)", req.name or req.url, req.save_path)
-        return {"status": "added", "url": req.url}
-    except Exception as e:
-        logger.error("添加离线任务失败: %s", e, exc_info=True)
-        raise ServiceError(str(e))
-
-
 # ── 签到 ──
-
-
-from checkin_scheduler import checkin_scheduler
 
 
 @router.get("/checkin/status")
@@ -321,5 +265,3 @@ async def check_qrcode(payload: dict) -> Dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ── 二维码登录 ──

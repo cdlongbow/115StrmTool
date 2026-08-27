@@ -2,7 +2,7 @@ from base64 import b64encode
 from json import loads as json_loads
 from time import monotonic, sleep
 from threading import Lock
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import Client, Limits, Timeout
@@ -62,9 +62,6 @@ class P115ClientWrapper:
             sleep(remaining)
         with self._cooldown_lock:
             self._last_call[endpoint] = monotonic()
-
-    def set_endpoint_cooldown(self, endpoint: str, cooldown: float):
-        self._cooldowns[endpoint] = cooldown
 
     def _init_client(self):
         if not self._cookie:
@@ -338,28 +335,6 @@ class P115ClientWrapper:
         if self._http_client:
             self._http_client.close()
             self._http_client = None
-
-    def list_files(self, cid: str = "0") -> list:
-        if not self._client:
-            return []
-        try:
-            self._wait_cooling("fs_files")
-            resp = self._client.fs_files({"cid": cid, "limit": 1000})
-            if isinstance(resp, dict) and "data" in resp:
-                return resp.get("data", [])
-            return []
-        except Exception as e:
-            logger.error("获取文件列表失败 cid=%s: %s", cid, e, exc_info=True)
-            return []
-
-    def get_filesystem(self) -> Optional[Any]:
-        if not self._client:
-            return None
-        try:
-            return self._client.get_fs()
-        except Exception as e:
-            logger.error("获取文件系统失败: %s", e, exc_info=True)
-            return None
 
     def user_points_sign(self) -> Optional[Dict]:
         if not self._client:
