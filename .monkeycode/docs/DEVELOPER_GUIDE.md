@@ -36,7 +36,7 @@ pip install fastapi>=0.110.0 uvicorn>=0.27.0 httpx[http2]>=0.27.0 websockets>=12
 python -c "import subprocess, pathlib; [subprocess.run(['pip', 'install', str(f)], check=True) for f in sorted(pathlib.Path('combined/wheels').glob('*.whl'))]"
 
 # （可选）安装桌面集成（仅 Windows）
-pip install pystray pywin32
+pip install pystray
 ```
 
 ### 运行

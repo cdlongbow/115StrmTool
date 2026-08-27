@@ -120,25 +120,6 @@ Content-Type: application/json
 
 轮询二维码扫描状态。返回 `{"status": "waiting|scanned|expired|success", "data": {...}}`。
 
-### 离线下载
-
-```
-GET /api/offline/list
-POST /api/offline/add
-Content-Type: application/json
-
-{"url": "...", "name": "...", "save_path": "..."}
-```
-
-### 分享转存
-
-```
-POST /api/share/transfer
-Content-Type: application/json
-
-{"share_url": "...", "target_path": "..."}
-```
-
 ## 管理面板 API
 
 基础路径：`http://<admin_host>:8100/admin/api`
@@ -303,7 +284,9 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "rmt_mediaext": "mp4,mkv,ts,iso,m2ts,avi,mov,wmv,flv,f4v,rmvb,webm,divx,mpeg,mpg,mts,m2t",
     "download_mediaext": "srt,ssa,ass,aas,smi,utf,utf-8,idx,sub,lrc,sup,pgs",
     "auto_download_mediainfo": false,
-    "overwrite_mode": "never"
+    "overwrite_mode": "never",
+    "cleanup_deleted_strm": false,
+    "use_rust": false
   }
 }
 ```

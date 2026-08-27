@@ -28,12 +28,12 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存 | `combined/redirect_service.py` |
 | STRM 文件生成器 | 目录遍历、STRM 写入、附属元数据下载 | `combined/strm_generator.py` |
 | 115 客户端封装 | 加密下载 API、二维码登录、文件浏览 | `combined/p115_client_wrapper.py` |
-| 管理 API | STRM 同步、二维码登录、离线下载 | `combined/api_routes.py` |
+| 管理 API | STRM 同步、二维码登录、签到 | `combined/api_routes.py` |
 | 管理面板 API | 配置读写、服务控制、日志查看 | `combined/admin_api.py` |
 | 外部播放器注入 | 14 个播放器的协议 URL 构建与 UI 注入 | `combined/external_players.py` |
 | 配置管理 | JSON 配置读写、顶置规则解析 | `combined/config_manager.py` |
 | 数据持久化 | SQLite 数据库、文件清单、同步历史 | `combined/database.py` |
-| Windows 桌面集成 | 系统托盘、原生 WebView2 窗口 | `combined/windows_tray.py` |
+| Windows 桌面集成 | 系统托盘 | `combined/windows_tray.py` |
 | 日志设置 | RotatingFileHandler + 控制台输出 | `combined/logger.py` |
 
 ---

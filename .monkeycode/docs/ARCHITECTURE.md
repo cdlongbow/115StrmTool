@@ -19,7 +19,7 @@
 - websockets — WebSocket 双向代理
 
 **数据存储**
-- SQLite — STRM 文件清单、同步历史、离线任务
+- SQLite — STRM 文件清单、同步历史
 - JSON — 配置文件
 
 **外部依赖（Wheels）**
@@ -31,7 +31,7 @@
 **可选 Windows 集成**
 - pystray — 系统托盘
 - Pillow — 托盘图标与二维码渲染
-- pywin32 — Windows 注册表（开机自启）
+- winreg（标准库）— Windows 注册表（开机自启）
 
 **基础设施**
 - Windows 桌面（单机部署）
@@ -99,7 +99,7 @@ MoviePilot-Windows/
 **被依赖**: 管理 API（用户触发同步）
 
 ### 持久化层
-**目的**: 存储 STRM 清单、同步历史、离线任务
+**目的**: 存储 STRM 清单、同步历史
 **位置**: `combined/database.py` + `combined/config_manager.py`
 **关键文件**: `database.py`（SQLite）, `config_manager.py`（JSON 配置）
 
