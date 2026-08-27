@@ -2,6 +2,7 @@
 增量同步模拟测试：覆盖所有逻辑分支
 """
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -114,6 +115,32 @@ class TestIncrementalSync:
         assert r["changed"] == 1, f"r={r}"
         assert r["new"] == 0
         assert sp.read_text(encoding="utf-8") != "old_content"
+
+    def test_changed_and_moved(self, gen, db):
+        _reset_db(db)
+        old_sp = tmp_dir / "cm_old" / "movie.strm"
+        old_sp.parent.mkdir(parents=True, exist_ok=True)
+        old_sp.write_text("old_content", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "cm001", "file_name": "movie.mp4", "file_size": 100,
+            "file_type": ".mp4", "pan_path": "/test/cm_old/movie.mp4",
+            "local_strm_path": str(old_sp), "sha1": "v1", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "movie.mp4", "is_dir": False, "pickcode": "cm001",
+             "pick_code": "cm001", "sha1": "v2", "id": 1, "parent_id": 0, "size": 100,
+             "path": "/test/cm_new/movie.mp4"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["changed"] == 1, f"r={r}"
+        assert not old_sp.exists(), "内容变化且路径变化时旧 STRM 应被删除"
+        new_sp = tmp_dir / "cm_new" / "movie.strm"
+        assert new_sp.exists(), f"新 STRM 应存在: {new_sp}"
+        rec = db.get_file_by_pickcode("cm001")
+        assert rec["pan_path"] == "/test/cm_new/movie.mp4"
+        assert rec["sha1"] == "v2"
+        assert rec["local_strm_path"] == str(new_sp)
 
     def test_unchanged(self, gen, db):
         _reset_db(db)
@@ -301,3 +328,68 @@ class TestIncrementalSync:
         assert sub_strm.exists(), "兄弟映射的 STRM 文件应保留"
         rec = db.get_file_by_pickcode("sub001")
         assert rec is not None and rec["status"] == "active"
+
+
+_MOCK_MODULES = {
+    "p115cipher": MagicMock(),
+    "p115client": MagicMock(),
+    "p115_client_wrapper": MagicMock(),
+    "httpx": MagicMock(),
+    "app_ver": MagicMock(),
+    "config_manager": MagicMock(),
+    "logger": MagicMock(),
+    "database": MagicMock(),
+}
+
+
+class TestSyncLockAndSingleton:
+
+    @pytest.fixture
+    def sg_module(self):
+        with patch.dict("sys.modules", _MOCK_MODULES):
+            import strm_generator as sg
+            sg.strm_generator = None
+            yield sg
+            sg.strm_generator = None
+
+    def test_is_syncing_detects_running_sync(self, sg_module):
+        sg = sg_module
+        _gen = sg.StrmGenerator(MagicMock(), "http://x")
+        assert not _gen.is_syncing()
+        barrier = threading.Event()
+        done = threading.Event()
+
+        def _hold_lock():
+            _gen._sync_lock.acquire()
+            barrier.set()
+            done.wait(timeout=5)
+            _gen._sync_lock.release()
+
+        t = threading.Thread(target=_hold_lock)
+        t.start()
+        barrier.wait(timeout=5)
+        assert _gen.is_syncing()
+        done.set()
+        t.join(timeout=5)
+        assert not _gen.is_syncing()
+
+    def test_get_strm_generator_refreshes_refs(self, sg_module):
+        sg = sg_module
+        client_a = MagicMock(name="client_a")
+        g1 = sg.get_strm_generator(client_a, "http://a/")
+        assert g1._client is client_a
+        assert g1._url_prefix == "http://a"
+        client_b = MagicMock(name="client_b")
+        g2 = sg.get_strm_generator(client_b, "http://b/")
+        assert g2 is g1, "应返回同一单例"
+        assert g2._client is client_b, "客户端引用应刷新为最新"
+        assert g2._url_prefix == "http://b", "URL 前缀应刷新为最新"
+
+    def test_get_strm_generator_keeps_refs_on_empty(self, sg_module):
+        sg = sg_module
+        client_a = MagicMock(name="client_a")
+        g1 = sg.get_strm_generator(client_a, "http://a/")
+        g2 = sg.get_strm_generator(None, "")
+        assert g2 is g1
+        assert g2._client is client_a, "传入 None 客户端时保留现有引用"
+        assert g2._url_prefix == "http://a", "传入空前缀时保留现有前缀"

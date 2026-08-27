@@ -642,8 +642,12 @@ function startSyncProgressPoll() {
         clearInterval(_syncProgressTimer);
         _syncProgressTimer = null;
         if (p.phase === 'completed') {
+          showToast(p.message || '同步完成', 'success');
           updateDashboard();
           loadSyncHistory();
+        }
+        if (p.phase === 'error') {
+          showToast(p.message || '同步异常', 'error');
         }
         if (p.phase === 'cancelled') {
           showToast('同步已取消', 'info');
@@ -659,7 +663,13 @@ async function startFullSync() {
   try {
     const r = await fetch('/api/sync/start', {method:'POST'});
     const d = await r.json();
-    showToast('同步结果: ' + JSON.stringify(d), d.status==='completed'?'success':'info');
+    if (d.status === 'error') {
+      showToast(d.message || '同步启动失败', 'error');
+      if (_syncProgressTimer) { clearInterval(_syncProgressTimer); _syncProgressTimer = null; }
+      document.getElementById('syncProgress').style.display = 'none';
+    } else {
+      showToast(d.message || '同步任务已启动', 'info');
+    }
   } catch(err) { showToast('同步失败: ' + err.message, 'error'); }
 }
 async function startIncrementalSync() {
@@ -667,7 +677,13 @@ async function startIncrementalSync() {
   try {
     const r = await fetch('/api/sync/incremental', {method:'POST'});
     const d = await r.json();
-    showToast('增量同步结果: ' + JSON.stringify(d), d.status==='completed'?'success':'info');
+    if (d.status === 'error') {
+      showToast(d.message || '同步启动失败', 'error');
+      if (_syncProgressTimer) { clearInterval(_syncProgressTimer); _syncProgressTimer = null; }
+      document.getElementById('syncProgress').style.display = 'none';
+    } else {
+      showToast(d.message || '增量同步任务已启动', 'info');
+    }
   } catch(err) { showToast('增量同步失败: ' + err.message, 'error'); }
 }
 async function cancelSync() {

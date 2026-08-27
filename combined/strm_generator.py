@@ -131,6 +131,18 @@ class StrmGenerator:
         self._set_progress("cancelling", message="正在取消同步...")
         logger.info("同步已请求取消")
 
+    def is_syncing(self) -> bool:
+        """
+        判断当前是否有同步任务正在执行
+
+        :return bool: 同步锁被占用时返回 True
+        """
+        acquired = self._sync_lock.acquire(blocking=False)
+        if acquired:
+            self._sync_lock.release()
+            return False
+        return True
+
     def reset_cancel(self):
         self._cancel_flag.clear()
 
@@ -448,6 +460,19 @@ class StrmGenerator:
                                     pan_full_path, pan_path, local_path
                                 )
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
+                                # 文件同时被移动且内容变化时，旧路径 STRM 需清理，
+                                # 否则媒体库会出现指向同一文件的重复条目
+                                old_strm_path = Path(all_existing[pickcode]["local_strm_path"])
+                                if old_strm_path != local_strm_path and old_strm_path.exists():
+                                    try:
+                                        old_strm_path.unlink()
+                                        logger.info(
+                                            "已删除路径变更文件的旧 STRM: %s", old_strm_path
+                                        )
+                                    except OSError as e:
+                                        logger.warning(
+                                            "删除旧路径 STRM 失败 %s: %s", old_strm_path, e
+                                        )
                                 if self._use_rust:
                                     rust_items.append({
                                         "name": name,
@@ -614,7 +639,23 @@ strm_generator: Optional[StrmGenerator] = None
 
 
 def get_strm_generator(client: P115ClientWrapper, url_prefix: str = "") -> StrmGenerator:
+    """
+    获取 STRM 生成器单例并刷新其依赖引用
+
+    单例在首次调用时创建；后续每次调用都用最新的 client 与 URL 前缀
+    刷新实例引用，避免 Cookie 热重载或前缀修改后仍使用旧引用
+
+    :param client (P115ClientWrapper): 最新的 115 客户端包装
+    :param url_prefix (str): STRM 跳转服务 URL 前缀
+
+    :return StrmGenerator: 单例生成器
+    """
     global strm_generator
     if strm_generator is None:
         strm_generator = StrmGenerator(client, url_prefix)
+        return strm_generator
+    if client is not None:
+        strm_generator._client = client
+    if url_prefix:
+        strm_generator._url_prefix = url_prefix.rstrip("/")
     return strm_generator

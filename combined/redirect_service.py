@@ -109,9 +109,16 @@ class RedirectService:
                 )
 
             download_url, file_name, expires_time = result
-            ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
-            async with self._cache.lock:
-                self._cache.put(ckey, (download_url, file_name), ttl=ttl)
+            # expires_time 已预留 300 秒过期余量；缓存时间不超过剩余有效期，
+            # 也不超过默认上限，避免把即将/已经过期的 URL 继续分发给客户端
+            ttl = min(CACHE_TTL_DEFAULT, expires_time - int(time()))
+            if ttl > 0:
+                async with self._cache.lock:
+                    self._cache.put(ckey, (download_url, file_name), ttl=ttl)
+            else:
+                logger.debug(
+                    "【302跳转服务】下载地址剩余有效期过短，跳过缓存: pickcode=%s", pickcode
+                )
             logger.debug(
                 "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
                 pickcode, file_name, ttl, client_ip,

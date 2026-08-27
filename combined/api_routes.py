@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 import asyncio
+import threading
 
 from logger import logger
 from config_manager import config_manager
@@ -105,7 +106,50 @@ async def browse_directory(pid: str = "0", path: str = ""):
 # ── 同步 ──
 
 
-_sync_in_progress = False
+def _launch_sync(sync_type: str) -> Dict[str, Any]:
+    """
+    启动同步任务：读取配置并在后台线程执行，立即返回，避免阻塞事件循环
+
+    同步为长耗时操作，若在请求线程内同步执行会冻结整个管理 UI，
+    进度轮询接口也无法响应。改为后台线程执行后，
+    前端通过 /api/sync/progress 轮询获取实时进度
+
+    :param sync_type (str): full 全量或 incremental 增量
+
+    :return Dict: 启动结果，status 为 started 或 error
+    """
+    try:
+        client = get_client()
+    except ClientNotReadyError as e:
+        return {"status": "error", "message": e.message}
+
+    config = config_manager.get()
+    p115_cfg = config.get("p115", {})
+    from strm_generator import get_strm_generator
+
+    gen = get_strm_generator(client, p115_cfg.get("strm_url_prefix", ""))
+    if gen.is_syncing():
+        return {"status": "error", "message": "同步正在进行中"}
+    gen.set_config(
+        rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
+        download_mediaext=p115_cfg.get("download_mediaext", ""),
+        auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
+        overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
+        cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
+    )
+    sync_fn = gen.full_sync if sync_type == "full" else gen.incremental_sync
+    mappings = p115_cfg.get("paths", [])
+
+    def _runner():
+        try:
+            sync_fn(mappings)
+        except Exception as e:
+            logger.error("同步线程异常: %s", e, exc_info=True)
+
+    threading.Thread(
+        target=_runner, daemon=True, name=f"sync-{sync_type}"
+    ).start()
+    return {"status": "started", "message": "同步任务已启动"}
 
 
 @router.get("/sync/progress")
@@ -117,56 +161,12 @@ async def get_sync_progress() -> Dict[str, Any]:
 
 @router.post("/sync/start")
 async def start_full_sync() -> Dict[str, Any]:
-    global _sync_in_progress
-    if _sync_in_progress:
-        return {"status": "error", "message": "同步正在进行中"}
-    _sync_in_progress = True
-    try:
-        config = config_manager.get()
-        p115_cfg = config.get("p115", {})
-        from strm_generator import get_strm_generator
-        gen = get_strm_generator(_client, p115_cfg.get("strm_url_prefix", ""))
-        gen.set_config(
-            rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
-            download_mediaext=p115_cfg.get("download_mediaext", ""),
-            auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
-            overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
-            cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
-        )
-        result = gen.full_sync(p115_cfg.get("paths", []))
-        return {"status": "completed", **result}
-    except Exception as e:
-        logger.error("同步异常: %s", e, exc_info=True)
-        return {"status": "error", "message": str(e)}
-    finally:
-        _sync_in_progress = False
+    return _launch_sync("full")
 
 
 @router.post("/sync/incremental")
 async def start_incremental_sync() -> Dict[str, Any]:
-    global _sync_in_progress
-    if _sync_in_progress:
-        return {"status": "error", "message": "同步正在进行中"}
-    _sync_in_progress = True
-    try:
-        config = config_manager.get()
-        p115_cfg = config.get("p115", {})
-        from strm_generator import get_strm_generator
-        gen = get_strm_generator(_client, p115_cfg.get("strm_url_prefix", ""))
-        gen.set_config(
-            rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
-            download_mediaext=p115_cfg.get("download_mediaext", ""),
-            auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
-            overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
-            cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
-        )
-        result = gen.incremental_sync(p115_cfg.get("paths", []))
-        return {"status": "completed", **result}
-    except Exception as e:
-        logger.error("增量同步异常: %s", e, exc_info=True)
-        return {"status": "error", "message": str(e)}
-    finally:
-        _sync_in_progress = False
+    return _launch_sync("incremental")
 
 
 @router.post("/sync/cancel")
