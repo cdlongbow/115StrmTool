@@ -41,15 +41,52 @@ async def select_directory() -> Dict:
         return {"path": ""}
 
 
+# 目录选择对话框超时（秒）。tkinter 在部分 Windows 环境下可能不弹窗或
+# 事件循环不转而永久阻塞，超时后返回空串，由前端回退到手动输入路径
+SELECT_DIRECTORY_TIMEOUT = 180.0
+
+
 def _select_directory_sync() -> str:
-    import tkinter
-    from tkinter import filedialog
-    root = tkinter.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    path = filedialog.askdirectory(title="选择 STRM 输出目录")
-    root.destroy()
-    return path or ""
+    """
+    在专用临时线程中打开目录选择对话框，带超时保护
+
+    tkinter 的 Tk 解释器须在单一固定线程内创建与销毁，且不放入默认
+    线程池以免卡死的对话框占用公共工作线程；超时或异常时返回空串，
+    前端会回退到手动输入
+
+    :return str: 所选目录路径，取消 / 超时 / 异常时返回空串
+    """
+    holder: List[str] = []
+
+    def _run() -> None:
+        try:
+            import tkinter
+            from tkinter import filedialog
+            root = tkinter.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askdirectory(
+                    title="选择 STRM 输出目录", parent=root
+                )
+                holder.append(path or "")
+            finally:
+                root.destroy()
+        except Exception as e:
+            logger.warning("目录选择对话框异常: %s", e, exc_info=True)
+            holder.append("")
+
+    worker = threading.Thread(
+        target=_run, daemon=True, name="select-directory"
+    )
+    worker.start()
+    worker.join(timeout=SELECT_DIRECTORY_TIMEOUT)
+    if worker.is_alive():
+        logger.warning(
+            "目录选择对话框 %ss 内无响应，回退手动输入", SELECT_DIRECTORY_TIMEOUT
+        )
+        return ""
+    return holder[0] if holder else ""
 
 
 @router.get("/status")
