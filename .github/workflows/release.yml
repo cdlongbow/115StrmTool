@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install pystray Pillow pywebview fastapi uvicorn httpx websockets pywin32
+          pip install pystray Pillow qrcode fastapi uvicorn httpx websockets pywin32
 
       - name: Install p115client from local wheels
         run: |

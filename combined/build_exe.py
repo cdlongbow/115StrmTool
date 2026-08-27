@@ -4,10 +4,10 @@ import sys
 
 def main():
     py_files = [
-        "admin_api.py", "api_routes.py", "checkin_scheduler.py",
-        "config_manager.py", "database.py", "external_players.py",
+        "admin_api.py", "api_routes.py", "app_ver.py", "checkin_scheduler.py",
+        "config_manager.py", "database.py", "exceptions.py", "external_players.py",
         "logger.py", "p115_client_wrapper.py", "proxy_app.py",
-        "redirect_service.py", "strm_generator.py", "windows_tray.py",
+        "redirect_service.py", "strm_generator.py", "utils.py", "windows_tray.py",
     ]
     args = [
         "pyinstaller",
