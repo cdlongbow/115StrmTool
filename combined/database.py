@@ -209,10 +209,33 @@ class Database:
         return cursor.lastrowid
 
     def get_active_files_by_parent(self, parent_prefix: str) -> List[Dict]:
-        cursor = self.conn.execute(
-            "SELECT pickcode, pan_path, local_strm_path, sha1 FROM files WHERE status='active' AND pan_path LIKE ?",
-            (parent_prefix + "%",),
-        )
+        """
+        查询指定网盘目录及子目录下的活动文件记录
+
+        采用精确边界匹配：仅命中目录本身或其真实子路径，
+        防止兄弟目录（如 /movies 与 /movies2）因 LIKE 前缀歧义被误判删除
+
+        :param parent_prefix (str): 网盘目录前缀，允许携带尾部斜杠
+
+        :return List: 活动文件记录列表
+        """
+        base = parent_prefix.rstrip("/") or "/"
+        if base == "/":
+            cursor = self.conn.execute(
+                "SELECT pickcode, pan_path, local_strm_path, sha1 "
+                "FROM files WHERE status='active'"
+            )
+        else:
+            escaped = (
+                base.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            cursor = self.conn.execute(
+                "SELECT pickcode, pan_path, local_strm_path, sha1 FROM files "
+                "WHERE status='active' AND (pan_path = ? OR pan_path LIKE ? ESCAPE '\\')",
+                (base, escaped + "/%"),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
     def mark_file_deleted(self, pickcode: str):

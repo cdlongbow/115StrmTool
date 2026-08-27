@@ -42,6 +42,8 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
     :param path_cache: 可选，保留参数用于兼容，不再填充
     """
     from p115client.tool.iterdir import iter_files_with_path
+    from p115client.tool.attr import normalize_attr
+    
     client = client_wrapper.client
     if client is None:
         return
@@ -49,7 +51,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
         client, cid, type=99, cur=0, app="android",
         cooldown=0.5, escape=None,
     ):
-        yield attr
+        yield normalize_attr(attr)
 
 
 class StrmGenerator:
@@ -192,7 +194,7 @@ class StrmGenerator:
                                 continue
                             name = attr.get("name", "")
                             ext = Path(name).suffix.lower()
-                            pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
+                            pickcode = attr.get("pickcode", "")
                             file_id = attr.get("id", 0)
                             pan_full_path = attr.get("path", "")
 
@@ -349,6 +351,9 @@ class StrmGenerator:
                 all_new_files = []
                 seen_pickcodes = set()
                 rust_items = []
+                # 所有映射的存量记录汇总后再统一判定删除，
+                # 避免前序映射扫描时把尚未轮到的兄弟目录文件误判为已删除
+                all_existing: Dict[str, Dict] = {}
 
                 for mapping in path_mappings:
                     if self._cancel_flag.is_set():
@@ -361,9 +366,8 @@ class StrmGenerator:
                     self._set_progress("scanning", message=f"正在扫描目录: {pan_path}")
                     logger.info("开始增量同步目录: %s -> %s", pan_path, local_path)
 
-                    existing_map: Dict[str, Dict] = {}
                     for f in db.get_active_files_by_parent(pan_path):
-                        existing_map[f["pickcode"]] = {
+                        all_existing[f["pickcode"]] = {
                             "pickcode": f["pickcode"],
                             "sha1": f["sha1"],
                             "pan_path": f["pan_path"],
@@ -380,7 +384,7 @@ class StrmGenerator:
                                 continue
                             name = attr.get("name", "")
                             ext = Path(name).suffix.lower()
-                            pickcode = attr.get("pickcode") or attr.get("pick_code") or ""
+                            pickcode = attr.get("pickcode", "")
                             file_id = attr.get("id", 0)
                             pan_full_path = attr.get("path", "")
 
@@ -412,7 +416,7 @@ class StrmGenerator:
                             seen_pickcodes.add(pickcode)
                             sha1 = attr.get("sha1", "")
 
-                            if pickcode not in existing_map:
+                            if pickcode not in all_existing:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
@@ -439,7 +443,7 @@ class StrmGenerator:
                                     "parent_id": pan_path,
                                 })
                                 total_new += 1
-                            elif existing_map[pickcode]["sha1"] != sha1:
+                            elif all_existing[pickcode]["sha1"] != sha1:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
@@ -466,14 +470,14 @@ class StrmGenerator:
                                     "parent_id": pan_path,
                                 })
                                 total_changed += 1
-                            elif existing_map[pickcode]["pan_path"] != pan_full_path:
+                            elif all_existing[pickcode]["pan_path"] != pan_full_path:
                                 # 115 中文件被移动或重命名：pickcode 与 sha1 未变但路径已变
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
                                 self._migrate_strm_file(
-                                    existing_map[pickcode], local_strm_path
+                                    all_existing[pickcode], local_strm_path
                                 )
                                 all_new_files.append({
                                     "pickcode": pickcode,
@@ -491,25 +495,25 @@ class StrmGenerator:
                             processed = total_new + total_changed + total_unchanged
                             self._set_progress("scanning", current=processed, message=f"已扫描 {processed} 个文件")
 
-                        if not self._cancel_flag.is_set():
-                            deleted_pickcodes = [
-                                pc for pc in existing_map if pc not in seen_pickcodes
-                            ]
-                            for pc in deleted_pickcodes:
-                                entry = existing_map[pc]
-                                strm_path = Path(entry["local_strm_path"])
-                                if strm_path.exists():
-                                    try:
-                                        strm_path.unlink()
-                                        logger.info("已删除残留 STRM: %s", strm_path)
-                                    except OSError as e:
-                                        logger.warning("删除 STRM 文件失败 %s: %s", strm_path, e)
-                                db.mark_file_deleted(pc)
-                            total_deleted += len(deleted_pickcodes)
-
                     except Exception as e:
                         logger.error("增量同步目录失败 %s: %s", pan_path, e, exc_info=True)
                         total_failed += 1
+
+                if not self._cancel_flag.is_set():
+                    deleted_pickcodes = [
+                        pc for pc in all_existing if pc not in seen_pickcodes
+                    ]
+                    for pc in deleted_pickcodes:
+                        entry = all_existing[pc]
+                        strm_path = Path(entry["local_strm_path"])
+                        if strm_path.exists():
+                            try:
+                                strm_path.unlink()
+                                logger.info("已删除残留 STRM: %s", strm_path)
+                            except OSError as e:
+                                logger.warning("删除 STRM 文件失败 %s: %s", strm_path, e)
+                        db.mark_file_deleted(pc)
+                    total_deleted += len(deleted_pickcodes)
 
                 if self._use_rust and rust_items and not self._cancel_flag.is_set():
                     processor = self._get_rust_processor()

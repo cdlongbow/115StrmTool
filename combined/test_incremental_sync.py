@@ -267,3 +267,37 @@ class TestIncrementalSync:
         assert r["deleted"] == 1
         assert r["total"] == 4
         assert not (tmp_dir / "delete.strm").exists()
+
+    def test_overlapping_prefix_no_false_deletion(self, gen, db):
+        """重叠前缀映射防护：第二个映射的文件不被第一个映射误判删除"""
+        _reset_db(db)
+        sub_dir = tmp_dir / "sub_output"
+        sub_dir.mkdir(exist_ok=True)
+        sub_strm = sub_dir / "file.strm"
+        sub_strm.write_text("http://127.0.0.1:8100/redirect?pickcode=sub001", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "sub001", "file_name": "file.mp4", "file_size": 200,
+            "file_type": ".mp4", "pan_path": "/media/sub/file.mp4",
+            "local_strm_path": str(sub_strm), "sha1": "sha_sub", "parent_id": "/media/sub",
+        }])
+        import strm_generator as sg
+        call_count = [0]
+        def _fake_iter_with_sequence(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return iter([])
+            else:
+                return iter([
+                    {"name": "file.mp4", "is_dir": False, "pickcode": "sub001",
+                     "pick_code": "sub001", "sha1": "sha_sub", "id": 1, "parent_id": 0, "size": 200,
+                     "path": "/media/sub/file.mp4"}
+                ])
+        sg._iter_files_115 = _fake_iter_with_sequence
+        r = gen.incremental_sync([
+            {"from": "/media", "to": str(tmp_dir)},
+            {"from": "/media/sub", "to": str(sub_dir)},
+        ])
+        assert r["deleted"] == 0, f"第二个映射的文件不应在第一个映射扫描时被误删: r={r}"
+        assert sub_strm.exists(), "兄弟映射的 STRM 文件应保留"
+        rec = db.get_file_by_pickcode("sub001")
+        assert rec is not None and rec["status"] == "active"
