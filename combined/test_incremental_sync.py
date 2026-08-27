@@ -393,3 +393,120 @@ class TestSyncLockAndSingleton:
         assert g2 is g1
         assert g2._client is client_a, "传入 None 客户端时保留现有引用"
         assert g2._url_prefix == "http://a", "传入空前缀时保留现有前缀"
+
+
+class _FakeRustResults:
+    def __init__(self, count=0, failures=None):
+        self.strm_results_count = count
+        self.fail_results = failures or []
+
+
+class _FakeFailInfo:
+    def __init__(self, path, reason="mock fail"):
+        self.path_in_pan = path
+        self.reason = reason
+
+
+class TestRustAccelerated:
+
+    def _mock_processor(self, gen, processor):
+        gen._use_rust = True
+        gen._get_rust_processor = MagicMock(return_value=processor)
+
+    def test_set_config_use_rust(self, gen):
+        gen.set_config(use_rust=True)
+        assert gen._use_rust is True
+        gen.set_config(rmt_mediaext="mp4")
+        assert gen._use_rust is True, "未显式传 use_rust 时保留原值"
+        gen.set_config(use_rust=False)
+        assert gen._use_rust is False
+
+    def test_process_rust_batch_backfills_when_processor_missing(self, gen):
+        sp = tmp_dir / "rust_a" / "x.strm"
+        gen._use_rust = True
+        gen._get_rust_processor = MagicMock(return_value=None)
+        gen._process_rust_batch(
+            [{"path": "/p/x.mp4", "pickcode": "pcx"}],
+            {"/p/x.mp4": (sp, "pcx", False)},
+        )
+        assert sp.exists(), "处理器不可用时应由 Python 回填 STRM"
+        assert "pickcode=pcx" in sp.read_text(encoding="utf-8")
+
+    def test_process_rust_batch_backfills_on_exception(self, gen):
+        sp = tmp_dir / "rust_b" / "y.strm"
+        fake = MagicMock()
+        fake.process_batch.side_effect = RuntimeError("boom")
+        self._mock_processor(gen, fake)
+        gen._process_rust_batch(
+            [{"path": "/p/y.mp4", "pickcode": "pcy"}],
+            {"/p/y.mp4": (sp, "pcy", False)},
+        )
+        assert sp.exists(), "批处理异常时应由 Python 回填全部 STRM"
+
+    def test_process_rust_batch_partial_fail_backfills_only_failed(self, gen):
+        ok_sp = tmp_dir / "rust_c" / "ok.strm"
+        fail_sp = tmp_dir / "rust_c" / "fail.strm"
+        fake = MagicMock()
+        fake.process_batch.return_value = _FakeRustResults(
+            count=1, failures=[_FakeFailInfo("/p/fail.mp4")]
+        )
+        self._mock_processor(gen, fake)
+        gen._process_rust_batch(
+            [
+                {"path": "/p/ok.mp4", "pickcode": "pcok"},
+                {"path": "/p/fail.mp4", "pickcode": "pcfail"},
+            ],
+            {
+                "/p/ok.mp4": (ok_sp, "pcok", False),
+                "/p/fail.mp4": (fail_sp, "pcfail", False),
+            },
+        )
+        assert not ok_sp.exists(), "Rust 成功的文件不应由 Python 重写"
+        assert fail_sp.exists(), "Rust 报失败的文件应由 Python 回填"
+
+    def test_full_sync_rust_skips_python_write(self, gen, db):
+        _reset_db(db)
+        fake = MagicMock()
+        fake.process_batch.return_value = _FakeRustResults(count=1)
+        self._mock_processor(gen, fake)
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "rust.mp4", "is_dir": False, "pickcode": "rst001",
+             "pick_code": "rst001", "sha1": "sha_r1", "id": 1, "parent_id": 0,
+             "size": 100, "path": "/test/rust.mp4"},
+        ])
+        r = gen.full_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["new"] == 1, f"r={r}"
+        fake.process_batch.assert_called_once()
+        assert not (tmp_dir / "rust.strm").exists(), "Rust 模式下 Python 不应写 STRM"
+
+    def test_full_sync_rust_exception_backfills(self, gen, db):
+        _reset_db(db)
+        fake = MagicMock()
+        fake.process_batch.side_effect = RuntimeError("boom")
+        self._mock_processor(gen, fake)
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "fall.mp4", "is_dir": False, "pickcode": "fbk001",
+             "pick_code": "fbk001", "sha1": "sha_f1", "id": 1, "parent_id": 0,
+             "size": 100, "path": "/test/fall.mp4"},
+        ])
+        gen.full_sync([{"from": "/test", "to": str(tmp_dir)}])
+        sp = tmp_dir / "fall.strm"
+        assert sp.exists(), "Rust 批处理失败时应回填全部 STRM，防止 DB 与磁盘不一致"
+        assert "pickcode=fbk001" in sp.read_text(encoding="utf-8")
+
+    def test_incremental_sync_rust_exception_backfills(self, gen, db):
+        _reset_db(db)
+        fake = MagicMock()
+        fake.process_batch.side_effect = RuntimeError("boom")
+        self._mock_processor(gen, fake)
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "inc_new.mkv", "is_dir": False, "pickcode": "inc001",
+             "pick_code": "inc001", "sha1": "sha_i1", "id": 2, "parent_id": 0,
+             "size": 200, "path": "/test/inc_new.mkv"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["new"] == 1, f"r={r}"
+        assert (tmp_dir / "inc_new.strm").exists(), "增量同步 Rust 失败时应回填 STRM"

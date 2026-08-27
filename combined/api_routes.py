@@ -136,6 +136,7 @@ def _launch_sync(sync_type: str) -> Dict[str, Any]:
         auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
         overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
         cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
+        use_rust=p115_cfg.get("use_rust", False),
     )
     sync_fn = gen.full_sync if sync_type == "full" else gen.incremental_sync
     mappings = p115_cfg.get("paths", [])

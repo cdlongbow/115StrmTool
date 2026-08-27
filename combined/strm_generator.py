@@ -1,7 +1,7 @@
 import threading
 from os import name as os_name
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
@@ -91,6 +91,7 @@ class StrmGenerator:
         auto_download_mediainfo: bool = False,
         overwrite_mode: str = "never",
         cleanup_deleted: bool = False,
+        use_rust: Optional[bool] = None,
     ):
         if rmt_mediaext:
             self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
@@ -99,6 +100,8 @@ class StrmGenerator:
         self._auto_download_mediainfo = auto_download_mediainfo
         self._overwrite_mode = overwrite_mode
         self._cleanup_deleted = cleanup_deleted
+        if use_rust is not None:
+            self._use_rust = use_rust
 
     def set_use_rust(self, enabled: bool):
         self._use_rust = enabled
@@ -125,6 +128,73 @@ class StrmGenerator:
             logger.error("初始化 Rust 处理器失败: %s", e)
             self._use_rust = False
             return None
+
+    def _process_rust_batch(
+        self,
+        rust_items: List[Dict[str, Any]],
+        files_by_pan_path: Dict[str, Tuple[Path, str, bool]],
+    ) -> None:
+        """
+        提交 Rust 批处理生成 STRM，失败部分用 Python 逐文件回填
+
+        Rust 批处理与 Python 写 STRM 互斥执行，防止双写；处理器不可用、
+        批处理抛异常或单文件被报失败时，统一走 _ensure_strm_file 回填，
+        避免数据库记录指向不存在的 STRM 文件
+
+        :param rust_items: 提交给 Rust 处理器的文件项列表
+        :param files_by_pan_path: 网盘路径 -> (本地 STRM 路径, pickcode, 是否强制覆盖) 映射
+        """
+        if not rust_items:
+            return
+        processor = self._get_rust_processor()
+        if processor is None:
+            self._backfill_strm_files(files_by_pan_path)
+            return
+        failed_pan_paths: List[str] = []
+        try:
+            import json
+            results = processor.process_batch(json.dumps(rust_items))
+            rust_strm_count = getattr(results, "strm_results_count", 0) or 0
+            fail_results = getattr(results, "fail_results", []) or []
+            logger.info(
+                "Rust 加速处理完成: STRM=%d, 失败=%d",
+                rust_strm_count, len(fail_results)
+            )
+            for fail_info in fail_results:
+                pan_path = getattr(fail_info, "path_in_pan", "")
+                if pan_path:
+                    failed_pan_paths.append(pan_path)
+                logger.warning(
+                    "Rust STRM 生成失败: path=%s reason=%s",
+                    pan_path or "?",
+                    getattr(fail_info, "reason", "?"),
+                )
+        except Exception as e:
+            logger.error("Rust 批处理失败，回退 Python 逐文件生成: %s", e, exc_info=True)
+            self._backfill_strm_files(files_by_pan_path)
+            return
+        if failed_pan_paths:
+            self._backfill_strm_files(
+                {
+                    p: files_by_pan_path[p]
+                    for p in failed_pan_paths
+                    if p in files_by_pan_path
+                }
+            )
+
+    def _backfill_strm_files(
+        self, files_by_pan_path: Dict[str, Tuple[Path, str, bool]]
+    ) -> None:
+        """
+        用 Python 逐文件回填 STRM
+
+        :param files_by_pan_path: 网盘路径 -> (本地 STRM 路径, pickcode, 是否强制覆盖) 映射
+        """
+        for strm_path, pickcode, force in files_by_pan_path.values():
+            try:
+                self._ensure_strm_file(strm_path, pickcode, force=force)
+            except OSError as e:
+                logger.warning("回填 STRM 失败 %s: %s", strm_path, e)
 
     def cancel(self):
         self._cancel_flag.set()
@@ -246,7 +316,10 @@ class StrmGenerator:
                                     pan_full_path, pan_path, local_path
                                 )
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
-                                self._ensure_strm_file(local_strm_path, pickcode)
+                                # Rust 模式跳过 Python 写 STRM，避免双写，
+                                # 批处理失败时由 _process_rust_batch 统一回填
+                                if not self._use_rust:
+                                    self._ensure_strm_file(local_strm_path, pickcode)
                                 all_files.append({
                                     "pickcode": pickcode,
                                     "file_name": name,
@@ -263,26 +336,11 @@ class StrmGenerator:
                         total_failed += 1
 
                 if self._use_rust and rust_items and not self._cancel_flag.is_set():
-                    processor = self._get_rust_processor()
-                    if processor:
-                        try:
-                            import json
-                            batch_json = json.dumps(rust_items)
-                            results = processor.process_batch(batch_json)
-                            rust_strm_count = getattr(results, "strm_results_count", 0) or 0
-                            rust_fail_count = len(getattr(results, "fail_results", []) or [])
-                            logger.info(
-                                "Rust 加速处理完成: STRM=%d, 失败=%d",
-                                rust_strm_count, rust_fail_count
-                            )
-                            for fail_info in (getattr(results, "fail_results", []) or []):
-                                logger.warning(
-                                    "Rust STRM 生成失败: path=%s reason=%s",
-                                    getattr(fail_info, "path_in_pan", "?"),
-                                    getattr(fail_info, "reason", "?"),
-                                )
-                        except Exception as e:
-                            logger.error("Rust 批处理失败: %s", e, exc_info=True)
+                    files_by_pan_path = {
+                        f["pan_path"]: (Path(f["local_strm_path"]), f["pickcode"], False)
+                        for f in all_files
+                    }
+                    self._process_rust_batch(rust_items, files_by_pan_path)
 
                 if not self._cancel_flag.is_set() and all_files:
                     db.batch_add_files(all_files)
@@ -363,6 +421,7 @@ class StrmGenerator:
                 all_new_files = []
                 seen_pickcodes = set()
                 rust_items = []
+                files_by_pan_path: Dict[str, Tuple[Path, str, bool]] = {}
                 # 所有映射的存量记录汇总后再统一判定删除，
                 # 避免前序映射扫描时把尚未轮到的兄弟目录文件误判为已删除
                 all_existing: Dict[str, Dict] = {}
@@ -442,6 +501,9 @@ class StrmGenerator:
                                         "pickcode": pickcode,
                                         "sha1": sha1,
                                     })
+                                    files_by_pan_path[pan_full_path] = (
+                                        local_strm_path, pickcode, False
+                                    )
                                 else:
                                     self._ensure_strm_file(local_strm_path, pickcode)
                                 all_new_files.append({
@@ -482,6 +544,9 @@ class StrmGenerator:
                                         "pickcode": pickcode,
                                         "sha1": sha1,
                                     })
+                                    files_by_pan_path[pan_full_path] = (
+                                        local_strm_path, pickcode, True
+                                    )
                                 else:
                                     self._ensure_strm_file(local_strm_path, pickcode, force=True)
                                 all_new_files.append({
@@ -541,26 +606,7 @@ class StrmGenerator:
                     total_deleted += len(deleted_pickcodes)
 
                 if self._use_rust and rust_items and not self._cancel_flag.is_set():
-                    processor = self._get_rust_processor()
-                    if processor:
-                        try:
-                            import json
-                            batch_json = json.dumps(rust_items)
-                            results = processor.process_batch(batch_json)
-                            rust_strm_count = getattr(results, "strm_results_count", 0) or 0
-                            rust_fail_count = len(getattr(results, "fail_results", []) or [])
-                            logger.info(
-                                "Rust 加速处理完成: STRM=%d, 失败=%d",
-                                rust_strm_count, rust_fail_count
-                            )
-                            for fail_info in (getattr(results, "fail_results", []) or []):
-                                logger.warning(
-                                    "Rust STRM 生成失败: path=%s reason=%s",
-                                    getattr(fail_info, "path_in_pan", "?"),
-                                    getattr(fail_info, "reason", "?"),
-                                )
-                        except Exception as e:
-                            logger.error("Rust 批处理失败: %s", e, exc_info=True)
+                    self._process_rust_batch(rust_items, files_by_pan_path)
 
                 self._set_progress("processing", message="正在写入数据库...")
                 if not self._cancel_flag.is_set() and all_new_files:

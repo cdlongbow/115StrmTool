@@ -58,6 +58,7 @@ class P115Config(BaseModel):
     auto_download_mediainfo: bool = False
     overwrite_mode: str = "never"
     cleanup_deleted_strm: bool = False
+    use_rust: bool = False
     paths: List[PathMapping] = Field(default_factory=list)
 
     @field_validator("overwrite_mode")

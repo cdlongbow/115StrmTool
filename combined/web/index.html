@@ -210,6 +210,11 @@ tr:hover{background:#f5f5f5}
     <label for="p115_cleanup_deleted_strm" style="margin:0" title="开启后，全量同步完成时会自动删除本地残留的 .strm 文件（这些文件对应的视频在 115 网盘里已经被删除了）。如果同步过程中网络不稳定，可能误删文件，建议确认同步稳定后再开启。">全量同步后清理残留 STRM 文件</label>
     <span style="color:#999;margin-left:4px">（高危！开启后会自动删除网盘已不存在的文件的 .strm）</span>
   </div>
+  <div class="card" style="display:flex;flex-direction:row;align-items:center;gap:8px;padding:12px 16px;font-size:13px">
+    <input type="checkbox" id="p115_use_rust" style="width:auto">
+    <label for="p115_use_rust" style="margin:0" title="开启后，STRM 文件生成由 Rust 加速核心批量处理，大库同步速度更快。加速核心不可用时自动回退为内置处理方式，不影响同步结果。">启用 Rust 加速生成 STRM</label>
+    <span style="color:#999;margin-left:4px">（加速核心缺失时自动回退，不影响同步结果）</span>
+  </div>
   <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
     <b>增量同步说明：</b><br>
     基于上次同步记录对比 SHA1，仅处理新增/变更/删除的文件，跳过未变动文件。<br>
@@ -421,7 +426,7 @@ function loadP115Config(c) {
   document.getElementById('p115_auto_download_mediainfo').checked = c.auto_download_mediainfo || false;
   document.getElementById('p115_overwrite_mode').value = c.overwrite_mode || 'never';
   document.getElementById('p115_cleanup_deleted_strm').checked = c.cleanup_deleted_strm || false;
-  document.getElementById('p115_overwrite_mode').value = c.overwrite_mode || 'never';
+  document.getElementById('p115_use_rust').checked = c.use_rust || false;
   p115Paths = (c.paths || []).map(p => ({...p}));
   renderPathMappings();
 }
@@ -542,6 +547,7 @@ async function saveP115Config() {
     auto_download_mediainfo: document.getElementById('p115_auto_download_mediainfo').checked,
     overwrite_mode: document.getElementById('p115_overwrite_mode').value,
     cleanup_deleted_strm: document.getElementById('p115_cleanup_deleted_strm').checked,
+    use_rust: document.getElementById('p115_use_rust').checked,
     paths: collectPaths(),
   };
   try {
