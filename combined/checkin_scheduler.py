@@ -115,7 +115,7 @@ class CheckinScheduler:
             if not enabled or not self._client:
                 return
 
-            from datetime import date, datetime, timezone, timedelta
+            from datetime import datetime, timezone, timedelta
             tz = timezone(timedelta(hours=8))
             now = datetime.now(tz)
             today_str = now.strftime("%Y-%m-%d")

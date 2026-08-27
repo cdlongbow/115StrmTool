@@ -1,11 +1,6 @@
 """
 ConfigManager 模块测试：配置读写、Cookie 加密、顶置规则解析
 """
-import json
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 
@@ -66,7 +61,7 @@ class TestConfigManager:
         assert len(rules) == 1
 
     def test_cookie_encryption(self):
-        from config_manager import ConfigManager, _encrypt_cookie, _decrypt_cookie
+        from config_manager import _encrypt_cookie, _decrypt_cookie
         # 测试加解密功能本身（不依赖配置读写）
         plain = "my_secret_cookie"
         encrypted = _encrypt_cookie(plain)

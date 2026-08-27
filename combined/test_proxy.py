@@ -1,11 +1,7 @@
 """
 Proxy App 模块级函数测试：核心逻辑单元测试
 """
-import json
-from typing import Any, Dict, List
 from unittest.mock import MagicMock
-
-import pytest
 
 
 class TestApplyPinRules:

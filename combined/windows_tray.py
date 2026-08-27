@@ -1,8 +1,5 @@
 import os
-import subprocess
 import sys
-import threading
-from pathlib import Path
 from urllib.request import Request, urlopen
 
 from logger import logger
@@ -18,7 +15,6 @@ except ImportError:
 
 def _create_icon():
     size = 64
-    from PIL import Image, ImageDraw
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.ellipse([4, 4, size - 4, size - 4], fill="#1a73e8")
@@ -93,7 +89,7 @@ def run_tray(
 
     icon_image = _create_icon()
     menu = (
-        pystray.MenuItem(f"打开管理界面", _open_admin, default=True),
+        pystray.MenuItem("打开管理界面", _open_admin, default=True),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("全量同步", _sync),
         pystray.MenuItem("增量同步", _incr_sync),

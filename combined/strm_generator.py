@@ -217,21 +217,18 @@ class StrmGenerator:
         self._cancel_flag.clear()
 
     def _resolve_pan_path(self, pan_path: str) -> int:
-        try:
-            http_client = self._client.client
-            if http_client is None:
-                raise RuntimeError("115 客户端未初始化")
-            resp = http_client.fs_dir_getid(pan_path)
-            if not isinstance(resp, dict):
-                raise RuntimeError(f"获取目录ID失败: {pan_path}")
-            from p115client import check_response as _check_response
-            _check_response(resp)
-            cid = int(resp.get("id", -1))
-            if cid <= 0:
-                raise RuntimeError(f"目录不存在: {pan_path}")
-            return cid
-        except Exception as e:
-            raise
+        http_client = self._client.client
+        if http_client is None:
+            raise RuntimeError("115 客户端未初始化")
+        resp = http_client.fs_dir_getid(pan_path)
+        if not isinstance(resp, dict):
+            raise RuntimeError(f"获取目录ID失败: {pan_path}")
+        from p115client import check_response as _check_response
+        _check_response(resp)
+        cid = int(resp.get("id", -1))
+        if cid <= 0:
+            raise RuntimeError(f"目录不存在: {pan_path}")
+        return cid
 
     def full_sync(self, path_mappings: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         if not self._sync_lock.acquire(blocking=False):
@@ -277,7 +274,6 @@ class StrmGenerator:
                             name = attr.get("name", "")
                             ext = Path(name).suffix.lower()
                             pickcode = attr.get("pickcode", "")
-                            file_id = attr.get("id", 0)
                             pan_full_path = attr.get("path", "")
 
                             if self._auto_download_mediainfo and ext in self._download_mediaext:
@@ -456,7 +452,6 @@ class StrmGenerator:
                             name = attr.get("name", "")
                             ext = Path(name).suffix.lower()
                             pickcode = attr.get("pickcode", "")
-                            file_id = attr.get("id", 0)
                             pan_full_path = attr.get("path", "")
 
                             if self._auto_download_mediainfo and ext in self._download_mediaext:

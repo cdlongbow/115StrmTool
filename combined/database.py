@@ -4,8 +4,6 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from logger import logger
-
 if getattr(sys, "frozen", False):
     _BASE_DIR = Path(sys.executable).parent
 else:

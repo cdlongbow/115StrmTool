@@ -9,7 +9,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
-import pytest
 
 from proxy_app import create_app
 

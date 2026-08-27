@@ -7,7 +7,6 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 PICKCODE = "1" * 17

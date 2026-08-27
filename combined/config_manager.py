@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 

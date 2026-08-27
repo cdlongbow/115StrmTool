@@ -7,7 +7,6 @@
 3. 重定向链中 HEAD 跟随到仅支持 GET 的 CDN
 4. 正常 CDN（HEAD 和 GET 行为一致）
 """
-import asyncio
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -177,7 +176,7 @@ class TestHeadVsGetMethod:
         resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
         resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
 
-        print(f"\n[场景 3 重定向链]")
+        print("\n[场景 3 重定向链]")
         print(f"  HEAD: status={resp_head.status_code}, final_url={resp_head.url}")
         print(f"  GET:  status={resp_get.status_code}, final_url={resp_get.url}")
 
@@ -198,7 +197,7 @@ class TestHeadVsGetMethod:
         resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
         resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
 
-        print(f"\n[场景 4 正常 CDN]")
+        print("\n[场景 4 正常 CDN]")
         print(f"  HEAD: status={resp_head.status_code}, url={resp_head.url}")
         print(f"  GET:  status={resp_get.status_code}, url={resp_get.url}")
 
@@ -218,7 +217,7 @@ class TestHeadVsGetMethod:
         resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
         resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
 
-        print(f"\n[场景 5 重定向链 + 正常 CDN]")
+        print("\n[场景 5 重定向链 + 正常 CDN]")
         print(f"  HEAD: status={resp_head.status_code}, url={resp_head.url}")
         print(f"  GET:  status={resp_get.status_code}, url={resp_get.url}")
 
@@ -327,7 +326,7 @@ class TestHttpxHeadVsGet:
             resp_get = await client.get(url)
             get_url = str(resp_get.url)
 
-            print(f"\n[httpx 重定向链]")
+            print("\n[httpx 重定向链]")
             print(f"  HEAD: status={resp_head.status_code}, url={head_url}")
             print(f"  GET:  status={resp_get.status_code}, url={get_url}")
 
@@ -363,7 +362,7 @@ class TestHttpxHeadVsGet:
                     break
 
             final_url = current_url
-            print(f"\n[手动解析重定向链]")
+            print("\n[手动解析重定向链]")
             for status, u in seen_urls:
                 print(f"  {status} -> {u}")
             print(f"  [最终] {final_url}")

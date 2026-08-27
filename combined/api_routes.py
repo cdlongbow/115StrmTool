@@ -37,7 +37,7 @@ async def select_directory() -> Dict:
     try:
         path = await asyncio.to_thread(_select_directory_sync)
         return {"path": (path or "").replace("\\", "/")}
-    except Exception as e:
+    except Exception:
         return {"path": ""}
 
 

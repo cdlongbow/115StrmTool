@@ -1,6 +1,5 @@
 import sys
 from typing import Any, Callable, Dict, List, Optional
-from pathlib import Path
 
 from fastapi import APIRouter
 
