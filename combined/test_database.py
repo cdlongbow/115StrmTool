@@ -75,6 +75,35 @@ class TestDatabase:
         assert len(movies) == 1
         assert movies[0]["pickcode"] == "p1"
 
+    def test_sibling_prefix_isolation(self, db):
+        """兄弟前缀目录隔离：/movies 不匹配 /movies2"""
+        db.batch_add_files([
+            {"pickcode": "m1", "file_name": "x.mp4", "file_size": 100,
+             "file_type": ".mp4", "pan_path": "/movies/x.mp4",
+             "local_strm_path": "/s/x.strm", "sha1": "sx", "parent_id": "/movies"},
+            {"pickcode": "m2", "file_name": "y.mp4", "file_size": 100,
+             "file_type": ".mp4", "pan_path": "/movies2/y.mp4",
+             "local_strm_path": "/s/y.strm", "sha1": "sy", "parent_id": "/movies2"},
+            {"pickcode": "m3", "file_name": "z.mp4", "file_size": 100,
+             "file_type": ".mp4", "pan_path": "/moviesbackup/z.mp4",
+             "local_strm_path": "/s/z.strm", "sha1": "sz", "parent_id": "/moviesbackup"},
+        ])
+        res = db.get_active_files_by_parent("/movies")
+        assert len(res) == 1
+        assert res[0]["pickcode"] == "m1"
+
+    def test_trailing_slash_normalized(self, db):
+        """尾部斜杠规范化：/test/ 等价于 /test"""
+        db.batch_add_files([
+            {"pickcode": "t1", "file_name": "f.mp4", "file_size": 100,
+             "file_type": ".mp4", "pan_path": "/test/f.mp4",
+             "local_strm_path": "/s/f.strm", "sha1": "sf", "parent_id": "/test"},
+        ])
+        res1 = db.get_active_files_by_parent("/test")
+        res2 = db.get_active_files_by_parent("/test/")
+        assert len(res1) == 1 and len(res2) == 1
+        assert res1[0]["pickcode"] == res2[0]["pickcode"] == "t1"
+
     def test_sync_history(self, db):
         hid = db.add_sync_history("full")
         assert hid > 0

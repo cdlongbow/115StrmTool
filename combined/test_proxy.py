@@ -310,3 +310,33 @@ class TestPlaybackUserKey:
         assert key[0] == "10.0.0.1"
         assert key[1] == "Mozilla/5.0"
         assert key[2] == "item123"
+
+
+class TestResponseValidatorStripping:
+    """验证改写响应时正确剥离缓存校验头"""
+
+    def test_strip_response_validators(self):
+        from proxy_app import _strip_response_validators
+        headers = {
+            "content-type": "application/json",
+            "etag": '"abc123"',
+            "last-modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+            "content-md5": "Q2hlY2sgSW50ZWdyaXR5IQ==",
+            "cache-control": "public, max-age=3600",
+        }
+        result = _strip_response_validators(headers)
+        assert "etag" not in result
+        assert "last-modified" not in result
+        assert "content-md5" not in result
+        assert result["content-type"] == "application/json"
+        assert result["cache-control"] == "public, max-age=3600"
+
+    def test_case_insensitive_stripping(self):
+        from proxy_app import _strip_response_validators
+        headers = {
+            "ETag": '"abc123"',
+            "Last-Modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+            "Content-MD5": "xyz",
+        }
+        result = _strip_response_validators(headers)
+        assert len(result) == 0
