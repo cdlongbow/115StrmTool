@@ -24,14 +24,13 @@
 
 **外部依赖（Wheels）**
 - p115client — 115 网盘 SDK
-- p115rsacipher — RSA 加密/解密
-- p115cipher — 115 加解密
-- p115oss / p115pickcode — 115 OSS 与 pickcode 工具
+- p115cipher — RSA 加密/解密与 115 加解密
+- p115pickcode — pickcode 工具
+- full_strm_sync — STRM 生成 Rust 加速（可选，不可用时回退纯 Python）
 
 **可选 Windows 集成**
 - pystray — 系统托盘
-- Pillow — 托盘图标
-- webview / pywebview — 原生 WebView2 窗口
+- Pillow — 托盘图标与二维码渲染
 - pywin32 — Windows 注册表（开机自启）
 
 **基础设施**
@@ -59,7 +58,7 @@ MoviePilot-Windows/
 │   ├── web/
 │   │   └── index.html          # 管理控制面板 SPA
 │   ├── requirements.txt        # 依赖清单
-│   └── wheels/                 # 35+ 预构建 Wheels
+│   └── wheels/                 # 43 个预构建 Wheels
 ├── .github/workflows/
 │   └── release.yml             # CI/CD 构建与发布
 └── .monkeycode/docs/           # 项目文档
@@ -90,7 +89,7 @@ MoviePilot-Windows/
 **目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）
 **位置**: `combined/redirect_service.py` + `p115_client_wrapper.py`
 **关键文件**: `redirect_service.py`, `p115_client_wrapper.py`
-**依赖**: `p115rsacipher`, `p115client`
+**依赖**: `p115cipher`, `p115client`
 **被依赖**: `strm_generator`（写入 STRM 时使用此服务地址），`proxy_app`（播放时解析跳转）
 
 ### STRM 文件生成器
@@ -199,7 +198,7 @@ sequenceDiagram
 `_resolve_redirect` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应 `Location` 头获取 CDN URL，避免实际请求 CDN。这是为了防止 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL，导致客户端后续 GET Range 请求失败。
 
 ### UA 绑定的加密下载 API
-115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115rsacipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。
+115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115cipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。
 
 ### PlaybackInfo 强制 DirectPlay
 Emby 默认可能对远程媒体源启用转码（HLS），导致 302 直链失效。代理拦截 `/Items/{item_id}/PlaybackInfo`，检测 STRM 媒体源后将 `SupportsTranscoding` 设为 false，强制 DirectPlay。同时替换 `MediaSources[].Path` 为 CDN 直链，兼容使用 `Path` 而非 `DirectStreamUrl` 播放的客户端（如王二小放牛娃）。
