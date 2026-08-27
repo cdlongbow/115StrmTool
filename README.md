@@ -66,7 +66,7 @@ python build_exe.py
 
 生成 `dist/115网盘STRM生成与302工具.exe`。
 
-GitHub Actions 自动构建：推送 `v*` tag 或手动触发 workflow_dispatch（需输入版本号）。
+GitHub Actions 自动构建：推送 `v*` tag 或手动触发 workflow_dispatch（需输入版本号）。Release 说明自动取自 CHANGELOG.md 最顶部条目，发版前请先更新它。
 
 ## 技术栈
 

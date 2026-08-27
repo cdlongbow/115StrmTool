@@ -54,6 +54,24 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
 
+      - name: Extract changelog for release notes
+        run: |
+          python -c "
+          from pathlib import Path
+
+          lines = Path('CHANGELOG.md').read_text(encoding='utf-8').splitlines()
+          notes, started = [], False
+          for line in lines:
+              if line.startswith('## '):
+                  if started:
+                      break
+                  started = True
+              if started:
+                  notes.append(line)
+          Path('release_notes.md').write_text('\n'.join(notes).strip() + '\n', encoding='utf-8')
+          print('Release notes head:', notes[0] if notes else '(empty)')
+          "
+
       - name: Upload executable (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -65,5 +83,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          body_path: release_notes.md
           files: combined/dist/115网盘STRM生成与302工具.exe
           generate_release_notes: true
