@@ -31,6 +31,15 @@ DEFAULT_ENDPOINT_COOLDOWNS = {
 }
 
 
+# SDK 调用默认超时配置（秒）
+DEFAULT_SDK_TIMEOUT = {
+    "connect": 10.0,
+    "read": 60.0,
+    "write": 30.0,
+    "pool": 10.0,
+}
+
+
 class P115ClientWrapper:
     def __init__(self, cookie: str = ""):
         self._cookie = cookie
@@ -79,6 +88,8 @@ class P115ClientWrapper:
             ):
                 if base_url is None:
                     base_url = get_webapi_origin()
+                if "timeout" not in kwargs:
+                    kwargs["timeout"] = DEFAULT_SDK_TIMEOUT
                 return _orig_fs_files(
                     payload, base_url=base_url, async_=async_, **kwargs,
                 )
@@ -92,6 +103,8 @@ class P115ClientWrapper:
             ):
                 if base_url is None:
                     base_url = get_webapi_origin()
+                if "timeout" not in kwargs:
+                    kwargs["timeout"] = DEFAULT_SDK_TIMEOUT
                 return _orig_fs_dir_getid(
                     payload, base_url=base_url, async_=async_, **kwargs,
                 )

@@ -89,7 +89,7 @@ class RedirectService:
                 cached = self._cache.get(ckey)
             if cached:
                 cached_url, cached_fname = cached
-                logger.info(
+                logger.debug(
                     "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
                     pickcode, cached_fname, client_ip,
                 )
@@ -101,7 +101,7 @@ class RedirectService:
             if not result:
                 logger.error(
                     "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
-                    pickcode, client_ip,
+                    pickcode, client_ip, exc_info=True,
                 )
                 return JSONResponse(
                     status_code=502,
@@ -112,7 +112,7 @@ class RedirectService:
             ttl = max(CACHE_TTL_DEFAULT, expires_time - int(time()))
             async with self._cache.lock:
                 self._cache.put(ckey, (download_url, file_name), ttl=ttl)
-            logger.info(
+            logger.debug(
                 "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
                 pickcode, file_name, ttl, client_ip,
             )
