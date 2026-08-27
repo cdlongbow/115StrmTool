@@ -180,6 +180,26 @@ def _strip_accept_encoding(headers: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
 
 
+def _strip_response_validators(headers: dict[str, str]) -> dict[str, str]:
+    """
+    移除正文变化后失效的响应校验头，防止客户端缓存脏数据
+
+    当代理改写响应体（如强制 DirectPlay、注入端口）后，
+    ETag/Last-Modified/Content-MD5 不再匹配实际内容，
+    必须剥离以避免客户端用旧缓存命中改写前的响应
+
+    :param headers: 上游响应头
+
+    :return: 不含正文校验字段的响应头
+    """
+    validators = {"content-md5", "etag", "last-modified"}
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in validators
+    }
+
+
 def _may_return_emby_html_shell(path: str) -> bool:
     """
     判断路径是否可能返回 Emby Web 的 HTML 壳（用于是否走缓冲并注入脚本）
@@ -919,6 +939,7 @@ def create_app(
         resp_headers = {
             k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded
         }
+        resp_headers = _strip_response_validators(resp_headers)
         return JSONResponse(status_code=200, content=body, headers=resp_headers)
 
     for _path in ("/emby/system/info", "/system/info"):
@@ -1074,7 +1095,7 @@ def create_app(
         return JSONResponse(
             content=data,
             status_code=200,
-            headers=_resp_headers_from_httpx(resp),
+            headers=_strip_response_validators(_resp_headers_from_httpx(resp)),
         )
 
     for _playback_path in (
