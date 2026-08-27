@@ -260,15 +260,17 @@ def main():
     # 启动 P115 服务
     _start_p115()
 
-    use_tray = not args.no_tray if sys.platform == "win32" else False
+    from windows_tray import run_tray, should_use_tray
+
+    use_tray = should_use_tray() and not args.no_tray
 
     if use_tray:
         admin_thread = threading.Thread(target=_run_admin, daemon=True)
         admin_thread.start()
-        from windows_tray import run_tray
         run_tray(
             app_name="115网盘STRM生成与302工具",
             admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/",
+            admin_port=int(config.get("admin_port", 8100)),
             icon_char="M",
             on_exit=lambda: (_stop_emby(), _stop_p115_redirect()),
         )

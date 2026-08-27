@@ -83,7 +83,7 @@ async def get_emby_config() -> Dict[str, Any]:
 
 @router.post("/emby/config")
 async def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
-    updates = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
+    updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
     if updates:
         config_manager.update({"emby": updates})
         logger.info("Emby 配置已更新: %s", updates)
@@ -169,10 +169,18 @@ async def clear_logs() -> Dict:
     """
     清空日志文件
     """
-    log_path = LOG_DIR / "combined.log"
     try:
-        if log_path.exists():
-            log_path.write_text("", encoding="utf-8")
+        # 主日志由 RotatingFileHandler 持有，直接重置流内容避免 fd 偏移产生 NUL 空洞
+        from logging.handlers import RotatingFileHandler
+        for h in logger.handlers:
+            if isinstance(h, RotatingFileHandler):
+                h.acquire()
+                try:
+                    if h.stream and not h.stream.closed:
+                        h.stream.seek(0)
+                        h.stream.truncate(0)
+                finally:
+                    h.release()
         # 清理轮转备份（主日志由 RotatingFileHandler 持有，不能 unlink）
         for f in LOG_DIR.glob("combined.log.*"):
             if f.is_file():

@@ -2,6 +2,8 @@
 自定义异常定义：统一管理 API 错误，中间件层自动转 HTTP 响应
 """
 
+import re
+
 
 class ServiceError(Exception):
     """服务层通用错误，自动转为 500"""
@@ -62,7 +64,6 @@ def format_exception(exc: Exception, max_len: int = 200) -> str:
         if not text or text == "":
             continue
         # 尝试提取 115 API 错误格式: code=xxx reason='...' message='...'
-        import re
         code_m = re.search(r"code[=:]\s*(\d+)", text)
         reason_m = re.search(r"reason[=:]\s*['\"]?([^'\",}]+)", text)
         msg_m = re.search(r"message[=:]\s*['\"]?([^'\",}]+)", text)

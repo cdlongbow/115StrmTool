@@ -571,8 +571,9 @@ def create_app(
         """
         解析重定向链，返回最终直链 URL
 
-        使用 follow_redirects=False 手动解析 Location 头，避免实际请求到 CDN
-        消除 HEAD 方式请求 CDN 导致的方法差异问题
+        使用 follow_redirects=False 手动解析 Location 头，HEAD 请求只落在
+        重定向链的起点 URL，不会跟随到 CDN，避免 CDN 收到与播放器
+        GET 请求方法不一致的 HEAD 请求
 
         :param client: httpx 客户端（建议 follow_redirects=False）
         :param url: 起始 URL
@@ -737,7 +738,7 @@ def create_app(
             async with cache.lock:
                 cached_final_url = cache.get(cache_key)
             if cached_final_url is not None:
-                logger.info("302 直链: item_id=%s -> %s", item_id, cached_final_url)
+                logger.debug("302 直链: item_id=%s -> %s", item_id, cached_final_url)
                 return _build_302_redirect(cached_final_url, request)
 
             http_path = None
@@ -773,7 +774,7 @@ def create_app(
                 if sources_map:
                     if media_source_id and media_source_id in sources_map:
                         http_path = sources_map[media_source_id]
-                    elif sources_map:
+                    else:
                         http_path = next(iter(sources_map.values()))
                     if http_path:
                         logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
@@ -793,7 +794,7 @@ def create_app(
             async with cache.lock:
                 cache.put(cache_key, final_url)
 
-            logger.info("302 直链: item_id=%s -> %s", item_id, final_url)
+            logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
             return _build_302_redirect(final_url, request)
 
     for route in MEDIA_ROUTES:
@@ -1332,6 +1333,14 @@ def create_app(
         except Exception:
             logger.warning("获取 plugin.js 失败: %s", target_url, exc_info=True)
             return JSONResponse(status_code=502, content={"error": "Bad Gateway"})
+
+        # 非 200 响应原样透传（错误页/重定向），避免把错误内容当 JS 修补
+        if resp.status_code != 200:
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=_patch_js_response_headers(resp),
+            )
 
         content = resp.text
         original = content

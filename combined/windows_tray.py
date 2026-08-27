@@ -30,9 +30,9 @@ def _create_icon():
     return img
 
 
-def _post_api(path: str) -> str:
+def _post_api(path: str, port: int = 8100) -> str:
     try:
-        req = Request(f"http://127.0.0.1:8100{path}", method="POST")
+        req = Request(f"http://127.0.0.1:{port}{path}", method="POST")
         with urlopen(req, timeout=5) as r:
             return r.read().decode("utf-8")
     except Exception as e:
@@ -54,6 +54,7 @@ def _open_logs_dir():
 def run_tray(
     app_name: str = "App",
     admin_url: str = "http://localhost:8100",
+    admin_port: int = 8100,
     icon_char: str = "M",
     on_exit: callable = None,
 ):
@@ -68,17 +69,17 @@ def run_tray(
         _open_browser(admin_url)
 
     def _sync(icon, item):
-        result = _post_api("/api/sync/start")
+        result = _post_api("/api/sync/start", admin_port)
         logger.info("托盘菜单 - 全量同步: %s", result)
         icon.notify("全量同步结果\n" + result[:80], app_name)
 
     def _incr_sync(icon, item):
-        result = _post_api("/api/sync/incremental")
+        result = _post_api("/api/sync/incremental", admin_port)
         logger.info("托盘菜单 - 增量同步: %s", result)
         icon.notify("增量同步结果\n" + result[:80], app_name)
 
     def _checkin(icon, item):
-        result = _post_api("/api/checkin/run")
+        result = _post_api("/api/checkin/run", admin_port)
         logger.info("托盘菜单 - 立即签到: %s", result)
         icon.notify("签到结果\n" + result[:80], app_name)
 

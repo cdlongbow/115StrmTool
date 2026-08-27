@@ -5,6 +5,7 @@ from re import fullmatch as re_fullmatch
 from threading import Event, Lock, Thread
 from time import sleep
 from typing import Dict, Optional, Tuple
+import os
 import sys
 
 from logger import logger
@@ -192,6 +193,9 @@ class CheckinScheduler:
             h1, m1, h2, m2 = 6, 0, 9, 0
         else:
             h1, m1, h2, m2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        # 起点晚于终点（如 23:00-06:00）会导致 uniform 下界大于上界，回退默认窗口
+        if h2 * 60 + m2 <= h1 * 60 + m1:
+            h1, m1, h2, m2 = 6, 0, 9, 0
         start = datetime(d.year, d.month, d.day, h1, m1, 0, tzinfo=tz)
         end = datetime(d.year, d.month, d.day, h2, m2, 0, tzinfo=tz)
         return start, end
@@ -234,8 +238,11 @@ class CheckinScheduler:
 
     def _write_state(self) -> None:
         try:
-            with open(CHECKIN_STATE_FILE, "w", encoding="utf-8") as f:
+            # 原子写：先写临时文件再替换，避免写一半崩溃产生损坏的状态文件
+            tmp_path = CHECKIN_STATE_FILE.with_suffix(".json.tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json_dump(self._state, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, CHECKIN_STATE_FILE)
         except OSError as e:
             logger.error("签到状态保存失败: %s", e)
 

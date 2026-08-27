@@ -461,8 +461,12 @@ class P115ClientWrapper:
                     else:
                         cookie_str = str(cookie_dict)
                     if cookie_str:
-                        self._cookie = cookie_str
-                        self._init_client()
+                        self.update_cookie(cookie_str)
+                        try:
+                            from config_manager import config_manager
+                            config_manager.update({"p115": {"cookie": cookie_str}})
+                        except Exception as e:
+                            logger.error("扫码登录后持久化 cookie 失败: %s", e, exc_info=True)
                         return {"status": "success", "cookie": cookie_str}
                 return {"status": "error", "msg": "获取登录结果失败"}
 

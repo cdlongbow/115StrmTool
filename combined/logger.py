@@ -9,7 +9,7 @@ else:
     _BASE_DIR = Path(__file__).parent
 
 LOG_DIR = _BASE_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "combined.log"
 
 

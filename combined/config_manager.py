@@ -189,8 +189,11 @@ class ConfigManager:
             cookie = config_to_write.get("p115", {}).get("cookie", "")
             if cookie:
                 config_to_write["p115"]["cookie"] = _encrypt_cookie(cookie)
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            # 原子写：先写临时文件再替换，避免写一半崩溃产生损坏的配置
+            tmp_path = CONFIG_FILE.with_suffix(".json.tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(config_to_write, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, CONFIG_FILE)
             logger.info("配置已保存: %s", CONFIG_FILE.resolve())
             return True
         except OSError as e:
