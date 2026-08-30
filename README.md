@@ -39,11 +39,11 @@ Emby 客户端 → 反向代理 (:8097) → Emby 服务器 (:8096)
 - **打开日志目录** — 用资源管理器打开日志文件夹
 - **退出** — 停止所有服务并退出
 
-管理界面 http://localhost:8100
+管理界面默认 http://127.0.0.1:8100（默认仅本机访问，可在设置中改为局域网监听）
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| 管理 Web UI | 8100 | 配置、同步、签到、日志 |
+| 管理 Web UI | 8100 | 配置、同步、签到、日志（默认绑定 127.0.0.1） |
 | Emby 反向代理 | 8097 | 客户端通过此端口访问 Emby |
 | 302 跳转服务 | 3333 | STRM 文件中引用的跳转地址 |
 
@@ -57,6 +57,13 @@ python main.py              # 控制台模式
 python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 ```
 
+运行单元测试（113 个用例，需 Python 3.12+ 环境）：
+
+```bash
+cd combined
+python -m pytest test_*.py -q
+```
+
 ## 打包
 
 ```bash
@@ -66,7 +73,7 @@ python build_exe.py
 
 生成 `dist/115网盘STRM生成与302工具.exe`。
 
-GitHub Actions 自动构建：推送 `v*` tag 或手动触发 workflow_dispatch（需输入版本号）。Release 说明自动取自 CHANGELOG.md 最顶部条目，发版前请先更新它。
+GitHub Actions 自动构建：推送 `v*` tag 或手动触发 workflow_dispatch（需输入版本号）。构建流程先运行全部单元测试，测试通过后才打包 exe 并创建 Release。Release 说明自动取自 CHANGELOG.md 最顶部条目，发版前请先更新它。
 
 ## 技术栈
 

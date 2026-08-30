@@ -29,9 +29,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install pystray Pillow qrcode fastapi uvicorn httpx websockets
+          pip install pystray Pillow qrcode fastapi uvicorn httpx websockets pytest pytest-asyncio
 
-      - name: Install p115client from local wheels
+      - name: Install p115 SDK and local-only wheels
         run: |
           python -c "
           import subprocess, sys
@@ -45,6 +45,10 @@ jobs:
               print(f'Install: {f.name}')
               subprocess.run([sys.executable, '-m', 'pip', 'install', str(f)], check=True)
           "
+
+      - name: Run tests
+        working-directory: combined
+        run: python -m pytest test_*.py -q
 
       - name: Install PyInstaller
         run: pip install pyinstaller

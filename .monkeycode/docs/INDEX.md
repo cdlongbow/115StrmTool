@@ -71,6 +71,9 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
+# 运行单元测试（113 个用例）
+cd combined && python -m pytest test_*.py -q
+
 # 构建 exe
 cd combined && python build_exe.py
 
@@ -84,7 +87,8 @@ pip install combined/wheels/*.whl
 | 文件 | 目的 |
 |------|------|
 | `combined/main.py` | 应用入口 |
-| `combined/proxy_app.py` | 反向代理核心（1458 行） |
+| `combined/proxy_app.py` | 反向代理核心 |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
-| `.github/workflows/release.yml` | CI/CD 发布工作流 |
+| `.github/workflows/release.yml` | CI/CD 发布工作流（测试 → 打包 → Release） |
 | `combined/requirements.txt` | 运行时依赖 |
+| `combined/wheels/` | PyPI 缺失依赖的离线 wheel 源（45 个） |

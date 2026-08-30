@@ -58,7 +58,7 @@ MoviePilot-Windows/
 │   ├── web/
 │   │   └── index.html          # 管理控制面板 SPA
 │   ├── requirements.txt        # 依赖清单
-│   └── wheels/                 # 43 个预构建 Wheels
+│   └── wheels/                 # 45 个预构建 Wheels（含 PyPI 缺失的离线依赖）
 ├── .github/workflows/
 │   └── release.yml             # CI/CD 构建与发布
 └── .monkeycode/docs/           # 项目文档
@@ -78,12 +78,12 @@ MoviePilot-Windows/
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
-**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向（默认）或流式代理两种模式，将 115 CDN 媒体流返回客户端
+**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向（默认）或关闭重定向直连回退两种模式，将 115 CDN 媒体流返回客户端
 **位置**: `combined/proxy_app.py`
 **关键文件**: `proxy_app.py`（最大模块）
 **依赖**: `external_players`, `config_manager`, `redirect_service`
 **被依赖**: Emby 客户端（浏览器/桌面）
-**配置项**: `redirect_mode` — `true` 为 302 直链模式，`false` 为流式代理模式
+**配置项**: `redirect_mode` — `true` 为 302 直链模式（默认），`false` 时媒体请求回退到通用反向代理转发
 
 ### 115 跳转服务（端口 3333）
 **目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）
@@ -161,8 +161,8 @@ sequenceDiagram
         Client-->>CDN: GET CDN URL（带 Range/UA）
         CDN-->>Client: 媒体数据
     else redirect_mode = false
-        Proxy->>Proxy: 流式拉取 CDN 数据
-        Proxy-->>Client: 分块传输媒体数据
+        Proxy->>EmbySrv: 回退通用反向代理转发
+        EmbySrv-->>Client: 按原响应返回
     end
 ```
 
@@ -192,10 +192,10 @@ sequenceDiagram
 ## 设计决策
 
 ### 302 重定向 + crossOrigin 拦截
-`_try_media_response` 解析 STRM URL 后，根据 `redirect_mode` 配置决定返回 302 重定向或流式代理。302 模式下客户端直连 115 CDN，媒体流量不经过代理服务器。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截，通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。流式代理 `_stream_from_cdn` 保留作为备选方案。
+`_try_media_response` 解析 STRM URL 后，根据 `redirect_mode` 配置决定返回 302 重定向或回退到通用反向代理。302 模式下客户端直连 115 CDN，媒体流量不经过代理服务器。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截，通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。
 
 ### 手动解析 Location 头（302 模式）
-`_resolve_redirect` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应 `Location` 头获取 CDN URL，避免实际请求 CDN。这是为了防止 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL，导致客户端后续 GET Range 请求失败。
+`_resolve_redirect` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应 `Location` 头获取 CDN URL，避免实际请求 CDN。这是为了防止 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL，导致客户端后续 GET Range 请求失败。解析结果带成功标志：失败时（超时、缺 Location）只缓存 5 秒，防止坏 URL 长期驻留缓存。
 
 ### UA 绑定的加密下载 API
 115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115cipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。

@@ -23,6 +23,20 @@ GET /api/status
 }
 ```
 
+### 选择本地目录
+
+```
+GET /api/select-directory
+```
+
+弹出系统原生目录选择对话框（Tkinter，独立线程运行并带超时保护），返回所选路径。用于 Web UI 中选择 STRM 输出目录。
+
+**响应示例**：
+
+```json
+{"path": "D:/strm/media"}
+```
+
 ### 浏览 115 目录
 
 ```
@@ -132,14 +146,14 @@ POST /admin/api/config
 Content-Type: application/json
 
 {
-  "admin_host": "0.0.0.0",
+  "admin_host": "127.0.0.1",
   "admin_port": 8100,
   "emby": {...},
   "p115": {...}
 }
 ```
 
-读写全局配置。
+读写全局配置。`GET` 返回的配置中 `p115.cookie` 以掩码 `********` 显示；`POST` 时回传掩码值表示保持原 Cookie，传空串表示清除，传新值表示更换（更换后自动重建 115 客户端）。
 
 ### Emby 配置
 
@@ -258,13 +272,13 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
 
 ### 注入方式
 
-代理拦截 `/Users/{user_id}/Items/{item_id}` 响应，在 `MediaSources[].MediaAttachments` 中注入 `ExternalUrls` 数组。每个播放器对应一个 `{Name, Url, Description}` 条目，URL 使用自定义协议方案（如 `potplayer://...`、`vlc://...`）。
+代理拦截 `/Users/{user_id}/Items/{item_id}` 响应，在响应顶层 `ExternalUrls` 数组中注入外部播放器条目。每个播放器对应一个 `{Name, Url, Description}` 条目，`Name` 前缀保留播放器 key 供前端匹配，URL 统一经 `/redirect2external?link=<base64>` 中转后 302 到自定义协议地址（如 `potplayer://...`、`vlc://...`）。
 
 ## 配置结构
 
 ```json
 {
-  "admin_host": "0.0.0.0",
+  "admin_host": "127.0.0.1",
   "admin_port": 8100,
   "emby": {
     "enabled": false,
@@ -287,6 +301,10 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "overwrite_mode": "never",
     "cleanup_deleted_strm": false,
     "use_rust": false
+  },
+  "checkin": {
+    "enabled": false,
+    "time_range": "06:00-09:00"
   }
 }
 ```

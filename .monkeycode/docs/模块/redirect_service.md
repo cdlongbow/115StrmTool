@@ -29,7 +29,7 @@ redirect_service.py
 5. 写入缓存（TTL = expires_time - 300，max 90s）
 6. 返回 302 重定向响应
 
-**重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（加密 API 优先 + 4 次阶梯重试 + 405 自适应切换 SDK），保持跳转服务简洁。
+**重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（加密 API 优先 + 4 次阶梯重试 + 405 时直跳 SDK 降级），保持跳转服务简洁。
 
 ## 路由
 
@@ -44,7 +44,8 @@ redirect_service.py
 
 - 缓存 key 包含 UA 哈希（前 16 位），不同 UA 独立缓存
 - TTL = CDN URL 过期时间 - 300 秒（留安全余量），上限 90 秒
-- 最多 1000 个条目，超出时淘汰最旧的
+- 计算出的 TTL 小于等于 0 时记录告警日志（含 115 返回的剩余有效期），便于排查播放中途失败
+- 最多 1000 个条目，超出时按 LRU 淘汰
 - 每次写缓存前清理已过期的条目
 - **缓存击穿防护**：对同一 `pickcode:UA_HASH` 的并发请求，仅第一个执行回源获取下载地址（`AsyncKeyLock` 按 key 互斥），其余请求在锁内二次检查缓存后直接复用结果；锁在无使用者时自动清理
 

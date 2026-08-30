@@ -26,13 +26,13 @@
 ### 安装
 
 ```bash
-git clone https://github.com/cdlongbow/MoviePilot-Windows.git
-cd MoviePilot-Windows
+git clone https://github.com/cdlongbow/115StrmTool.git
+cd 115StrmTool
 
 # 安装运行时依赖
-pip install fastapi>=0.110.0 uvicorn>=0.27.0 httpx[http2]>=0.27.0 websockets>=12.0 qrcode Pillow
+pip install fastapi uvicorn "httpx[http2]" websockets qrcode Pillow
 
-# 安装 115 SDK（从 wheels 目录）
+# 安装 115 SDK（从 wheels 目录；包含 PyPI 上缺失的离线依赖）
 python -c "import subprocess, pathlib; [subprocess.run(['pip', 'install', str(f)], check=True) for f in sorted(pathlib.Path('combined/wheels').glob('*.whl'))]"
 
 # （可选）安装桌面集成（仅 Windows）
@@ -66,6 +66,7 @@ python build_exe.py
 
 | 配置路径 | 默认值 | 说明 |
 |---------|--------|------|
+| `admin_host` | `127.0.0.1` | 管理 Web UI 监听地址（改 `0.0.0.0` 允许局域网访问） |
 | `admin_port` | 8100 | 管理 Web UI 端口 |
 | `emby.emby_host` | `http://192.168.2.100:8096` | Emby 服务器地址 |
 | `emby.proxy_port` | 8097 | Emby 反向代理端口 |
@@ -74,19 +75,24 @@ python build_exe.py
 | `p115.rmt_mediaext` | `mp4,mkv,ts,...` | STRM 生成的媒体扩展名 |
 | `p115.overwrite_mode` | `never` | STRM 覆盖模式（never/always） |
 
+配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。
+
 ## 开发工作流
 
 ### 代码质量工具
 
 | 工具 | 命令 | 目的 |
 |------|------|------|
+| 单元测试 | `cd combined && python -m pytest test_*.py -q` | 全量回归验证（113 个用例） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
+测试说明：CI 在打包 exe 前会运行全部测试，测试失败则构建中止。个别测试模块通过 `patch.dict(sys.modules, ...)` 隔离重量级依赖，无需真实 Cookie 或网络即可运行。
+
 ### 分支策略
 
-- `main` — MoviePilot 插件版（原始项目，参考用）
-- `Windows` — Windows 独立工具版（当前开发分支）
+- `main` — 主开发分支，所有提交直接进入并触发后续发版流程
+- 功能修复分支按需创建，完成后合回 `main`
 
 ### 提交规范
 
@@ -129,19 +135,9 @@ Co-authored-by: <AI Name> <email>
 
 **关键点**：
 - `_try_media_response()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链
+- `_resolve_redirect()` 返回 `(最终 URL, 是否成功解析)` 元组；解析失败时缓存仅保留 5 秒，避免坏 URL 长期驻留
 - `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
-- `_stream_from_cdn()` 保留作为流式代理备选方案
-
-### 修改流式代理备选行为
-
-**需修改的文件**：
-1. `combined/proxy_app.py` — `_stream_from_cdn()` 方法
-
-**关键点**：
-- 使用 `request.app.state.http_client_no_follow` 发起 GET 请求
-- 通过 `_build_forward_headers(request)` 转发客户端原始头（含 Range、User-Agent）
-- 用 `aiter_bytes(chunk_size=65536)` 逐块流式传输
-- 排除 `HOP_BY_HOP_HEADERS` 和 `content-encoding/transfer-encoding`
+- `redirect_mode=false` 时媒体路由回退到通用反向代理转发 Emby 响应，不再单独走 CDN 流式拉取
 
 ## 编码规范
 

@@ -1,6 +1,6 @@
 # proxy_app
 
-Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，支持 302 重定向模式（默认）和流式代理模式可切换，注入 crossOrigin 拦截脚本和外部播放器按钮。
+Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，302 重定向模式下让客户端直连 CDN，注入 crossOrigin 拦截脚本和外部播放器按钮。
 
 ## 结构
 
@@ -18,8 +18,7 @@ proxy_app.py（最大模块）
 │   └── catch_all()                  # 兜底路由
 ├── 辅助方法
 │   ├── _build_302_redirect()        # 构建 302 重定向到 CDN 直链
-│   ├── _resolve_redirect()          # 重定向链解析
-│   ├── _stream_from_cdn()           # 115 CDN 流式代理（备选方案）
+│   ├── _resolve_redirect()          # 重定向链解析（单跳跟随，返回 URL + 成功标志）
 │   ├── _try_media_response()        # 媒体 URL 解析入口（三级缓存 → 302）
 │   └── _build_forward_headers()     # 转发请求头构建
 └── 常量
@@ -38,7 +37,7 @@ Client → /videos/{id}/stream
 _handle_media()
   ├─ _try_media_response()      # 三级缓存查询 → 解析 STRM 跳转链
   │   ├─ redirect_mode=true     → _build_302_redirect()  # 302 重定向到 CDN 直链
-  │   └─ redirect_mode=false    → _stream_from_cdn()     # 流式代理
+  │   └─ redirect_mode=false    → return None（回退反向代理转发 Emby 响应）
   └─ _reverse_proxy()            # 回退到 Emby 服务器
 ```
 
@@ -57,28 +56,21 @@ _playback_info_strm_direct_play()
   7. 返回修改后的 PlaybackInfo
 ```
 
-## 重定向模式与流式代理模式
+## 重定向模式与回退
 
-通过 `redirect_mode` 配置项切换两种播放模式：
+通过 `redirect_mode` 配置项切换两种播放路径：
 
-- **302 重定向模式**（`redirect_mode=true`，默认）：`_try_media_response` 调用 `_build_302_redirect` 返回 302 响应，客户端直连 115 CDN。媒体流量不经过代理服务器。
-- **流式代理模式**（`redirect_mode=false`）：`_try_media_response` 调用 `_stream_from_cdn`，由服务端拉取 CDN 数据流式返回客户端。
+- **302 重定向模式**（`redirect_mode=true`）：`_try_media_response` 调用 `_build_302_redirect` 返回 302 响应，客户端直连 115 CDN。媒体流量不经过代理服务器。
+- **关闭重定向**（`redirect_mode=false`）：`_try_media_response` 直接返回 None，媒体路由回退到 `_reverse_proxy` 通用转发，由 Emby 服务器按原响应处理。
 
 ## 手动解析 Location 头
 
 `_resolve_redirect()` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应头中的 `Location` 字段获取 CDN URL，不实际请求 CDN。这避免了 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL 导致客户端后续 GET Range 请求失败的问题。
 
-## CDN 流式代理（备选方案）
+返回值为 `(最终 URL, 是否成功解析)` 元组：
 
-`_stream_from_cdn()` 在 302 重定向路径不可用时作为备选方案，由服务器端拉取 CDN 数据流式返回客户端。
-
-**输入**：115 CDN URL + 原始请求
-
-**流程**：
-1. 用 `_build_forward_headers(request)` 构建请求头（包括 Range、User-Agent）
-2. 用 `httpx.AsyncClient`（`follow_redirects=False`）向 CDN 发 GET 请求
-3. 用 `StreamingResponse` + `aiter_bytes(65536)` 逐块转发响应
-4. 排除 `HOP_BY_HOP_HEADERS` 和 `content-encoding`/`transfer-encoding` 头
+- 解析成功 → 缓存按正常 TTL（90s）写入
+- 解析失败（超时、缺 Location 头等）→ 返回原始 URL 并标记失败，仅缓存 5 秒，避免坏结果长期驻留导致后续请求反复 302 到失效地址
 
 ## JS 修补
 
@@ -101,12 +93,15 @@ _playback_info_strm_direct_play()
 
 | 缓存 | 作用域 | TTL | 用途 |
 |------|--------|-----|------|
-| playback_url_cache | 全局 | 90s | 媒体 URL 缓存 |
+| playback_url_cache | 全局 | 90s（解析失败 5s） | 媒体 URL 缓存 |
 | strm_source_cache | 全局 | 300s | STRM 源 URL 缓存 |
 | playback_user_cache | 全局 | 300s | 用户关联缓存 |
-| redirect_url_cache | 全局 | 600s | 解析后的 CDN 直链缓存 |
 
-`playback_url_cache` 的写入由 `playback_url_key_lock`（按 `item_id + MediaSourceId + 用户 + 请求头` 隔离的互斥锁）保护，同一媒体源并发播放时仅第一个请求执行 PlaybackInfo 回源与重定向链解析，其余请求复用缓存结果。
+`playback_url_cache` 的写入由 `playback_url_key_lock`（按 `item_id + MediaSourceId + 用户 + 请求头` 隔离的互斥锁）保护，同一媒体源并发播放时仅第一个请求执行 PlaybackInfo 回源与重定向链解析，其余请求复用缓存结果。缓存底层为 `AsyncTtlCache`（OrderedDict 实现的 TTL + LRU 淘汰）。
+
+## WebSocket 代理
+
+`_ws_proxy` 双向转发客户端与 Emby 后端的 WebSocket（`/embywebsocket`）。客户端→后端方向用 `receive()` 统一处理文本与二进制帧；两个转发任务用 `FIRST_COMPLETED` 等待，任一方向断开即取消另一方向并关闭连接，避免协程悬挂在已断开的对端。
 
 ## 依赖
 
