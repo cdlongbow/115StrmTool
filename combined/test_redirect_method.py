@@ -13,7 +13,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 import httpx
-import requests
 import pytest
 
 
@@ -124,9 +123,9 @@ class TestHeadVsGetMethod:
         url = f"{base}/file?scenario=reject_head"
 
         # 模拟 _resolve_redirect 的 HEAD 方式
-        s = requests.Session()
-        resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_head = s.head(url)
+            resp_get = s.get(url)
 
         print(f"\n[场景 1] HEAD: status={resp_head.status_code}, url={resp_head.url}")
         print(f"[场景 1] GET:  status={resp_get.status_code}, url={resp_get.url}")
@@ -147,16 +146,14 @@ class TestHeadVsGetMethod:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/file?scenario=method_sign_url"
 
-        s = requests.Session()
-        resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_head = s.head(url)
+            resp_get = s.get(url)
 
-        # 注意: requests 库对 HEAD 响应自动丢弃 body（RFC 7231 允许）
-        # 但 httpx 的 behavior 不同，可能保留 body
-        head_body = resp_head.text
+        # httpx 对 HEAD 响应保留 body 行为与 requests 不同，仅验证 GET 语义
         get_data = resp_get.json()
 
-        print(f"\n[场景 2] HEAD 响应体: '{head_body}'（requests 丢弃 HEAD body）")
+        print(f"\n[场景 2] HEAD status={resp_head.status_code}")
         print(f"[场景 2] GET 返回 URL:  {get_data['url']}")
 
         assert get_data["method"] == "GET"
@@ -172,9 +169,9 @@ class TestHeadVsGetMethod:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/redirect?scenario=redirect_to_cdn&final_scenario=get_only_cdn"
 
-        s = requests.Session()
-        resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_head = s.head(url)
+            resp_get = s.get(url)
 
         print("\n[场景 3 重定向链]")
         print(f"  HEAD: status={resp_head.status_code}, final_url={resp_head.url}")
@@ -193,9 +190,9 @@ class TestHeadVsGetMethod:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/file?scenario=normal"
 
-        s = requests.Session()
-        resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_head = s.head(url)
+            resp_get = s.get(url)
 
         print("\n[场景 4 正常 CDN]")
         print(f"  HEAD: status={resp_head.status_code}, url={resp_head.url}")
@@ -213,9 +210,9 @@ class TestHeadVsGetMethod:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/redirect?scenario=redirect_to_cdn&final_scenario=normal"
 
-        s = requests.Session()
-        resp_head = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resp_get = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_head = s.head(url)
+            resp_get = s.get(url)
 
         print("\n[场景 5 重定向链 + 正常 CDN]")
         print(f"  HEAD: status={resp_head.status_code}, url={resp_head.url}")
@@ -238,17 +235,17 @@ class TestResolveRedirectBehavior:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/redirect?scenario=redirect_to_cdn&final_scenario=get_only_cdn"
 
-        s = requests.Session()
-
-        # 模拟 _resolve_redirect 的 HEAD 方式
-        resp = s.send(requests.Request("HEAD", url).prepare(), allow_redirects=True)
-        resolved_url = str(resp.url)
+        with httpx.Client(follow_redirects=True) as s:
+            # 模拟 _resolve_redirect 的 HEAD 方式
+            resp = s.head(url)
+            resolved_url = str(resp.url)
 
         print(f"\n[HEAD 解析] 解析结果: {resolved_url}")
         print(f"[HEAD 解析] 状态码: {resp.status_code}")
 
         # 用 GET 请求解析到的 URL
-        resp_get = s.get(resolved_url)
+        with httpx.Client(follow_redirects=True) as s:
+            resp_get = s.get(resolved_url)
         print(f"[HEAD 解析] 用 GET 请求该 URL: status={resp_get.status_code}")
 
         assert resp.status_code == 405
@@ -263,11 +260,10 @@ class TestResolveRedirectBehavior:
         base = f"http://127.0.0.1:{mock_server}"
         url = f"{base}/redirect?scenario=redirect_to_cdn&final_scenario=normal"
 
-        s = requests.Session()
-
-        # 用 GET 方式
-        resp = s.send(requests.Request("GET", url).prepare(), allow_redirects=True)
-        resolved_url = str(resp.url)
+        with httpx.Client(follow_redirects=True) as s:
+            # 用 GET 方式
+            resp = s.get(url)
+            resolved_url = str(resp.url)
 
         print(f"\n[GET 解析] 解析结果: {resolved_url}")
         print(f"[GET 解析] 状态码: {resp.status_code}")
