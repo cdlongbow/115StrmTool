@@ -2,9 +2,10 @@
 通用工具模块：异步 TTL 缓存、按 key 互斥锁
 """
 from asyncio import Lock
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from time import monotonic
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 
 class AsyncTtlCache:
@@ -23,8 +24,7 @@ class AsyncTtlCache:
     def __init__(self, ttl: float = 90, max_size: int = 500):
         self._ttl = ttl
         self._max_size = max_size
-        self._data: Dict[Any, Tuple[Any, float]] = {}
-        self._order: List[Any] = []
+        self._data: "OrderedDict[Any, Tuple[Any, float]]" = OrderedDict()
         self._lock = Lock()
 
     @property
@@ -45,44 +45,31 @@ class AsyncTtlCache:
             return None
         val, expiry = entry
         if monotonic() < expiry:
+            self._data.move_to_end(key)
             return val
-        self._evict_key(key)
+        del self._data[key]
         return None
 
     def put(self, key: Any, value: Any, ttl: Optional[float] = None):
         now = monotonic()
         expiry = now + (ttl if ttl is not None else self._ttl)
-        if key not in self._data:
-            self._order.append(key)
+        if key in self._data:
+            self._data.move_to_end(key)
         self._data[key] = (value, expiry)
         self._evict_expired(now)
-        while len(self._data) > self._max_size and self._order:
-            oldest = self._order.pop(0)
-            self._data.pop(oldest, None)
+        while len(self._data) > self._max_size:
+            self._data.popitem(last=False)
 
     def remove(self, key: Any):
         self._data.pop(key, None)
-        try:
-            self._order.remove(key)
-        except ValueError:
-            pass
 
     def clear(self):
         self._data.clear()
-        self._order.clear()
-
-    def _evict_key(self, key: Any):
-        self._data.pop(key, None)
-        try:
-            self._order.remove(key)
-        except ValueError:
-            pass
 
     def _evict_expired(self, now: float):
-        expired = [k for k in self._order if k in self._data and self._data[k][1] < now]
+        expired = [k for k, (_, expiry) in self._data.items() if expiry < now]
         for k in expired:
-            self._data.pop(k, None)
-        self._order[:] = [k for k in self._order if k not in frozenset(expired)]
+            del self._data[k]
 
 
 class AsyncKeyLock:

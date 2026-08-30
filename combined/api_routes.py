@@ -10,6 +10,7 @@ from config_manager import config_manager
 from database import db
 from exceptions import ClientNotReadyError, ServiceError
 from p115_client_wrapper import P115ClientWrapper
+from config_manager import mask_config
 
 router = APIRouter(prefix="/api")
 
@@ -90,7 +91,7 @@ def _select_directory_sync() -> str:
 
 
 @router.get("/status")
-async def get_status() -> Dict[str, Any]:
+def get_status() -> Dict[str, Any]:
     stats = db.get_stats()
     config = config_manager.get()
     client_ready = _client is not None and _client.is_ready()
@@ -107,7 +108,7 @@ async def get_status() -> Dict[str, Any]:
         "stats": stats,
         "user_info": user_info,
         "storage": storage,
-        "config": config,
+        "config": mask_config(config),
     }
 
 
@@ -115,25 +116,41 @@ async def get_status() -> Dict[str, Any]:
 
 
 @router.get("/browse")
-async def browse_directory(pid: str = "0", path: str = ""):
+def browse_directory(pid: str = "0", path: str = ""):
     client = get_client()
     try:
-        from p115client import check_response
         from p115client.tool.attr import normalize_attr
-        resp = client._client.fs_files_app({"cid": pid, "limit": 1000})
-        check_response(resp)
+
         items = []
-        data = resp.get("data") or resp.get("Data") or []
-        for raw_item in data:
-            item = normalize_attr(raw_item)
-            if item["is_dir"]:
-                items.append({
-                    "id": str(item["id"]),
-                    "name": item["name"],
-                    "is_dir": True,
-                })
+        page_size = 1000
+        offset = 0
+        max_pages = 20
+        for _ in range(max_pages):
+            resp = client.fs_files_app({
+                "cid": int(pid) if str(pid).isdigit() else 0,
+                "limit": page_size,
+                "offset": offset,
+                "show_dir": 1,
+            })
+            if not resp:
+                break
+            from p115client import check_response
+
+            check_response(resp)
+            data = resp.get("data") or resp.get("Data") or []
+            for raw_item in data:
+                item = normalize_attr(raw_item)
+                if item["is_dir"]:
+                    items.append({
+                        "id": str(item["id"]),
+                        "name": item["name"],
+                        "is_dir": True,
+                    })
+            if len(data) < page_size:
+                break
+            offset += len(data)
         if not items:
-            logger.info("浏览目录 pid=%s 返回空: resp=%s", pid, resp)
+            logger.info("浏览目录 pid=%s 返回空", pid)
         return {"items": items, "path": path or "/"}
     except Exception as e:
         logger.error("浏览目录失败 pid=%s: %s", pid, e, exc_info=True)
@@ -262,7 +279,7 @@ async def checkin_status() -> Dict:
 
 
 @router.post("/checkin/run")
-async def checkin_manual_exec() -> Dict:
+def checkin_manual_exec() -> Dict:
     ok, detail = checkin_scheduler.manual_checkin()
     return {"status": "ok" if ok else "error", "message": detail}
 
@@ -280,7 +297,7 @@ async def checkin_save_config(data: dict) -> Dict:
 
 
 @router.get("/qrcode")
-async def get_qrcode(app: str = "alipaymini") -> Dict:
+def get_qrcode(app: str = "alipaymini") -> Dict:
     client = get_client()
     try:
         result = client.get_qrcode(app)
@@ -292,7 +309,7 @@ async def get_qrcode(app: str = "alipaymini") -> Dict:
 
 
 @router.post("/qrcode/check")
-async def check_qrcode(payload: dict) -> Dict:
+def check_qrcode(payload: dict) -> Dict:
     client = get_client()
     try:
         result = client.check_qrcode(payload)

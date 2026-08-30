@@ -34,25 +34,22 @@ class TestP115CookieRestart:
         finally:
             patcher.stop()
 
-    @pytest.mark.asyncio
-    async def test_cookie_change_triggers_restart(self):
+    def test_cookie_change_triggers_restart(self):
         with self._patch_config_manager():
             req = ConfigUpdateRequest(p115={"cookie": "new-cookie"})
-            await update_config(req)
+            update_config(req)
         assert self._callback_called == 1
         self._cm.update.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_no_cookie_no_restart(self):
+    def test_no_cookie_no_restart(self):
         with self._patch_config_manager():
             req = ConfigUpdateRequest(p115={"enabled": True})
-            await update_config(req)
+            update_config(req)
         assert self._callback_called == 0
 
-    @pytest.mark.asyncio
-    async def test_no_callback_registered(self):
+    def test_no_callback_registered(self):
         set_p115_restart_callback(None)
         with self._patch_config_manager():
             req = ConfigUpdateRequest(p115={"cookie": "new-cookie"})
-            await update_config(req)
+            update_config(req)
         assert self._callback_called == 0

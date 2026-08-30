@@ -21,6 +21,10 @@ class IncompleteUploadError(Exception):
     """文件上传不完整异常，用于触发重试"""
 
 
+class DownloadApiUnavailableError(Exception):
+    """下载 API 被禁用（如返回 405）异常，触发后直接降级到 SDK 而不重试加密 API"""
+
+
 DEFAULT_ENDPOINT_COOLDOWNS = {
     "fs_files": 0.5,
     "fs_dir_getid": 0.5,
@@ -216,11 +220,8 @@ class P115ClientWrapper:
                 headers={"User-Agent": user_agent},
             )
             if resp.status_code == 405:
-                logger.warning("Android 下载 API 返回 405，尝试 SDK 降级")
-                sdk_result = self._try_sdk_download_url(pickcode)
-                if sdk_result:
-                    return sdk_result
-                return None
+                logger.warning("Android 下载 API 返回 405，直接降级 SDK 获取")
+                raise DownloadApiUnavailableError(error_msg or "download api 405")
             if resp.status_code != 200:
                 logger.warning(
                     "115 下载 API 返回非 200: status=%s pickcode=%s",
@@ -257,7 +258,7 @@ class P115ClientWrapper:
                 )
                 return None
             return self._extract_url_info(url)
-        except IncompleteUploadError:
+        except (IncompleteUploadError, DownloadApiUnavailableError):
             raise
         except Exception:
             logger.debug("加密 API 请求异常", exc_info=True)
@@ -294,6 +295,8 @@ class P115ClientWrapper:
                                 len(_DOWNLOAD_RETRY_DELAYS) + 1,
                             )
                         return result
+                except DownloadApiUnavailableError:
+                    break
                 except IncompleteUploadError:
                     if retry_index < len(_DOWNLOAD_RETRY_DELAYS):
                         delay = _DOWNLOAD_RETRY_DELAYS[retry_index]
@@ -335,6 +338,38 @@ class P115ClientWrapper:
         if self._http_client:
             self._http_client.close()
             self._http_client = None
+
+    def fs_files_app(self, payload: Dict) -> Optional[Dict]:
+        """
+        通过 Android API 浏览目录
+
+        :param payload (Dict): 请求参数（cid、limit、offset 等）
+
+        :return Dict: API 原始响应，客户端未就绪时返回 None
+        """
+        if not self._client:
+            return None
+        try:
+            return self._client.fs_files_app(payload)
+        except Exception as e:
+            logger.error("浏览目录失败: %s", e, exc_info=True)
+            return None
+
+    def download_url(self, pickcode: str) -> Optional[Dict]:
+        """
+        通过 SDK 获取文件下载地址（无 UA 绑定）
+
+        :param pickcode (str): 文件 pickcode
+
+        :return Dict: SDK 原始响应，客户端未就绪或失败时返回 None
+        """
+        if not self._client:
+            return None
+        try:
+            return self._client.download_url(pickcode)
+        except Exception as e:
+            logger.error("SDK 获取下载地址失败: %s", e, exc_info=True)
+            return None
 
     def user_points_sign(self) -> Optional[Dict]:
         if not self._client:

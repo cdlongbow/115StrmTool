@@ -8,7 +8,7 @@ from exceptions import ServiceError
 from logger import LOG_DIR
 from pydantic import BaseModel
 
-from config_manager import config_manager
+from config_manager import config_manager, mask_config, COOKIE_MASK
 from logger import logger
 
 router = APIRouter(prefix="/admin/api")
@@ -27,24 +27,29 @@ _restart_p115_callback: Callable = None
 
 
 @router.get("/config")
-async def get_config() -> Dict[str, Any]:
-    return config_manager.get()
+def get_config() -> Dict[str, Any]:
+    return mask_config(config_manager.get())
 
 
 @router.post("/config")
-async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
+def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
     updates = {}
     if req.emby is not None:
         updates["emby"] = {k: v for k, v in req.emby.items() if v is not None}
     if req.p115 is not None:
-        updates["p115"] = {k: v for k, v in req.p115.items() if v is not None}
+        p115_updates = {k: v for k, v in req.p115.items() if v is not None}
+        # 前端回传掩码值表示 Cookie 未修改，不覆盖已保存的真实 Cookie
+        if p115_updates.get("cookie") == COOKIE_MASK:
+            p115_updates.pop("cookie")
+        if p115_updates:
+            updates["p115"] = p115_updates
     if updates:
         config_manager.update(updates)
-        logger.info("配置已更新: %s", updates)
-    if req.p115 is not None and "cookie" in req.p115 and _restart_p115_callback:
+        logger.info("配置已更新: %s", mask_config(updates))
+    if "cookie" in updates.get("p115", {}) and _restart_p115_callback:
         _restart_p115_callback()
         logger.info("P115 Cookie 已更新，客户端已重建")
-    return config_manager.get()
+    return mask_config(config_manager.get())
 
 
 def set_emby_restart_callback(cb: Callable):
@@ -112,7 +117,7 @@ def set_p115_status(running: bool):
 
 
 @router.get("/p115/status")
-async def get_p115_status() -> Dict[str, Any]:
+def get_p115_status() -> Dict[str, Any]:
     client = _p115_client_ref["instance"]
     client_ready = client is not None and hasattr(client, "is_ready") and client.is_ready()
     stats = {}

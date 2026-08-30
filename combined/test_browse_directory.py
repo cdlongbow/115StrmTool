@@ -22,7 +22,7 @@ def _sample_resp():
 @pytest.fixture
 def client():
     _client = MagicMock()
-    _client._client.fs_files_app.return_value = _sample_resp()
+    _client.fs_files_app.return_value = _sample_resp()
     return _client
 
 
@@ -64,9 +64,8 @@ def browse(client):
         set_client(None)
 
 
-@pytest.mark.asyncio
-async def test_browse_only_returns_directories(browse):
-    result = await browse(pid="0")
+def test_browse_only_returns_directories(browse):
+    result = browse(pid="0")
     items = result["items"]
     assert len(items) == 2
     assert items[0]["is_dir"] is True
@@ -76,19 +75,17 @@ async def test_browse_only_returns_directories(browse):
     assert items[1]["name"] == "剧集"
 
 
-@pytest.mark.asyncio
-async def test_browse_filters_out_files(browse):
-    result = await browse(pid="0")
+def test_browse_filters_out_files(browse):
+    result = browse(pid="0")
     names = [i["name"] for i in result["items"]]
     assert "movie.mkv" not in names
     assert "sub.srt" not in names
 
 
-@pytest.mark.asyncio
-async def test_browse_fc_int_type(client, browse):
+def test_browse_fc_int_type(client, browse):
     resp = _sample_resp()
     resp["data"][0]["fc"] = 0
     resp["data"][1]["fc"] = "0"
-    client._client.fs_files_app.return_value = resp
-    result = await browse(pid="0")
+    client.fs_files_app.return_value = resp
+    result = browse(pid="0")
     assert len(result["items"]) == 2

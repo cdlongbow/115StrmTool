@@ -101,7 +101,7 @@ class RedirectService:
             if not result:
                 logger.error(
                     "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
-                    pickcode, client_ip, exc_info=True,
+                    pickcode, client_ip,
                 )
                 return JSONResponse(
                     status_code=502,
@@ -116,8 +116,10 @@ class RedirectService:
                 async with self._cache.lock:
                     self._cache.put(ckey, (download_url, file_name), ttl=ttl)
             else:
-                logger.debug(
-                    "【302跳转服务】下载地址剩余有效期过短，跳过缓存: pickcode=%s", pickcode
+                logger.warning(
+                    "【302跳转服务】下载地址剩余有效期过短（可能已过期），仍按原样返回且不缓存: "
+                    "pickcode=%s expires_in=%ss",
+                    pickcode, expires_time - int(time()),
                 )
             logger.debug(
                 "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",

@@ -1,8 +1,12 @@
-from asyncio import gather
+from asyncio import (
+    FIRST_COMPLETED,
+    create_task,
+    gather,
+    wait,
+)
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
-from time import monotonic
 from typing import Any, List, Tuple
 from urllib.parse import quote, urlparse
 
@@ -567,11 +571,11 @@ def create_app(
         url: str,
         headers: dict[str, str],
         user_id: str | None = None,
-    ) -> str:
+    ) -> Tuple[str, bool]:
         """
-        解析重定向链，返回最终直链 URL
+        通过单次 HEAD 请求跟随 115 跳转，返回 CDN 直链
 
-        使用 follow_redirects=False 手动解析 Location 头，HEAD 请求只落在
+        使用 follow_redirects=False 手动读取 Location 头，HEAD 请求只落在
         重定向链的起点 URL，不会跟随到 CDN，避免 CDN 收到与播放器
         GET 请求方法不一致的 HEAD 请求
 
@@ -580,7 +584,7 @@ def create_app(
         :param headers: 请求头
         :param user_id: Emby 用户 ID，可为 None
 
-        :return str: 最终 URL；失败时返回原始 url
+        :return Tuple: (最终 URL，是否成功解析)；失败时返回原始 url 并标记未解析
         """
         if user_id:
             headers = {**headers, "X-Emby-UserId": user_id}
@@ -597,13 +601,13 @@ def create_app(
                 if resp.status_code in (301, 302, 303, 307, 308):
                     location = resp.headers.get("Location")
                     if location:
-                        return location
+                        return location, True
                     logger.warning(
                         "重定向响应缺少 Location 头: url=%s status=%s",
                         url, resp.status_code,
                     )
-                    return url
-                return str(resp.url)
+                    return url, False
+                return str(resp.url), True
             except TimeoutException as e:
                 if attempt >= max_attempts:
                     logger.warning(
@@ -612,7 +616,7 @@ def create_app(
                         type(e).__name__,
                         exc_info=True,
                     )
-                    return url
+                    return url, False
                 logger.info(
                     "解析重定向超时，准备重试: url=%s, attempt=%s/%s, connect=%ss, read=%ss, error=%s",
                     url,
@@ -624,64 +628,16 @@ def create_app(
                 )
             except Exception:
                 logger.warning("解析重定向失败，使用原始 URL: %s", url, exc_info=True)
-                return url
-        return url
+                return url, False
+        return url, False
 
-    async def _stream_from_cdn(
-        cdn_url: str, request: Request
-    ) -> StreamingResponse:
-        """
-        从 CDN URL 流式获取媒体数据并直接返回给客户端
-
-        :param cdn_url (str): 115 CDN 文件直链
-        :param request (Request): 原始客户端请求
-
-        :return StreamingResponse: 流式响应，将 CDN 数据逐块转发给客户端
-        """
-        client = request.app.state.http_client_no_follow
-        fwd_headers = _build_forward_headers(request)
-        cdn_method = request.method
-        try:
-            req = client.build_request(
-                method=cdn_method, url=cdn_url, headers=fwd_headers
-            )
-            cdn_resp = await client.send(req, stream=True)
-        except Exception:
-            logger.warning("CDN 流式获取失败: %s", cdn_url, exc_info=True)
-            raise
-
-        excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "transfer-encoding"}
-        resp_headers = {
-            k: v
-            for k, v in cdn_resp.headers.multi_items()
-            if k.lower() not in excluded
-        }
-
-        async def _cdn_stream():
-            try:
-                async for chunk in cdn_resp.aiter_bytes(chunk_size=65536):
-                    # 客户端提前断开时停止拉取 CDN 数据，避免浪费带宽
-                    if await request.is_disconnected():
-                        logger.debug("客户端已断开，停止 CDN 流式拉取")
-                        break
-                    yield chunk
-            finally:
-                await cdn_resp.aclose()
-
-        return StreamingResponse(
-            _cdn_stream(),
-            status_code=cdn_resp.status_code,
-            headers=resp_headers,
-        )
-
-    def _build_302_redirect(url: str, request: Request) -> RedirectResponse:
+    def _build_302_redirect(url: str) -> RedirectResponse:
         """
         构建 302 重定向响应，让客户端直连 CDN
 
         URL 中的非 ASCII 字符做百分号编码，避免某些 HTTP 客户端无法解析
 
         :param url (str): CDN 直链 URL
-        :param request (Request): 原始客户端请求
 
         :return RedirectResponse: 302 重定向响应
         """
@@ -715,11 +671,7 @@ def create_app(
         user_cache = request.app.state.playback_user_cache
         user_id: str | None = None
         async with user_cache.lock:
-            user_entry = user_cache.get(user_key)
-            if user_entry:
-                uid, user_expiry = user_entry
-                if monotonic() < user_expiry:
-                    user_id = uid
+            user_id = user_cache.get(user_key)
 
         cache_key = (
             item_id,
@@ -739,7 +691,7 @@ def create_app(
                 cached_final_url = cache.get(cache_key)
             if cached_final_url is not None:
                 logger.debug("302 直链: item_id=%s -> %s", item_id, cached_final_url)
-                return _build_302_redirect(cached_final_url, request)
+                return _build_302_redirect(cached_final_url)
 
             http_path = None
 
@@ -786,16 +738,16 @@ def create_app(
             # 使用 follow_redirects=False 避免实际请求 CDN
             client_no_follow = request.app.state.http_client_no_follow
             fwd_headers = _build_forward_headers(request)
-            final_url = await _resolve_redirect(
+            final_url, resolved = await _resolve_redirect(
                 client_no_follow, http_path, fwd_headers, user_id
             )
 
-            # 写入已解析 URL 缓存（LRU 淘汰）
+            # 解析失败只做 5 秒短缓存，避免坏 URL 长期驻留导致反复 302 到坏链
             async with cache.lock:
-                cache.put(cache_key, final_url)
+                cache.put(cache_key, final_url, ttl=None if resolved else 5)
 
             logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
-            return _build_302_redirect(final_url, request)
+            return _build_302_redirect(final_url)
 
     for route in MEDIA_ROUTES:
         app.api_route(route, methods=["GET", "HEAD"], response_model=None)(
@@ -821,14 +773,23 @@ def create_app(
 
                 async def client_to_backend() -> None:
                     """
-                    WebSocket 客户端→后端：转发客户端文本消息到后端
+                    WebSocket 客户端→后端：转发客户端消息到后端
+
+                    使用 receive() 统一处理文本与二进制帧
                     """
                     try:
                         while True:
-                            data = await ws_client.receive_text()
-                            await ws_backend.send(data)
+                            msg = await ws_client.receive()
+                            if msg.get("type") == "websocket.disconnect":
+                                break
+                            if (text := msg.get("text")) is not None:
+                                await ws_backend.send(text)
+                            elif (data := msg.get("bytes")) is not None:
+                                await ws_backend.send(data)
                     except WebSocketDisconnect:
                         pass
+                    except Exception as e:
+                        logger.debug("WebSocket 客户端->后端 结束: %s", e)
 
                 async def backend_to_client() -> None:
                     """
@@ -843,7 +804,21 @@ def create_app(
                     except Exception as e:
                         logger.debug("WebSocket 后端->客户端 结束: %s", e)
 
-                await gather(client_to_backend(), backend_to_client())
+                tasks = [
+                    create_task(client_to_backend()),
+                    create_task(backend_to_client()),
+                ]
+                done, pending = await wait(
+                    tasks, return_when=FIRST_COMPLETED
+                )
+                for task in done:
+                    exc = task.exception()
+                    if exc:
+                        logger.debug("WebSocket 转发任务异常: %s", exc)
+                # 单向断开即双向取消，避免协程泄漏悬挂在对方连接上
+                for task in pending:
+                    task.cancel()
+                await gather(*pending, return_exceptions=True)
         except Exception:
             logger.warning("WebSocket 代理异常", exc_info=True)
         finally:
@@ -1074,18 +1049,18 @@ def create_app(
                     continue
                 ms_path = ms.get("Path", "")
                 if ms_path.startswith(("http://", "https://")):
-                    resolved = await _resolve_redirect(
+                    final_url, resolved_ok = await _resolve_redirect(
                         client_no_follow, ms_path, fwd_headers
                     )
-                    if resolved:
-                        ms["Path"] = resolved
+                    if resolved_ok:
+                        ms["Path"] = final_url
 
         uid = request.query_params.get("UserId")
         if uid:
             user_key = _playback_user_key(request, item_id)
             user_cache = request.app.state.playback_user_cache
             async with user_cache.lock:
-                user_cache.put(user_key, (uid, monotonic() + PLAYBACK_USER_CACHE_TTL_SECONDS))
+                user_cache.put(user_key, uid)
 
         reason = "STRM" if is_strm else "路径替换"
         logger.info(

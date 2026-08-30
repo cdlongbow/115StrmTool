@@ -273,7 +273,6 @@ def inject_external_urls(
         position_ticks = user_data.get("PlaybackPositionTicks", 0) or 0
 
     item_title = str(data.get("Name", ""))
-    server_id = str(data.get("ServerId", ""))
     os_type = _get_os_type(request.headers.get("user-agent", ""))
 
     injected = False
@@ -293,11 +292,8 @@ def inject_external_urls(
                 stream_url=stream_url,
                 sub_url=sub_url,
                 title=item_title,
-                source_name=source_name,
                 position_ticks=position_ticks,
                 os_type=os_type,
-                item_id=item_id,
-                server_id=server_id,
                 request=request,
             )
             if not target_url:
@@ -318,15 +314,11 @@ def _build_player_target_url(
     stream_url: str,
     sub_url: str,
     title: str,
-    source_name: str,
     position_ticks: int,
     os_type: str,
-    item_id: str,
-    server_id: str,
     request: Request,
 ) -> str | None:
     sec, ms, hhmmss = _position_parts(position_ticks)
-    media_name = source_name or "default"
 
     if key == "potplayer":
         raw = (
@@ -412,7 +404,6 @@ def _build_player_target_url(
     else:
         return None
 
-    _ = media_name, item_id, server_id
     return _wrap_redirect(request, raw)
 
 
@@ -436,17 +427,24 @@ def _wrap_redirect(request: Request, raw_url: str) -> str:
     return f"{server_addr}{REDIRECT_PATH}?link={quote(encoded, safe='')}"
 
 
+_RE_WINDOWS = re_compile(r"compatible|Windows", IGNORECASE)
+_RE_MAC = re_compile(r"Macintosh|MacIntel", IGNORECASE)
+_RE_IOS = re_compile(r"iphone|Ipad", IGNORECASE)
+_RE_ANDROID = re_compile(r"android", IGNORECASE)
+_RE_UBUNTU = re_compile(r"Ubuntu", IGNORECASE)
+
+
 def _get_os_type(user_agent: str) -> str:
     ua = user_agent or ""
-    if re_compile(r"compatible|Windows", IGNORECASE).search(ua):
+    if _RE_WINDOWS.search(ua):
         return "windows"
-    if re_compile(r"Macintosh|MacIntel", IGNORECASE).search(ua):
+    if _RE_MAC.search(ua):
         return "macOS"
-    if re_compile(r"iphone|Ipad", IGNORECASE).search(ua):
+    if _RE_IOS.search(ua):
         return "ios"
-    if re_compile(r"android", IGNORECASE).search(ua):
+    if _RE_ANDROID.search(ua):
         return "android"
-    if re_compile(r"Ubuntu", IGNORECASE).search(ua):
+    if _RE_UBUNTU.search(ua):
         return "ubuntu"
     return "other"
 

@@ -65,39 +65,14 @@ class Database:
         conn.commit()
         conn.close()
 
-    def add_file(self, file_info: Dict[str, Any]) -> int:
-        cursor = self.conn.execute(
-            """INSERT OR REPLACE INTO files
-               (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                file_info["pickcode"],
-                file_info["file_name"],
-                file_info.get("file_size", 0),
-                file_info.get("file_type", ""),
-                file_info["pan_path"],
-                file_info["local_strm_path"],
-                file_info.get("sha1", ""),
-                file_info.get("parent_id", ""),
-            ),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
     def batch_add_files(self, files: List[Dict[str, Any]]):
-        cursor = self.conn.cursor()
-        cursor.execute("BEGIN")
-        try:
-            cursor.executemany(
+        with self.conn:
+            self.conn.executemany(
                 """INSERT OR REPLACE INTO files
                    (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
                    VALUES (:pickcode, :file_name, :file_size, :file_type, :pan_path, :local_strm_path, :sha1, :parent_id)""",
                 files,
             )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
 
     def get_file_by_pickcode(self, pickcode: str) -> Optional[Dict]:
         cursor = self.conn.execute(
@@ -151,7 +126,6 @@ class Database:
         self.conn.execute("DELETE FROM files")
         self.conn.commit()
         self.conn.execute("VACUUM")
-        self.conn.commit()
 
     def get_active_files_by_parent(self, parent_prefix: str) -> List[Dict]:
         """

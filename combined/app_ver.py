@@ -1,50 +1,76 @@
 import threading
 from random import choice, randint
-from typing import Optional
-
-from p115client import P115Client, check_response
-import p115client.client as _p115_client_mod
+from time import monotonic
+from typing import Dict, Optional
 
 from logger import logger
 
 _APP_VERSION_ATTR = "_app_version"
-FALLBACK_APP_VER = "37.2.5"
+FALLBACK_ANDROID_VER = "37.2.5"
+FALLBACK_UDOWN_VER = "37.0.7"
+FALLBACK_WANGPAN_IOS_VER = "36.2.20"
 
-_real_app_ver: Optional[str] = None
-_real_app_ver_lock = threading.Lock()
+_VERSIONS_TTL = 3600.0
+_VERSIONS_FAIL_TTL = 600.0
+
+_versions_cache: Optional[Dict[str, str]] = None
+_versions_cached_at: float = 0.0
+_versions_lock = threading.Lock()
+
+
+def _fetch_app_versions() -> Optional[Dict[str, str]]:
+    """
+    获取 115 各端版本号，带进程内缓存
+
+    成功结果缓存 1 小时；失败缓存 10 分钟，避免每次调用都请求 115 API
+
+    :return Dict: 各端版本号字典（Android / iOS-iPhone / 115wangpan_iOS），
+    缓存期内失败时返回 None
+    """
+    global _versions_cache, _versions_cached_at
+    with _versions_lock:
+        if _versions_cache is not None:
+            if monotonic() - _versions_cached_at < _VERSIONS_TTL:
+                return _versions_cache
+        elif monotonic() - _versions_cached_at < _VERSIONS_FAIL_TTL:
+            return None
+        try:
+            from p115client import P115Client, check_response
+
+            resp = P115Client.app_version_list2()
+            check_response(resp)
+            data = resp["data"]
+            versions = {
+                "Android": str(data["Android"]["version_code"]),
+                "iOS-iPhone": str(data["iOS-iPhone"]["version_code"]),
+                "115wangpan_iOS": str(data["115wangpan_iOS"]["version_code"]),
+            }
+            _versions_cache = versions
+            _versions_cached_at = monotonic()
+            logger.info("获取 115 版本号成功: %s", versions)
+            return versions
+        except Exception:
+            _versions_cache = None
+            _versions_cached_at = monotonic()
+            logger.warning("获取 115 版本号失败，暂用回退版本", exc_info=True)
+            return None
 
 
 def get_real_app_ver() -> str:
-    global _real_app_ver
-    if _real_app_ver is not None:
-        return _real_app_ver
-    with _real_app_ver_lock:
-        if _real_app_ver is not None:
-            return _real_app_ver
-        try:
-            resp = P115Client.app_version_list2()
-            check_response(resp)
-            _real_app_ver = resp["data"]["Android"]["version_code"]
-            logger.info("获取 115 真实版本号: %s", _real_app_ver)
-        except Exception:
-            _real_app_ver = FALLBACK_APP_VER
-            logger.warning("获取 115 版本号失败，使用回退版本: %s", _real_app_ver)
-    return _real_app_ver
-
-
-def _real_ua(real: str) -> str:
-    return f"Mozilla/5.0 115disk/{real} 115Browser/{real} 115wangpan_android/{real}"
+    versions = _fetch_app_versions()
+    if versions and versions.get("Android"):
+        return versions["Android"]
+    return FALLBACK_ANDROID_VER
 
 
 def generate_u115_ios() -> str:
-    try:
-        resp = P115Client.app_version_list2()
-        check_response(resp)
-        udown_version = resp["data"]["iOS-iPhone"]["version_code"]
-        wangpan_version = resp["data"]["115wangpan_iOS"]["version_code"]
-    except Exception:
-        udown_version = "37.0.7"
-        wangpan_version = "36.2.20"
+    versions = _fetch_app_versions()
+    udown_version = (
+        versions.get("iOS-iPhone") if versions else None
+    ) or FALLBACK_UDOWN_VER
+    wangpan_version = (
+        versions.get("115wangpan_iOS") if versions else None
+    ) or FALLBACK_WANGPAN_IOS_VER
     ios_versions = [
         "15_0", "15_1", "15_2", "15_3", "15_4",
         "15_5", "15_6", "15_7", "15_8",
@@ -80,16 +106,21 @@ class AppVerPatcher:
     def enable(cls) -> None:
         if cls._active:
             return
-        if not hasattr(_p115_client_mod, _APP_VERSION_ATTR):
-            logger.warning(
-                "p115client 版本不兼容，未找到 %s 属性", _APP_VERSION_ATTR
-            )
-            return
+        try:
+            import p115client.client as _p115_client_mod
 
-        real = get_real_app_ver()
-        setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
-        cls._active = True
-        logger.info("app_ver 补丁已应用: %s", real)
+            if not hasattr(_p115_client_mod, _APP_VERSION_ATTR):
+                logger.warning(
+                    "p115client 版本不兼容，未找到 %s 属性", _APP_VERSION_ATTR
+                )
+                return
+
+            real = get_real_app_ver()
+            setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
+            cls._active = True
+            logger.info("app_ver 补丁已应用: %s", real)
+        except ImportError:
+            logger.warning("p115client 未安装，跳过 app_ver 补丁")
 
 
 def apply_app_ver_patch():

@@ -31,7 +31,7 @@ class TestConfigManager:
         from config_manager import ConfigManager
         cm = ConfigManager()
         config = cm.get()
-        assert config["admin_host"] == "0.0.0.0"
+        assert config["admin_host"] == "127.0.0.1"
         assert config["admin_port"] == 8100
         assert not config["emby"]["enabled"]
         assert not config["p115"]["enabled"]

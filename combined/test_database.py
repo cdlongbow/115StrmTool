@@ -18,39 +18,31 @@ def db():
 class TestDatabase:
 
     def test_add_and_get_file(self, db):
-        fid = db.add_file({
+        db.batch_add_files([{
             "pickcode": "abc123", "file_name": "test.mp4", "file_size": 1024,
             "file_type": ".mp4", "pan_path": "/movies/test.mp4",
             "local_strm_path": "/strm/test.strm", "sha1": "sha1_val",
             "parent_id": "/movies",
-        })
-        assert fid > 0
-        f = db.get_file_by_pickcode("abc123")
-        assert f is not None
-        assert f["file_name"] == "test.mp4"
-        assert f["sha1"] == "sha1_val"
-
-    def test_get_nonexistent_file(self, db):
-        assert db.get_file_by_pickcode("nonexistent") is None
+        }])
+        assert db.count_active_files() == 1
 
     def test_count_active_files(self, db):
         assert db.count_active_files() == 0
-        db.add_file({
+        db.batch_add_files([{
             "pickcode": "a1", "file_name": "a.mp4", "file_size": 100,
             "file_type": ".mp4", "pan_path": "/a.mp4",
             "local_strm_path": "/s/a.strm", "sha1": "s1", "parent_id": "/",
-        })
+        }])
         assert db.count_active_files() == 1
 
     def test_mark_file_deleted(self, db):
-        db.add_file({
+        db.batch_add_files([{
             "pickcode": "del1", "file_name": "del.mp4", "file_size": 100,
             "file_type": ".mp4", "pan_path": "/del.mp4",
             "local_strm_path": "/s/del.strm", "sha1": "s2", "parent_id": "/",
-        })
+        }])
         db.mark_file_deleted("del1")
         assert db.count_active_files() == 0
-        assert db.get_file_by_pickcode("del1") is None
 
     def test_batch_add_files(self, db):
         items = [{

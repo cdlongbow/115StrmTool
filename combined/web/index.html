@@ -145,7 +145,7 @@ tr:hover{background:#f5f5f5}
         <textarea id="p115_cookie" rows="2" placeholder="UID=123456789; CID=123456789; SEID=123456789" style="flex:1"></textarea>
         <button class="btn btn-outline" onclick="showQrcodeLogin()" style="white-space:nowrap;align-self:flex-start;margin-top:1px">扫码登录</button>
       </div>
-      <div class="hint">登录 115 网页版后，从浏览器开发者工具中复制 Cookie，或使用 115 客户端扫码登录</div>
+      <div class="hint">登录 115 网页版后，从浏览器开发者工具中复制 Cookie，或使用 115 客户端扫码登录。保存后 Cookie 以掩码显示（********），重新输入完整 Cookie 即可更换；留空保存表示清除</div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>302 跳转地址</label><input type="text" id="p115_redirect_host" placeholder="0.0.0.0"></div>
@@ -455,10 +455,6 @@ function collectPaths() {
   })).filter(m => m.from && m.to);
 }
 
-async function browse115Path(i) {
-  const path = prompt('请输入 115 目录路径（如 /电影）:', p115Paths[i].from || '/');
-  if (path) { p115Paths[i].from = path; renderPathMappings(); }
-}
 async function browseLocalPath(i) {
   let path = '';
   try {
@@ -498,17 +494,17 @@ async function loadBrowserDir(pid, displayPath) {
     _browsePath = d.path || '/';
     let html = '';
     if (pid !== '0') {
-      html += `<div class="browser-item" onclick="loadBrowserDir('0','/')" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px"><span style="color:#999">&#x1F3E0;</span> 根目录</div>`;
+      html += `<div class="browser-item" data-pid="0" data-path="/" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px"><span style="color:#999">&#x1F3E0;</span> 根目录</div>`;
     }
     (d.items||[]).filter(f => f.is_dir).forEach(f => {
       const childPath = (d.path === '/' ? '' : d.path) + '/' + f.name;
-      html += `<div class="browser-item" data-pid="${f.id}" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px" onclick="event.stopPropagation();loadBrowserDir('${f.id}','${esc(childPath)}')"><span style="color:#f39c12">&#x1F4C1;</span> ${esc(f.name)}</div>`;
+      html += `<div class="browser-item" data-pid="${escAttr(String(f.id))}" data-path="${escAttr(childPath)}" style="cursor:pointer;padding:8px 20px;display:flex;align-items:center;gap:8px"><span style="color:#f39c12">&#x1F4C1;</span> ${esc(f.name)}</div>`;
     });
     if (html) {
       el.innerHTML = html;
       el.querySelectorAll('.browser-item').forEach(el2 => {
         el2.addEventListener('dblclick', () => {
-          document.getElementById('browserSelectBtn').disabled = false;
+          loadBrowserDir(el2.dataset.pid, el2.dataset.path);
         });
         el2.addEventListener('click', () => {
           document.querySelectorAll('.browser-item').forEach(x => x.style.background = '');
@@ -763,6 +759,7 @@ async function clearStrmFiles() {
 // ── 工具 ──
 function fmtSize(b){if(!b||b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 let tt;
 function showToast(m,t){const o=document.getElementById('toast');o.textContent=m;o.className='toast '+t+' show';clearTimeout(tt);tt=setTimeout(()=>o.classList.remove('show'),3000)}
 

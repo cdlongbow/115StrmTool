@@ -1,5 +1,6 @@
 import argparse
 import signal
+import socket
 import sys
 import threading
 import time
@@ -24,7 +25,26 @@ EMBY_THREAD = None
 P115_REDIRECT_SERVER = None
 P115_REDIRECT_THREAD = None
 ADMIN_SERVER = None
+P115_CLIENT_WRAPPER = None
 _shutdown_event = threading.Event()
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """
+    探测端口是否已被占用，避免 uvicorn 线程内静默绑定失败导致状态误报
+
+    :param host (str): 监听地址，0.0.0.0 按本机回环探测
+    :param port (int): 目标端口
+
+    :return bool: 端口已被占用时返回 True
+    """
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex((probe_host, port)) == 0
+    except OSError:
+        return False
 
 
 def signal_handler(sig, frame):
@@ -59,7 +79,7 @@ def _stop_emby():
 
 
 def _stop_p115_redirect():
-    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD
+    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, P115_CLIENT_WRAPPER
     if P115_REDIRECT_SERVER is not None:
         try:
             P115_REDIRECT_SERVER.should_exit = True
@@ -72,6 +92,13 @@ def _stop_p115_redirect():
         P115_REDIRECT_SERVER = None
         P115_REDIRECT_THREAD = None
         set_p115_status(False)
+    # 关闭并释放旧客户端，避免热重载 Cookie 时连接池泄漏
+    if P115_CLIENT_WRAPPER is not None:
+        try:
+            P115_CLIENT_WRAPPER.close()
+        except Exception as e:
+            logger.warning("关闭 P115 客户端时出现异常: %s", e, exc_info=True)
+        P115_CLIENT_WRAPPER = None
 
 
 # ── Emby 代理 ──
@@ -100,6 +127,8 @@ def _start_emby():
         redirect_mode=config.get("redirect_mode", False),
     )
     try:
+        if _port_in_use(config.get("proxy_host", "0.0.0.0"), int(config.get("proxy_port", 8097))):
+            raise OSError(f"端口 {config.get('proxy_port', 8097)} 已被占用")
         uv_config = Config(
             app=app,
             host=config.get("proxy_host", "0.0.0.0"),
@@ -127,7 +156,7 @@ def _restart_emby():
 
 
 def _start_p115():
-    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD
+    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, P115_CLIENT_WRAPPER
     config = config_manager.get().get("p115", {})
     if not config.get("enabled"):
         logger.warning("P115 STRM 助手未启用，跳过")
@@ -145,6 +174,7 @@ def _start_p115():
 
     apply_app_ver_patch()
     client = P115ClientWrapper(cookie)
+    P115_CLIENT_WRAPPER = client
     set_client(client)
     set_p115_client_ref(client)
 
@@ -156,6 +186,8 @@ def _start_p115():
     svc = RedirectService(client)
     redirect_app = svc.create_app()
     try:
+        if _port_in_use(config.get("redirect_host", "0.0.0.0"), int(config.get("redirect_port", 3333))):
+            raise OSError(f"端口 {config.get('redirect_port', 3333)} 已被占用")
         uv_config = Config(
             app=redirect_app,
             host=config.get("redirect_host", "0.0.0.0"),
@@ -271,7 +303,6 @@ def main():
             app_name="115网盘STRM生成与302工具",
             admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/",
             admin_port=int(config.get("admin_port", 8100)),
-            icon_char="M",
             on_exit=lambda: (_stop_emby(), _stop_p115_redirect()),
         )
     else:

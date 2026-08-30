@@ -30,7 +30,7 @@ def sanitize_path_parts(rel_path: Path) -> Path:
     return result
 
 
-def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dict[int, str] = None):
+def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
     """
     递归遍历 115 目录下的所有文件（非目录）
 
@@ -39,11 +39,10 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int, path_cache: Dic
 
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
-    :param path_cache: 可选，保留参数用于兼容，不再填充
     """
     from p115client.tool.iterdir import iter_files_with_path
     from p115client.tool.attr import normalize_attr
-    
+
     client = client_wrapper.client
     if client is None:
         return
@@ -94,7 +93,11 @@ class StrmGenerator:
         use_rust: Optional[bool] = None,
     ):
         if rmt_mediaext:
-            self._rmt_mediaext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
+            new_ext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
+            if new_ext != self._rmt_mediaext:
+                # 扩展名变化使 Rust 处理器内嵌的旧配置过期，必须重建
+                self._rust_processor = None
+                self._rmt_mediaext = new_ext
         if download_mediaext:
             self._download_mediaext = {f".{e.strip().lower()}" for e in download_mediaext.replace("，", ",").split(",") if e.strip()}
         self._auto_download_mediainfo = auto_download_mediainfo
@@ -280,21 +283,8 @@ class StrmGenerator:
                                 local_file_path = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
-                                if not local_file_path.exists():
-                                    local_file_path.parent.mkdir(parents=True, exist_ok=True)
-                                    try:
-                                        dl_resp = self._client._client.download_url(pickcode)
-                                        if isinstance(dl_resp, dict):
-                                            from p115client import check_response
-                                            dl_resp = check_response(dl_resp)
-                                            file_url = dl_resp.get("url") or dl_resp.get("file_url", "")
-                                            if file_url:
-                                                import httpx
-                                                file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
-                                                local_file_path.write_bytes(file_resp.content)
-                                                logger.info("已下载附属文件: %s", name)
-                                    except Exception as e:
-                                        logger.warning("下载附属文件失败 %s: %s", name, e)
+                                if local_file_path is not None and not local_file_path.exists():
+                                    self._download_aux_file(pickcode, name, local_file_path)
 
                             if ext in self._rmt_mediaext:
                                 if not pickcode:
@@ -311,6 +301,8 @@ class StrmGenerator:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
+                                if local_strm_path_orig is None:
+                                    continue
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
                                 # Rust 模式跳过 Python 写 STRM，避免双写，
                                 # 批处理失败时由 _process_rust_batch 统一回填
@@ -458,21 +450,8 @@ class StrmGenerator:
                                 local_file_path = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
-                                if not local_file_path.exists():
-                                    local_file_path.parent.mkdir(parents=True, exist_ok=True)
-                                    try:
-                                        dl_resp = self._client._client.download_url(pickcode)
-                                        if isinstance(dl_resp, dict):
-                                            from p115client import check_response
-                                            dl_resp = check_response(dl_resp)
-                                            file_url = dl_resp.get("url") or dl_resp.get("file_url", "")
-                                            if file_url:
-                                                import httpx
-                                                file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
-                                                local_file_path.write_bytes(file_resp.content)
-                                                logger.info("已下载附属文件: %s", name)
-                                    except Exception as e:
-                                        logger.warning("下载附属文件失败 %s: %s", name, e)
+                                if local_file_path is not None and not local_file_path.exists():
+                                    self._download_aux_file(pickcode, name, local_file_path)
 
                             if ext not in self._rmt_mediaext:
                                 continue
@@ -486,6 +465,8 @@ class StrmGenerator:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
+                                if local_strm_path_orig is None:
+                                    continue
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
                                 if self._use_rust:
                                     rust_items.append({
@@ -516,6 +497,8 @@ class StrmGenerator:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
+                                if local_strm_path_orig is None:
+                                    continue
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
                                 # 文件同时被移动且内容变化时，旧路径 STRM 需清理，
                                 # 否则媒体库会出现指向同一文件的重复条目
@@ -560,6 +543,8 @@ class StrmGenerator:
                                 local_strm_path_orig = self._to_local_path(
                                     pan_full_path, pan_path, local_path
                                 )
+                                if local_strm_path_orig is None:
+                                    continue
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
                                 self._migrate_strm_file(
                                     all_existing[pickcode], local_strm_path
@@ -637,9 +622,32 @@ class StrmGenerator:
         finally:
             self._sync_lock.release()
 
-    def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Path:
+    def _to_local_path(self, pan_full_path: str, base_pan_path: str, local_strm_dir: str) -> Optional[Path]:
+        if not pan_full_path.startswith(base_pan_path):
+            # 前缀不匹配说明路径不在同步目录下，避免拼接出越界路径
+            logger.warning("路径不在同步目录内，跳过: %s (基目录 %s)", pan_full_path, base_pan_path)
+            return None
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
         return sanitize_path_parts(Path(local_strm_dir) / rel_path)
+
+    def _download_aux_file(self, pickcode: str, name: str, local_file_path: Path) -> None:
+        """
+        下载媒体附属文件（nfo、海报等）到本地 STRM 目录
+
+        :param pickcode (str): 文件 pickcode
+        :param name (str): 原始文件名，用于日志
+        :param local_file_path (Path): 本地保存路径
+        """
+        local_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            file_url = self._client.download_url(pickcode)
+            if file_url:
+                import httpx
+                file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
+                local_file_path.write_bytes(file_resp.content)
+                logger.info("已下载附属文件: %s", name)
+        except Exception as e:
+            logger.warning("下载附属文件失败 %s: %s", name, e)
 
     def _migrate_strm_file(self, old_entry: Dict[str, str], new_strm_path: Path):
         """

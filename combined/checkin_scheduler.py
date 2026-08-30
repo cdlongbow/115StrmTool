@@ -43,18 +43,27 @@ def run_p115_checkin_once(client) -> Tuple[bool, str]:
         for attempt in range(1, CHECKIN_MAX_RETRIES + 1):
             try:
                 resp = client.user_points_sign_post()
-                if isinstance(resp, dict):
+                if isinstance(resp, dict) and resp.get("state"):
                     d2 = resp.get("data") or {}
                     cd = d2.get("continuous_day", 0)
                     pn = d2.get("points_num", 0)
                     detail = f"签到成功，连续签到 {cd} 天，获得 {pn} 积分"
                     logger.info("【115 签到】%s", detail)
                     return True, detail
+                error_msg = (
+                    (resp or {}).get("error")
+                    if isinstance(resp, dict)
+                    else None
+                ) or "签到接口返回失败"
+                logger.warning(
+                    "【115 签到】第 %d/%d 次失败: %s",
+                    attempt, CHECKIN_MAX_RETRIES, error_msg,
+                )
             except Exception as e:
                 logger.warning("【115 签到】第 %d/%d 次失败: %s",
                                attempt, CHECKIN_MAX_RETRIES, e)
-                if attempt < CHECKIN_MAX_RETRIES:
-                    sleep(CHECKIN_RETRY_DELAY)
+            if attempt < CHECKIN_MAX_RETRIES:
+                sleep(CHECKIN_RETRY_DELAY)
         return False, "签到失败，已达最大重试次数"
     except Exception as e:
         logger.error("【115 签到】异常: %s", e, exc_info=True)
@@ -144,13 +153,14 @@ class CheckinScheduler:
 
             ok, detail = run_p115_checkin_once(self._client)
             if ok:
-                self._save_state_field("last_done_date", today_str)
-                self._save_state_field("last_detail", detail)
                 tomorrow_d = (now + timedelta(days=1)).date()
-                self._set_next_run(self._random_epoch(tomorrow_d, cfg))
+                self._save_state_fields({
+                    "last_done_date": today_str,
+                    "last_detail": detail,
+                    "next_run_ts": self._random_epoch(tomorrow_d, cfg),
+                })
             else:
-                self._save_state_field("next_run_ts", None)
-                self._save_state_field("last_detail", detail)
+                self._save_state_fields({"next_run_ts": None, "last_detail": detail})
         except Exception as e:
             logger.error("115 签到调度异常: %s", e, exc_info=True)
 
@@ -220,11 +230,14 @@ class CheckinScheduler:
         return uniform(wsn.timestamp(), wen.timestamp())
 
     def _set_next_run(self, epoch: float) -> None:
-        self._save_state_field("next_run_ts", epoch)
+        self._save_state_fields({"next_run_ts": epoch})
 
     def _save_state_field(self, key: str, value) -> None:
+        self._save_state_fields({key: value})
+
+    def _save_state_fields(self, fields: Dict) -> None:
         with self._lock:
-            self._state[key] = value
+            self._state.update(fields)
             self._write_state()
 
     def _load_state(self) -> Dict:

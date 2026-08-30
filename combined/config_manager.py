@@ -23,6 +23,22 @@ CONFIG_FILE = _BASE_DIR / "config.json"
 PIN_RULES_SEP = " => "
 
 _COOKIE_ENCRYPTED_PREFIX = "#ENC#"
+COOKIE_MASK = "********"
+
+
+def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    生成对外展示用的配置副本，将 115 Cookie 替换为固定掩码
+
+    :param config (Dict): 完整配置字典
+
+    :return Dict: 脱敏后的配置副本，不影响原字典
+    """
+    data = json.loads(json.dumps(config))
+    cookie = data.get("p115", {}).get("cookie")
+    if cookie:
+        data["p115"]["cookie"] = COOKIE_MASK
+    return data
 
 
 # ── Pydantic 配置模型 ──
@@ -82,7 +98,7 @@ class CheckinConfig(BaseModel):
 
 
 class RootConfig(BaseModel):
-    admin_host: str = "0.0.0.0"
+    admin_host: str = "127.0.0.1"
     admin_port: int = 8100
     emby: EmbyConfig = Field(default_factory=EmbyConfig)
     p115: P115Config = Field(default_factory=P115Config)

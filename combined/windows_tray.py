@@ -32,7 +32,7 @@ def _post_api(path: str, port: int = 8100) -> str:
         with urlopen(req, timeout=5) as r:
             return r.read().decode("utf-8")
     except Exception as e:
-        return str(e)
+        return f"请求失败: {e}"
 
 
 def _open_browser(url: str):
@@ -51,14 +51,13 @@ def run_tray(
     app_name: str = "App",
     admin_url: str = "http://localhost:8100",
     admin_port: int = 8100,
-    icon_char: str = "M",
     on_exit: callable = None,
 ):
     if not _HAS_PYSTRAY:
         logger.warning("pystray 未安装，运行在控制台模式。pip install pystray Pillow")
-        import time
-        while True:
-            time.sleep(3600)
+        import threading as _threading
+
+        _threading.Event().wait()
         return
 
     def _open_admin(icon, item):
