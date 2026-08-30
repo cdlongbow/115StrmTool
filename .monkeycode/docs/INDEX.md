@@ -72,7 +72,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 python combined/main.py --no-tray
 
 # 运行单元测试（113 个用例）
-cd combined && python -m pytest test_*.py -q
+cd combined && python -m pytest -q
 
 # 构建 exe
 cd combined && python build_exe.py

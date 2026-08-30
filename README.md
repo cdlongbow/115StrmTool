@@ -61,7 +61,7 @@ python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 
 ```bash
 cd combined
-python -m pytest test_*.py -q
+python -m pytest -q
 ```
 
 ## 打包

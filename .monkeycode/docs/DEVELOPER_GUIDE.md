@@ -83,7 +83,7 @@ python build_exe.py
 
 | 工具 | 命令 | 目的 |
 |------|------|------|
-| 单元测试 | `cd combined && python -m pytest test_*.py -q` | 全量回归验证（113 个用例） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（113 个用例） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 

@@ -48,7 +48,7 @@ jobs:
 
       - name: Run tests
         working-directory: combined
-        run: python -m pytest test_*.py -q
+        run: python -m pytest -q
 
       - name: Install PyInstaller
         run: pip install pyinstaller
