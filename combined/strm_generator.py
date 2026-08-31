@@ -36,21 +36,21 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
 
     使用 iter_files_with_path（Android API, proapi.115.com）替代 fs_files（webapi.115.com），
     避免 webapi 域名被风控返回 405 的问题
+    返回的 attr 已由 SDK 内部默认的 normalize_attr 完成字段规范化，直接产出即可，
+    再包一层 normalize_attr 会因格式无法识别被当作 web 数据二次解析而 KeyError
 
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
     """
     from p115client.tool.iterdir import iter_files_with_path
-    from p115client.tool.attr import normalize_attr
 
     client = client_wrapper.client
     if client is None:
         return
-    for attr in iter_files_with_path(
+    yield from iter_files_with_path(
         client, cid, type=99, cur=0, app="android",
         cooldown=0.5, escape=None,
-    ):
-        yield normalize_attr(attr)
+    )
 
 
 class StrmGenerator:
