@@ -9,3 +9,4 @@ p115cipher==0.0.5.4
 p115client==0.0.9.6.5.1
 p115pickcode==0.0.5.4
 # Windows 系统托盘（可选）: pip install pystray Pillow
+# 测试（可选）: pip install pytest pytest-asyncio

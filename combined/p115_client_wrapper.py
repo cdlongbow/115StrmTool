@@ -8,6 +8,11 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from httpx import Client, Limits, Timeout
 from p115cipher import rsa_decrypt, rsa_encrypt
 
+try:
+    from urllib3_future import Timeout as UfTimeout
+except ImportError:
+    UfTimeout = None
+
 from app_ver import generate_u115_ios
 from logger import logger
 
@@ -35,13 +40,11 @@ DEFAULT_ENDPOINT_COOLDOWNS = {
 }
 
 
-# SDK 调用默认超时配置（秒）
-DEFAULT_SDK_TIMEOUT = {
-    "connect": 10.0,
-    "read": 60.0,
-    "write": 30.0,
-    "pool": 10.0,
-}
+# SDK 调用默认超时配置（秒），p115client 底层为 urllib3_future，仅接受 int/float/None 或其 Timeout 对象
+if UfTimeout is None:
+    DEFAULT_SDK_TIMEOUT = 60.0
+else:
+    DEFAULT_SDK_TIMEOUT = UfTimeout(connect=10.0, read=60.0)
 
 
 class P115ClientWrapper:
@@ -221,7 +224,7 @@ class P115ClientWrapper:
             )
             if resp.status_code == 405:
                 logger.warning("Android 下载 API 返回 405，直接降级 SDK 获取")
-                raise DownloadApiUnavailableError(error_msg or "download api 405")
+                raise DownloadApiUnavailableError("download api 405")
             if resp.status_code != 200:
                 logger.warning(
                     "115 下载 API 返回非 200: status=%s pickcode=%s",
