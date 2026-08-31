@@ -695,7 +695,7 @@ async function cancelSync() {
 async function resetSyncBaseline() {
   if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;
   if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步数据？')) return;
-  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); showToast('同步数据已重置', 'success'); }
+  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); loadSyncHistory(); updateDashboard(); showToast('同步数据已重置', 'success'); }
   catch(e) { showToast('重置失败: ' + e.message, 'error'); }
 }
 async function loadSyncHistory() {
