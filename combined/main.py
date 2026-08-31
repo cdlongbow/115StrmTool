@@ -1,4 +1,5 @@
 import argparse
+import os
 import signal
 import socket
 import sys
@@ -99,6 +100,35 @@ def _stop_p115_redirect():
         except Exception as e:
             logger.warning("关闭 P115 客户端时出现异常: %s", e, exc_info=True)
         P115_CLIENT_WRAPPER = None
+
+
+def _shutdown_for_tray_exit():
+    """
+    托盘退出时的完整关闭流程
+
+    依次停止 Emby 代理、P115 服务、签到调度器和管理界面服务后，
+    强制终止进程。打包为单文件 exe 时解释器关闭阶段可能因残留的
+    daemon 线程（uvicorn 事件循环、网络库后台线程等）挂起，导致
+    进程不退出、exe 文件被自身锁定无法删除，因此最后调用 os._exit
+
+    :return None: 无返回值，进程被强制终止
+    """
+    logger.info("托盘退出：正在停止所有服务...")
+    _stop_emby()
+    _stop_p115_redirect()
+    try:
+        from checkin_scheduler import checkin_scheduler
+
+        checkin_scheduler.stop()
+    except Exception as e:
+        logger.warning("停止签到调度器时出现异常: %s", e, exc_info=True)
+    if ADMIN_SERVER is not None:
+        try:
+            ADMIN_SERVER.should_exit = True
+        except Exception as e:
+            logger.warning("停止管理界面服务时出现异常: %s", e, exc_info=True)
+    logger.info("所有服务已停止，进程即将退出")
+    os._exit(0)
 
 
 # ── Emby 代理 ──
@@ -303,8 +333,12 @@ def main():
             app_name="115网盘STRM生成与302工具",
             admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/",
             admin_port=int(config.get("admin_port", 8100)),
-            on_exit=lambda: (_stop_emby(), _stop_p115_redirect()),
+            on_exit=_shutdown_for_tray_exit,
         )
+        # 正常退出路径已在 _shutdown_for_tray_exit 中强制终止进程，
+        # 走到这里说明托盘异常退出，同样强制退出避免进程残留
+        logger.warning("托盘已退出但进程仍在运行，强制退出")
+        os._exit(0)
     else:
         _run_admin()
 
