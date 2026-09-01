@@ -47,38 +47,31 @@ GET /api/browse?pid=<directory_id>
 
 ### STRM 同步
 
+路径映射取自当前配置中的 `p115.paths`，请求无需传 body。
+
 ```
 POST /api/sync/start
-Content-Type: application/json
-
-{"path_mappings": {"115_path": "local_path", ...}}
 ```
 
-启动全量 STRM 同步。遍历 115 目录，为媒体文件生成 .strm 文件。返回 `{"message": "同步任务已启动"}`。
+启动全量 STRM 同步。遍历 115 目录，为媒体文件生成 .strm 文件。返回 `{"status": "started", "message": "同步任务已启动"}`；已有任务在跑时返回 `{"status": "error", "message": "同步正在进行中"}`。
 
 ```
 POST /api/sync/incremental
-Content-Type: application/json
-
-{"path_mappings": {"115_path": "local_path", ...}}
 ```
 
-启动增量同步。对比上次同步 SHA1，处理新增/变更/删除文件，并自动迁移网盘内被移动或重命名的文件对应的本地 STRM。返回 `{"message": "同步任务已启动"}`。
+启动增量同步。对比上次同步 SHA1，处理新增/变更/删除文件，并自动迁移网盘内被移动或重命名的文件对应的本地 STRM。返回值与全量同步相同。
 
 ```
 POST /api/sync/reset-baseline
-Content-Type: application/json
-
-{"path_mappings": {"115_path": "local_path", ...}}
 ```
 
-重置基线并重新全量同步。清空上次同步记录，下次增量从零开始。返回 `{"message": "重置基线成功，下次同步将执行全量同步"}`。
+清空 STRM 清单和同步历史，下次增量从零开始。返回 `{"success": true}`。
 
 ```
 POST /api/sync/cancel
 ```
 
-取消正在进行的同步任务。返回 `{"message": "正在取消同步任务..."}`。
+取消正在进行的同步任务。返回 `{"status": "cancelled"}`。
 
 ```
 GET /api/sync/progress
@@ -106,7 +99,7 @@ GET /api/sync/history
 POST /api/sync/history/clear
 ```
 
-清空同步历史记录。返回 `{"message": "同步历史已清空"}`。
+清空同步历史记录。返回 `{"success": true}`。
 
 ### STRM 文件列表
 
@@ -133,6 +126,29 @@ Content-Type: application/json
 ```
 
 轮询二维码扫描状态。返回 `{"status": "waiting|scanned|expired|success", "data": {...}}`。
+
+### 签到
+
+```
+GET /api/checkin/status
+```
+
+返回今日签到状态、下次计划时刻和最近一次结果。
+
+```
+POST /api/checkin/run
+```
+
+立即执行一次签到。返回 `{"status": "ok"|"error", "message": "..."}`。
+
+```
+POST /api/checkin/config
+Content-Type: application/json
+
+{"enabled": true, "time_range": "06:00-09:00"}
+```
+
+保存签到开关和时间段。返回 `{"status": "ok", "message": "签到配置已保存"}`。
 
 ## 管理面板 API
 
@@ -168,14 +184,13 @@ Content-Type: application/json
   "proxy_host": "0.0.0.0",
   "proxy_port": 8097,
   "pin_rules": "",
-  "redirect_mode": true,
+  "redirect_mode": false,
   "external_player_url": false,
   "external_player_list": []
 }
 ```
 
-- `redirect_mode`: `true` 为 302 重定向模式（客户端直连 CDN），`false` 为流式代理模式（服务端中转）
-```
+- `redirect_mode`: `true` 为 302 直链模式（客户端直连 CDN），`false`（默认）为回退通用反向代理，转发 Emby 原响应
 
 ```
 POST /admin/api/emby/restart
@@ -202,6 +217,12 @@ GET /admin/api/logs?lines=200
 ```
 
 返回最近 N 行日志文本。
+
+```
+DELETE /admin/api/logs
+```
+
+清空主日志文件并删除轮转备份。返回 `{"status": "ok", "message": "日志已清空"}`。
 
 ### 开机自启
 
@@ -287,7 +308,8 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "proxy_port": 8097,
     "pin_rules": "",
     "external_player_url": false,
-    "external_player_list": []
+    "external_player_list": [],
+    "redirect_mode": false
   },
   "p115": {
     "enabled": false,
@@ -295,12 +317,13 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "redirect_host": "0.0.0.0",
     "redirect_port": 3333,
     "strm_url_prefix": "http://192.168.2.100:3333",
-    "rmt_mediaext": "mp4,mkv,ts,iso,m2ts,avi,mov,wmv,flv,f4v,rmvb,webm,divx,mpeg,mpg,mts,m2t",
-    "download_mediaext": "srt,ssa,ass,aas,smi,utf,utf-8,idx,sub,lrc,sup,pgs",
+    "rmt_mediaext": "mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm",
+    "download_mediaext": "srt,ssa,ass,sup,pgs,sub,idx",
     "auto_download_mediainfo": false,
     "overwrite_mode": "never",
     "cleanup_deleted_strm": false,
-    "use_rust": false
+    "use_rust": false,
+    "paths": []
   },
   "checkin": {
     "enabled": false,

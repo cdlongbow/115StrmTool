@@ -70,6 +70,7 @@ python build_exe.py
 | `admin_port` | 8100 | 管理 Web UI 端口 |
 | `emby.emby_host` | `http://192.168.2.100:8096` | Emby 服务器地址 |
 | `emby.proxy_port` | 8097 | Emby 反向代理端口 |
+| `emby.redirect_mode` | `false` | 是否开启 302 直链（关闭则回退 Emby 原响应） |
 | `p115.redirect_port` | 3333 | 302 跳转服务端口 |
 | `p115.strm_url_prefix` | `http://192.168.2.100:3333` | STRM 文件中的跳转 URL 前缀 |
 | `p115.rmt_mediaext` | `mp4,mkv,ts,...` | STRM 生成的媒体扩展名 |

@@ -4,7 +4,7 @@
 
 115网盘STRM生成与302工具是一个面向 Windows 桌面用户的媒体流代理工具，解决 Emby 媒体服务器播放 115 网盘中视频文件时的转码和跨域问题。用户通过 Emby Web UI 或客户端直接播放 115 网盘中的影片，无需中转下载。
 
-系统将 115 网盘的目录结构映射为本地 Emby 媒体库路径，生成 STRM 占位文件，并在播放时通过 302 重定向让客户端直连 115 CDN 下载媒体流。同时提供了管理 Web UI、二维码登录、外部播放器注入等配套能力。
+系统将 115 网盘的目录结构映射为本地 Emby 媒体库路径，生成 STRM 占位文件，播放时可选 302 重定向让客户端直连 115 CDN 下载媒体流（默认关闭，回退由 Emby 按原响应处理）。同时提供了管理 Web UI、二维码登录、外部播放器注入等配套能力。
 
 ## 技术栈
 
@@ -53,6 +53,7 @@ MoviePilot-Windows/
 │   ├── config_manager.py       # JSON 配置管理
 │   ├── database.py             # SQLite 持久化层
 │   ├── windows_tray.py         # Windows 系统托盘与原生窗口
+│   ├── checkin_scheduler.py    # 115 每日签到调度
 │   ├── logger.py               # 日志设置
 │   ├── build_exe.py            # PyInstaller 构建脚本
 │   ├── web/
@@ -78,12 +79,12 @@ MoviePilot-Windows/
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
-**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay、302 重定向（默认）或关闭重定向直连回退两种模式，将 115 CDN 媒体流返回客户端
+**目的**: 代理 Emby 请求、拦截 PlaybackInfo 强制 DirectPlay，可开启 302 重定向让客户端直连 115 CDN，或关闭后回退到通用反向代理转发 Emby 原响应
 **位置**: `combined/proxy_app.py`
 **关键文件**: `proxy_app.py`（最大模块）
 **依赖**: `external_players`, `config_manager`, `redirect_service`
 **被依赖**: Emby 客户端（浏览器/桌面）
-**配置项**: `redirect_mode` — `true` 为 302 直链模式（默认），`false` 时媒体请求回退到通用反向代理转发
+**配置项**: `redirect_mode` — `true` 为 302 直链模式（客户端直连 CDN），`false`（默认）时媒体请求回退到通用反向代理转发 Emby 原响应
 
 ### 115 跳转服务（端口 3333）
 **目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）
@@ -97,6 +98,12 @@ MoviePilot-Windows/
 **位置**: `combined/strm_generator.py`
 **依赖**: `p115_client_wrapper`, `database`, `config_manager`
 **被依赖**: 管理 API（用户触发同步）
+
+### 签到调度
+**目的**: 在配置的时间段内随机时刻执行 115 每日签到，支持手动触发
+**位置**: `combined/checkin_scheduler.py`
+**依赖**: `p115_client_wrapper`, `config_manager`
+**被依赖**: 管理 API、系统托盘
 
 ### 持久化层
 **目的**: 存储 STRM 清单、同步历史

@@ -34,6 +34,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 配置管理 | JSON 配置读写、顶置规则解析 | `combined/config_manager.py` |
 | 数据持久化 | SQLite 数据库、文件清单、同步历史 | `combined/database.py` |
 | Windows 桌面集成 | 系统托盘 | `combined/windows_tray.py` |
+| 签到调度 | 115 每日签到定时与手动触发 | `combined/checkin_scheduler.py` |
 | 日志设置 | RotatingFileHandler + 控制台输出 | `combined/logger.py` |
 
 ---

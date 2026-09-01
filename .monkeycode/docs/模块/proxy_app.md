@@ -11,7 +11,7 @@ proxy_app.py（最大模块）
 │   ├── _handle_media()              # 媒体路由：/videos/, /audio/, /items/download
 │   ├── _playback_info_strm_direct_play()  # PlaybackInfo 拦截
 │   ├── _system_info_handler()       # System/Info 端口重写
-│   ├── _patch_basehtmlplayer_js()   # JS croussOrigin 修补
+│   ├── _patch_basehtmlplayer_js()   # JS crossOrigin 修补
 │   ├── _patch_plugin_js()           # plugin.js crossOrigin 修补
 │   ├── _items_external_player_handler()  # 外部播放器注入
 │   ├── _reverse_proxy()             # 通用反向代理
@@ -58,7 +58,7 @@ _playback_info_strm_direct_play()
 
 ## 重定向模式与回退
 
-通过 `redirect_mode` 配置项切换两种播放路径：
+通过 `redirect_mode` 配置项切换两种播放路径（默认 `false`）：
 
 - **302 重定向模式**（`redirect_mode=true`）：`_try_media_response` 调用 `_build_302_redirect` 返回 302 响应，客户端直连 115 CDN。媒体流量不经过代理服务器。
 - **关闭重定向**（`redirect_mode=false`）：`_try_media_response` 直接返回 None，媒体路由回退到 `_reverse_proxy` 通用转发，由 Emby 服务器按原响应处理。
