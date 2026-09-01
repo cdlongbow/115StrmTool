@@ -268,7 +268,10 @@ def create_admin_app() -> FastAPI:
 
     app.include_router(admin_router)
 
-    web_dir = Path(__file__).parent / "web"
+    if getattr(sys, "frozen", False):
+        web_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "web"
+    else:
+        web_dir = Path(__file__).parent / "web"
     if web_dir.exists():
         @app.get("/")
         @app.get("/admin")

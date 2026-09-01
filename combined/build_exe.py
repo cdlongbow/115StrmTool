@@ -3,34 +3,50 @@ import sys
 
 
 def main():
-    py_files = [
-        "admin_api.py", "api_routes.py", "app_ver.py", "checkin_scheduler.py",
-        "config_manager.py", "database.py", "exceptions.py", "external_players.py",
-        "logger.py", "p115_client_wrapper.py", "proxy_app.py",
-        "redirect_service.py", "strm_generator.py", "utils.py", "windows_tray.py",
+    hidden = [
+        "admin_api",
+        "api_routes",
+        "app_ver",
+        "checkin_scheduler",
+        "config_manager",
+        "database",
+        "exceptions",
+        "external_players",
+        "logger",
+        "p115_client_wrapper",
+        "proxy_app",
+        "redirect_service",
+        "strm_generator",
+        "utils",
+        "windows_tray",
+        "httpx",
+        "websockets",
+        "p115client",
+        "p115cipher",
+        "p115pickcode",
+        "pystray",
+        "PIL",
+        "qrcode",
+        "full_strm_sync",
+        "tkinter",
+        "tkinter.filedialog",
+        "urllib3_future",
     ]
     args = [
         "pyinstaller",
         "--name", "115网盘STRM生成与302工具",
         "--onefile",
         "--add-data", "web:web",
-    ]
-    for f in py_files:
-        args.extend(["--add-data", f"{f}:."])
-    hidden = [
-        "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
-        "httpx", "websockets", "p115client", "p115cipher", "pystray", "PIL", "qrcode",
-        "full_strm_sync",
+        "--collect-all", "fastapi",
+        "--collect-all", "starlette",
+        "--collect-all", "uvicorn",
+        "--collect-submodules", "p115client",
+        "--noconsole",
+        "--noconfirm",
     ]
     for h in hidden:
         args.extend(["--hidden-import", h])
-    args.extend([
-        "--collect-all", "fastapi",
-        "--collect-all", "starlette",
-        "--noconsole",
-        "--noconfirm",
-        "main.py",
-    ])
+    args.append("main.py")
     print("Building ...")
     result = subprocess.run(args, capture_output=False)
     if result.returncode == 0:
