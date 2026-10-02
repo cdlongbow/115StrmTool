@@ -72,7 +72,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（137 个用例）
+# 运行单元测试（140 个用例）
 cd combined && python -m pytest -q
 
 # 静态检查（规则集见根目录 ruff.toml）

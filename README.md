@@ -58,7 +58,7 @@ python main.py              # 控制台模式
 python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 ```
 
-运行单元测试（137 个用例，需 Python 3.12+ 环境）：
+运行单元测试（140 个用例，需 Python 3.12+ 环境）：
 
 ```bash
 cd combined
