@@ -75,6 +75,9 @@ python combined/main.py --no-tray
 # 运行单元测试（137 个用例）
 cd combined && python -m pytest -q
 
+# 静态检查（规则集见根目录 ruff.toml）
+ruff check .
+
 # 构建 exe
 cd combined && python build_exe.py
 
@@ -90,6 +93,7 @@ pip install combined/wheels/*.whl
 | `combined/main.py` | 应用入口 |
 | `combined/proxy_app.py` | 反向代理核心 |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
+| `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试） |
 | `.github/workflows/release.yml` | CI/CD 发布工作流（测试 → 打包 → Release） |
 | `combined/requirements.txt` | 运行时依赖 |
 | `combined/wheels/` | PyPI 缺失依赖的离线 wheel 源（45 个） |

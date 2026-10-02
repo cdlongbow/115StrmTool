@@ -86,11 +86,12 @@ python build_exe.py
 
 | 工具 | 命令 | 目的 |
 |------|------|------|
+| 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
 | 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（137 个用例） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
-测试说明：CI 在打包 exe 前会运行全部测试，测试失败则构建中止。个别测试模块通过 `patch.dict(sys.modules, ...)` 隔离重量级依赖，无需真实 Cookie 或网络即可运行。
+测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止。个别测试模块通过 `patch.dict(sys.modules, ...)` 隔离重量级依赖，无需真实 Cookie 或网络即可运行。SDK 相关依赖仅发布 Python 3.12 版本，本地开发环境需 3.12 才能完整安装。
 
 ### 分支策略
 
