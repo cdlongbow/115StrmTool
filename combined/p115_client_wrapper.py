@@ -1,8 +1,8 @@
 from base64 import b64encode
 from json import loads as json_loads
-from time import monotonic, sleep
+from time import sleep
 from threading import Lock
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import Client, Limits, Timeout
@@ -15,6 +15,7 @@ except ImportError:
 
 from app_ver import generate_u115_ios
 from logger import logger
+from utils import RateLimiter, capture_exceptions
 
 
 P115_DOWNLOAD_API = "http://proapi.115.com/android/2.0/ufile/download"
@@ -53,22 +54,22 @@ class P115ClientWrapper:
         self._client = None
         self._http_client: Optional[Client] = None
         self._cooldown_lock = Lock()
-        self._last_call: Dict[str, float] = {}
+        self._limiters: Dict[str, RateLimiter] = {}
         self._cooldowns = dict(DEFAULT_ENDPOINT_COOLDOWNS)
         self._init_client()
 
     def _wait_cooling(self, endpoint: str):
-        cooldown = self._cooldowns.get(endpoint, 0)
-        if cooldown <= 0:
-            return
-        with self._cooldown_lock:
-            now = monotonic()
-            last = self._last_call.get(endpoint, 0)
-            remaining = cooldown - (now - last)
-        if remaining > 0:
-            sleep(remaining)
-        with self._cooldown_lock:
-            self._last_call[endpoint] = monotonic()
+        limiter = self._limiters.get(endpoint)
+        if limiter is None:
+            cooldown = self._cooldowns.get(endpoint, 0)
+            if cooldown <= 0:
+                return
+            with self._cooldown_lock:
+                limiter = self._limiters.get(endpoint)
+                if limiter is None:
+                    limiter = RateLimiter(1.0 / cooldown)
+                    self._limiters[endpoint] = limiter
+        limiter.acquire()
 
     def _init_client(self):
         if not self._cookie:
@@ -153,6 +154,147 @@ class P115ClientWrapper:
 
     def is_ready(self) -> bool:
         return self._client is not None
+
+    @staticmethod
+    def _is_405_error(error: Exception) -> bool:
+        """
+        判断异常是否由 HTTP 405（Method Not Allowed）引起
+
+        :param error (Exception): 请求异常
+
+        :return bool: 是否为 405 错误
+        """
+        if getattr(error, "status_code", None) == 405:
+            return True
+        if getattr(error, "code", None) == 405:
+            return True
+        message = str(error)
+        return "405" in message or "Method Not Allowed" in message
+
+    def _call_with_405_fallback(
+        self,
+        primary_call: Callable[[], Dict],
+        fallback_call: Callable[[], Dict],
+        operation: str,
+    ) -> Optional[Dict]:
+        """
+        优先调用 Web API，返回 405 时切换到 App API 重试
+
+        :param primary_call (Callable): Web API 调用
+        :param fallback_call (Callable): App API 调用
+        :param operation (str): 操作名称，用于日志
+
+        :return Dict: API 响应
+        """
+        try:
+            return primary_call()
+        except Exception as error:
+            if not self._is_405_error(error):
+                raise
+            logger.warning("【115客户端】%s Web API 返回 405，切换 App API", operation)
+            return fallback_call()
+
+    def ensure_folder(self, pan_path: str) -> Optional[int]:
+        """
+        获取网盘目录 ID，目录不存在时自动创建
+
+        :param pan_path (str): 网盘目录绝对路径
+
+        :return int: 目录 ID；获取或创建失败返回 None
+        """
+        if not self._client:
+            return None
+        path = "/" + (pan_path or "").strip("/")
+        if path == "/":
+            return 0
+        try:
+            self._wait_cooling("fs_dir_getid")
+            resp = self._client.fs_dir_getid(path)
+            pid = (resp or {}).get("id", "-1")
+            if str(pid) not in ("-1", "0"):
+                return int(pid)
+            resp = self._call_with_405_fallback(
+                primary_call=lambda: self._client.fs_mkdir(path.strip("/"), 0),
+                fallback_call=lambda: self._client.fs_makedirs_app(path, 0),
+                operation="创建多端播放目录",
+            )
+            new_pid = (resp or {}).get("cid") or (resp or {}).get("id")
+            if new_pid and str(new_pid) not in ("-1", "0"):
+                return int(new_pid)
+            resp = self._client.fs_dir_getid(path)
+            pid = (resp or {}).get("id", "-1")
+            if str(pid) in ("-1", "0"):
+                logger.warning("创建网盘目录后仍无法获取目录 ID: %s", path)
+                return None
+            return int(pid)
+        except Exception as e:
+            logger.error("获取/创建网盘目录失败: %s", e, exc_info=True)
+            return None
+
+    def copy_pickcode(self, pickcode: str, pid: int) -> Optional[str]:
+        """
+        将文件复制到指定目录并返回副本的 pickcode
+
+        115 对单文件并发下载有限制，多端同时播放时复制副本以规避
+
+        :param pickcode (str): 源文件 pickcode
+        :param pid (int): 复制目标目录 ID
+
+        :return str: 副本 pickcode；失败返回 None
+        """
+        if not self._client:
+            return None
+        try:
+            from p115pickcode import to_id
+
+            file_id = to_id(pickcode)
+            self._call_with_405_fallback(
+                primary_call=lambda: self._client.fs_copy(file_id, pid=pid),
+                fallback_call=lambda: self._client.fs_copy_app(file_id, pid=pid),
+                operation="复制多端播放文件",
+            )
+            payload = {"cid": pid, "o": "user_ptime", "asc": 0}
+            for attempt in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+                resp = self._call_with_405_fallback(
+                    primary_call=lambda: self._client.fs_files(payload),
+                    fallback_call=lambda: self._client.fs_files_app(payload),
+                    operation="查询多端播放副本",
+                )
+                items = (resp or {}).get("data") or []
+                if items and items[0].get("pc"):
+                    return items[0]["pc"]
+                if attempt < len(_DOWNLOAD_RETRY_DELAYS):
+                    sleep(_DOWNLOAD_RETRY_DELAYS[attempt])
+            logger.warning("复制后未查询到副本 pickcode: %s", pickcode)
+            return None
+        except Exception as e:
+            logger.error("复制多端播放文件失败: %s", e, exc_info=True)
+            return None
+
+    def delete_file(self, pickcode: str) -> bool:
+        """
+        删除指定 pickcode 对应的文件，用于清理多端播放副本
+
+        :param pickcode (str): 文件 pickcode
+
+        :return bool: 删除成功返回 True
+        """
+        if not self._client:
+            return False
+        try:
+            from p115pickcode import to_id
+
+            file_id = to_id(pickcode)
+            self._call_with_405_fallback(
+                primary_call=lambda: self._client.fs_delete(file_id),
+                fallback_call=lambda: self._client.fs_delete_app(file_id),
+                operation="清理多端播放副本",
+            )
+            logger.debug("已删除多端播放副本: %s", pickcode)
+            return True
+        except Exception as e:
+            logger.warning("清理多端播放副本失败: %s", e, exc_info=True)
+            return False
 
     @staticmethod
     def _extract_url_info(url: str) -> Optional[Tuple[str, str, int]]:
@@ -342,6 +484,7 @@ class P115ClientWrapper:
             self._http_client.close()
             self._http_client = None
 
+    @capture_exceptions(default=None, log_message="浏览目录失败")
     def fs_files_app(self, payload: Dict) -> Optional[Dict]:
         """
         通过 Android API 浏览目录
@@ -352,12 +495,9 @@ class P115ClientWrapper:
         """
         if not self._client:
             return None
-        try:
-            return self._client.fs_files_app(payload)
-        except Exception as e:
-            logger.error("浏览目录失败: %s", e, exc_info=True)
-            return None
+        return self._client.fs_files_app(payload)
 
+    @capture_exceptions(default=None, log_message="SDK 获取下载地址失败")
     def download_url(self, pickcode: str) -> Optional[Dict]:
         """
         通过 SDK 获取文件下载地址（无 UA 绑定）
@@ -368,49 +508,33 @@ class P115ClientWrapper:
         """
         if not self._client:
             return None
-        try:
-            return self._client.download_url(pickcode)
-        except Exception as e:
-            logger.error("SDK 获取下载地址失败: %s", e, exc_info=True)
-            return None
+        return self._client.download_url(pickcode)
 
+    @capture_exceptions(default=None, log_message="查询签到状态失败")
     def user_points_sign(self) -> Optional[Dict]:
         if not self._client:
             return None
-        try:
-            self._wait_cooling("user_points_sign")
-            return self._client.user_points_sign()
-        except Exception as e:
-            logger.error("查询签到状态失败: %s", e, exc_info=True)
-            return None
+        self._wait_cooling("user_points_sign")
+        return self._client.user_points_sign()
 
+    @capture_exceptions(default=None, log_message="执行签到失败")
     def user_points_sign_post(self) -> Optional[Dict]:
         if not self._client:
             return None
-        try:
-            self._wait_cooling("user_points_sign_post")
-            return self._client.user_points_sign_post()
-        except Exception as e:
-            logger.error("执行签到失败: %s", e, exc_info=True)
-            return None
+        self._wait_cooling("user_points_sign_post")
+        return self._client.user_points_sign_post()
 
+    @capture_exceptions(default=None, log_message="获取用户信息失败")
     def get_user_info(self) -> Optional[Dict]:
         if not self._client:
             return None
-        try:
-            return self._client.user_info()
-        except Exception as e:
-            logger.error("获取用户信息失败: %s", e, exc_info=True)
-            return None
+        return self._client.user_info()
 
+    @capture_exceptions(default=None, log_message="获取存储信息失败")
     def get_storage_info(self) -> Optional[Dict]:
         if not self._client:
             return None
-        try:
-            return self._client.fs_storage_info()
-        except Exception as e:
-            logger.error("获取存储信息失败: %s", e, exc_info=True)
-            return None
+        return self._client.fs_storage_info()
 
     def get_qrcode(self, app: str = "alipaymini") -> Optional[Dict]:
         try:
