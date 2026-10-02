@@ -2,12 +2,77 @@ import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from logger import logger
 
 if getattr(sys, "frozen", False):
     _BASE_DIR = Path(sys.executable).parent
 else:
     _BASE_DIR = Path(__file__).parent
+
+_SCHEMA_VERSION = 1
+
+_BASE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pickcode TEXT NOT NULL UNIQUE,
+        file_name TEXT NOT NULL,
+        file_size INTEGER DEFAULT 0,
+        file_type TEXT DEFAULT '',
+        pan_path TEXT NOT NULL,
+        local_strm_path TEXT NOT NULL,
+        sha1 TEXT DEFAULT '',
+        parent_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime')),
+        status TEXT DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_type TEXT NOT NULL,
+        start_time TEXT,
+        end_time TEXT,
+        total_files INTEGER DEFAULT 0,
+        new_files INTEGER DEFAULT 0,
+        deleted_files INTEGER DEFAULT 0,
+        failed_files INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'running',
+        error_message TEXT DEFAULT ''
+    );
+"""
+
+# 索引在迁移完成后创建：旧库表可能缺少 status 列，提前建索引会失败
+_POST_MIGRATION_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS idx_files_pan_path ON files(pan_path)",
+    "CREATE INDEX IF NOT EXISTS idx_files_status ON files(status)",
+)
+
+
+def _migration_1_ensure_file_columns(conn: sqlite3.Connection):
+    """
+    补齐早期版本 files 表可能缺失的列，重复执行安全
+
+    :param conn (Connection): SQLite 连接
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()}
+    additions = {
+        "file_size": "INTEGER DEFAULT 0",
+        "file_type": "TEXT DEFAULT ''",
+        "sha1": "TEXT DEFAULT ''",
+        "parent_id": "TEXT DEFAULT ''",
+        "status": "TEXT DEFAULT 'active'",
+    }
+    for column, ddl in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {column} {ddl}")
+            logger.info("数据库迁移: files 表补充列 %s", column)
+
+
+_MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
+    (1, _migration_1_ensure_file_columns),
+]
 
 
 class Database:
@@ -31,39 +96,29 @@ class Database:
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pickcode TEXT NOT NULL UNIQUE,
-                file_name TEXT NOT NULL,
-                file_size INTEGER DEFAULT 0,
-                file_type TEXT DEFAULT '',
-                pan_path TEXT NOT NULL,
-                local_strm_path TEXT NOT NULL,
-                sha1 TEXT DEFAULT '',
-                parent_id TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                updated_at TEXT DEFAULT (datetime('now','localtime')),
-                status TEXT DEFAULT 'active'
-            );
-            CREATE INDEX IF NOT EXISTS idx_files_pan_path ON files(pan_path);
-            CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
-
-            CREATE TABLE IF NOT EXISTS sync_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sync_type TEXT NOT NULL,
-                start_time TEXT,
-                end_time TEXT,
-                total_files INTEGER DEFAULT 0,
-                new_files INTEGER DEFAULT 0,
-                deleted_files INTEGER DEFAULT 0,
-                failed_files INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'running',
-                error_message TEXT DEFAULT ''
-            );
-        """)
+        conn.executescript(_BASE_SCHEMA)
+        self._run_migrations(conn)
+        for stmt in _POST_MIGRATION_STATEMENTS:
+            conn.execute(stmt)
         conn.commit()
         conn.close()
+
+    def _run_migrations(self, conn: sqlite3.Connection):
+        """
+        按 ``PRAGMA user_version`` 执行增量迁移，已是最新版本时跳过
+
+        :param conn (Connection): SQLite 连接
+        """
+        current = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current >= _SCHEMA_VERSION:
+            return
+        logger.info("数据库迁移: 当前版本 %s -> %s", current, _SCHEMA_VERSION)
+        for version, migration in _MIGRATIONS:
+            if current < version:
+                migration(conn)
+                current = version
+        conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+
 
     def batch_add_files(self, files: List[Dict[str, Any]]):
         with self.conn:
