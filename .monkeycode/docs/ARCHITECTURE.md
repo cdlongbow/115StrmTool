@@ -87,10 +87,10 @@ MoviePilot-Windows/
 **配置项**: `redirect_mode` — `true` 为 302 直链模式（客户端直连 CDN），`false`（默认）时媒体请求回退到通用反向代理转发 Emby 原响应
 
 ### 115 跳转服务（端口 3333）
-**目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）
+**目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）；开启多端播放后，并发播放同一文件时自动复制网盘副本换取独立播放地址
 **位置**: `combined/redirect_service.py` + `p115_client_wrapper.py`
 **关键文件**: `redirect_service.py`, `p115_client_wrapper.py`
-**依赖**: `p115cipher`, `p115client`
+**依赖**: `p115cipher`, `p115client`, `config_manager`
 **被依赖**: `strm_generator`（写入 STRM 时使用此服务地址），`proxy_app`（播放时解析跳转）
 
 ### STRM 文件生成器
@@ -108,7 +108,7 @@ MoviePilot-Windows/
 ### 持久化层
 **目的**: 存储 STRM 清单、同步历史
 **位置**: `combined/database.py` + `combined/config_manager.py`
-**关键文件**: `database.py`（SQLite）, `config_manager.py`（JSON 配置）
+**关键文件**: `database.py`（SQLite，`PRAGMA user_version` 版本号增量迁移）, `config_manager.py`（JSON 配置）
 
 ## 图表
 
@@ -206,6 +206,12 @@ sequenceDiagram
 
 ### UA 绑定的加密下载 API
 115 CDN 的下载 URL 与请求时的 User-Agent 绑定。使用 `p115cipher` 加密 `pick_code`，通过 `proapi.115.com/android/2.0/ufile/download` 接口获取 URL，确保 URL 与客户端 UA 一致。
+
+### 多端播放副本（same_playback）
+115 对单个文件的并发下载有限制，多台设备同时播放同一文件时，后来者获取播放地址会失败。开启多端播放后，跳转服务以缓存前缀 `pickcode:` 统计该文件当前已有的独立 UA 回源记录；检测到并发时通过 `fs_copy`（405 时降级 `fs_copy_app`）把文件复制到网盘副本目录（默认 `/多端播放`，缺失时自动创建），用副本 pickcode 换取独立播放地址，取址结束后延迟 5 秒延迟删除副本。复制失败或目录解析失败时静默回退原文件，保证播放可用优先。
+
+### API 限速与异常收口
+115 各 API 端点按 `DEFAULT_ENDPOINT_COOLDOWNS` 配置最小调用间隔，`utils.RateLimiter` 按固定间隔串行化同一端点的并发调用；客户端封装层的业务方法统一使用 `utils.capture_exceptions` 装饰器收口异常（记录日志并返回默认值），避免失败路径散落 try/except。Web API 返回 405（风控）时，目录创建/复制/删除等操作通过 `_call_with_405_fallback` 自动切换到对应的 App API。
 
 ### PlaybackInfo 强制 DirectPlay
 Emby 默认可能对远程媒体源启用转码（HLS），导致 302 直链失效。代理拦截 `/Items/{item_id}/PlaybackInfo`，检测 STRM 媒体源后将 `SupportsTranscoding` 设为 false，强制 DirectPlay。同时替换 `MediaSources[].Path` 为 CDN 直链，兼容使用 `Path` 而非 `DirectStreamUrl` 播放的客户端（如王二小放牛娃）。

@@ -323,6 +323,8 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "overwrite_mode": "never",
     "cleanup_deleted_strm": false,
     "use_rust": false,
+    "same_playback": false,
+    "same_playback_dir": "/多端播放",
     "paths": []
   },
   "checkin": {

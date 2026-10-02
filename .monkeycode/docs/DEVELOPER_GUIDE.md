@@ -75,6 +75,8 @@ python build_exe.py
 | `p115.strm_url_prefix` | `http://192.168.2.100:3333` | STRM 文件中的跳转 URL 前缀 |
 | `p115.rmt_mediaext` | `mp4,mkv,ts,...` | STRM 生成的媒体扩展名 |
 | `p115.overwrite_mode` | `never` | STRM 覆盖模式（never/always） |
+| `p115.same_playback` | `false` | 多端播放开关（并发播放时复制副本换取独立播放地址） |
+| `p115.same_playback_dir` | `/多端播放` | 多端播放副本存放的网盘目录 |
 
 配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。
 
@@ -84,7 +86,7 @@ python build_exe.py
 
 | 工具 | 命令 | 目的 |
 |------|------|------|
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（113 个用例） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（137 个用例） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
@@ -139,6 +141,17 @@ Co-authored-by: <AI Name> <email>
 - `_resolve_redirect()` 返回 `(最终 URL, 是否成功解析)` 元组；解析失败时缓存仅保留 5 秒，避免坏 URL 长期驻留
 - `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
 - `redirect_mode=false` 时媒体路由回退到通用反向代理转发 Emby 响应，不再单独走 CDN 流式拉取
+
+### 新增数据库字段
+
+数据库使用 `PRAGMA user_version` 版本号驱动增量迁移，禁止直接修改 `files` 建表语句后不管旧库。
+
+**步骤**（`combined/database.py`）：
+1. 在 `_BASE_SCHEMA` 的建表语句中加入新列（保证全新安装的库直接带列）
+2. 编写迁移函数写入缺失列，注册到 `_MIGRATIONS` 列表并把 `_SCHEMA_VERSION` 加一（保证旧库升级补列）
+3. 若新列需要索引，加入 `_POST_MIGRATION_STATEMENTS`（在迁移完成后执行，兼容旧库补列场景）
+
+**注意**：迁移函数必须幂等（先查 `PRAGMA table_info` 再 `ALTER TABLE`），旧库上重复执行不能报错。
 
 ## 编码规范
 
