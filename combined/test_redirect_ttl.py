@@ -80,5 +80,7 @@ def test_ttl_capped_at_default():
     assert entry is not None, "长有效期地址应进入缓存"
     _, expiry = entry
     remaining = expiry - time.monotonic()
-    assert remaining <= 90, f"TTL 不得超过默认上限 90 秒，实际 {remaining}"
+
+    # expiry 由单调时钟加浮点 ttl 求得，回读会有 ulp 级舍入，断言需容忍浮点误差
+    assert remaining <= 90 + 1e-6, f"TTL 不得超过默认上限 90 秒，实际 {remaining}"
     assert remaining > 0
