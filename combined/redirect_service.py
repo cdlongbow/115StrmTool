@@ -1,7 +1,7 @@
 from hashlib import sha256
 from json import dumps as json_dumps
 from time import time
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
 import asyncio
@@ -9,19 +9,93 @@ import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from config_manager import config_manager
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from utils import AsyncKeyLock, AsyncTtlCache
 
 CACHE_TTL_DEFAULT = 90
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
+COPY_CLEANUP_DELAY = 5.0
+COPY_DIR_DEFAULT = "/多端播放"
 
 
 class RedirectService:
-    def __init__(self, client: P115ClientWrapper):
+    def __init__(
+        self,
+        client: P115ClientWrapper,
+        same_playback: Optional[bool] = None,
+        same_playback_dir: Optional[str] = None,
+    ):
         self._client = client
         self._cache = AsyncTtlCache(ttl=CACHE_TTL_DEFAULT, max_size=1000)
         self._key_lock = AsyncKeyLock()
+        self._same_playback_override = same_playback
+        self._same_playback_dir_override = same_playback_dir
+        self._copy_dir_pid: Optional[int] = None
+
+    def _get_same_playback(self) -> Tuple[bool, str]:
+        """
+        读取多端播放配置
+
+        :return Tuple: (是否开启多端播放, 副本目录)
+        """
+        if self._same_playback_override is not None:
+            return (
+                self._same_playback_override,
+                self._same_playback_dir_override or COPY_DIR_DEFAULT,
+            )
+        cfg = config_manager.get().get("p115", {})
+        return (
+            bool(cfg.get("same_playback", False)),
+            cfg.get("same_playback_dir") or COPY_DIR_DEFAULT,
+        )
+
+    async def _resolve_copy_dir_pid(self, copy_dir: str) -> Optional[int]:
+        """
+        解析副本目录 ID，首次调用时创建目录并缓存
+
+        :param copy_dir (str): 副本目录网盘路径
+
+        :return int: 目录 ID，失败返回 None
+        """
+        if self._copy_dir_pid is not None:
+            return self._copy_dir_pid
+        pid = await asyncio.to_thread(self._client.ensure_folder, copy_dir)
+        if pid:
+            self._copy_dir_pid = pid
+        return pid
+
+    async def _create_copy(self, pickcode: str, copy_dir: str) -> Optional[str]:
+        """
+        为多端播放创建文件副本
+
+        :param pickcode (str): 源文件 pickcode
+        :param copy_dir (str): 副本目录网盘路径
+
+        :return str: 副本 pickcode，失败返回 None
+        """
+        pid = await self._resolve_copy_dir_pid(copy_dir)
+        if not pid:
+            logger.warning("【302跳转服务】无法解析多端播放目录: %s", copy_dir)
+            return None
+        return await asyncio.to_thread(self._client.copy_pickcode, pickcode, pid)
+
+    def _schedule_copy_cleanup(self, pickcode: str) -> None:
+        """
+        延迟清理多端播放副本，避免长期占用网盘空间
+
+        :param pickcode (str): 副本 pickcode
+        """
+
+        async def _cleanup():
+            await asyncio.sleep(COPY_CLEANUP_DELAY)
+            await asyncio.to_thread(self._client.delete_file, pickcode)
+
+        try:
+            asyncio.create_task(_cleanup())
+        except RuntimeError:
+            logger.warning("【302跳转服务】无法调度副本清理: %s", pickcode)
 
     def create_app(self) -> FastAPI:
         app = FastAPI(title="115 STRM 302 跳转服务")
@@ -95,9 +169,32 @@ class RedirectService:
                 )
                 return self._build_302(cached_url, pickcode, cached_fname)
 
-            result = await asyncio.to_thread(
-                self._client.get_download_url_with_ua, pickcode, user_agent
-            )
+            post_pickcode = pickcode
+            same_playback, copy_dir = self._get_same_playback()
+            if same_playback:
+                async with self._cache.lock:
+                    other_ua = self._cache.count_prefix(f"{pickcode}:")
+                if other_ua > 0:
+                    copied = await self._create_copy(pickcode, copy_dir)
+                    if copied:
+                        post_pickcode = copied
+                        logger.info(
+                            "【302跳转服务】多端播放创建副本: pickcode=%s copy=%s ip=%s",
+                            pickcode, copied, client_ip,
+                        )
+                    else:
+                        logger.warning(
+                            "【302跳转服务】多端播放复制失败，回退原文件: pickcode=%s",
+                            pickcode,
+                        )
+
+            try:
+                result = await asyncio.to_thread(
+                    self._client.get_download_url_with_ua, post_pickcode, user_agent
+                )
+            finally:
+                if post_pickcode != pickcode:
+                    self._schedule_copy_cleanup(post_pickcode)
             if not result:
                 logger.error(
                     "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",

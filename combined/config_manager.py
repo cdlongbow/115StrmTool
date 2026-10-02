@@ -75,6 +75,8 @@ class P115Config(BaseModel):
     overwrite_mode: str = "never"
     cleanup_deleted_strm: bool = False
     use_rust: bool = False
+    same_playback: bool = False
+    same_playback_dir: str = "/多端播放"
     paths: List[PathMapping] = Field(default_factory=list)
 
     @field_validator("overwrite_mode")
