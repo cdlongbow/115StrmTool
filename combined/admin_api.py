@@ -35,7 +35,9 @@ def get_config() -> Dict[str, Any]:
 def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
     updates = {}
     if req.emby is not None:
-        updates["emby"] = {k: v for k, v in req.emby.items() if v is not None}
+        emby_updates = {k: v for k, v in req.emby.items() if v is not None}
+        if emby_updates:
+            updates["emby"] = emby_updates
     if req.p115 is not None:
         p115_updates = {k: v for k, v in req.p115.items() if v is not None}
         # 前端回传掩码值表示 Cookie 未修改，不覆盖已保存的真实 Cookie
@@ -118,26 +120,16 @@ def set_p115_status(running: bool):
 
 @router.get("/p115/status")
 def get_p115_status() -> Dict[str, Any]:
-    client = _p115_client_ref["instance"]
-    client_ready = client is not None and hasattr(client, "is_ready") and client.is_ready()
-    stats = {}
-    user_info = None
-    storage = None
-    if client_ready:
-        try:
-            from database import db
-            stats = db.get_stats()
-            user_info = client.get_user_info()
-            storage = client.get_storage_info()
-        except Exception as e:
-            logger.warning("获取 P115 统计/用户信息失败: %s", e, exc_info=True)
-    return {
-        "running": _p115_status["running"],
-        "client_ready": client_ready,
-        "stats": stats,
-        "user_info": user_info,
-        "storage": storage,
-    }
+    """
+    与 /api/status 共用状态构建器，额外返回 running 服务状态
+
+    :return Dict: 状态快照字段加 running
+    """
+    from api_routes import build_p115_status
+
+    result = build_p115_status(_p115_client_ref["instance"])
+    result["running"] = _p115_status["running"]
+    return result
 
 
 # ── 统一状态 ──
