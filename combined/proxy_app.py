@@ -500,9 +500,13 @@ def create_app(
         FastAPI 生命周期管理器：创建共享 httpx 客户端及缓存，关闭时清理资源
         """
         limits = Limits(max_keepalive_connections=20, keepalive_expiry=30.0)
-        app.state.http_client_follow = AsyncClient(follow_redirects=True, limits=limits)
+        # 媒体流经此客户端长距转发，读超时须放开，否则 CDN 停顿即中断且仅有状态码可见
+        media_timeout = Timeout(connect=10.0, read=None, write=None, pool=10.0)
+        app.state.http_client_follow = AsyncClient(
+            follow_redirects=True, limits=limits, timeout=media_timeout
+        )
         app.state.http_client_no_follow = AsyncClient(
-            follow_redirects=False, limits=limits
+            follow_redirects=False, limits=limits, timeout=media_timeout
         )
         app.state.playback_url_cache = AsyncTtlCache(ttl=PLAYBACK_URL_CACHE_TTL_SECONDS, max_size=PLAYBACK_URL_CACHE_MAX_SIZE)
         app.state.strm_source_cache = AsyncTtlCache(ttl=PLAYBACK_STRM_CACHE_TTL_SECONDS, max_size=500)
@@ -1203,11 +1207,14 @@ def create_app(
 
         async def stream():
             """
-            流式读取 httpx 响应并逐块输出，完成后关闭响应
+            流式读取 httpx 响应并逐块输出，完成后关闭响应；中断时留日志便于排查播放卡死
             """
             try:
                 async for chunk in resp.aiter_bytes(chunk_size=65536):
                     yield chunk
+            except Exception:
+                logger.error("转发流中断: %s", target_url, exc_info=True)
+                raise
             finally:
                 await resp.aclose()
 
