@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
+from conftest import REDIRECT_HEAVY_DEPS, stub_modules
+
 API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 PICKCODE = "3" * 17
 COPY_PC = "9" * 17
@@ -25,7 +27,7 @@ def _build_service(same_playback):
         int(time.time()) + 3600,
     )
     wrapper.copy_pickcode.return_value = COPY_PC
-    with patch.dict("sys.modules", {"p115_client_wrapper": MagicMock()}):
+    with patch.dict("sys.modules", stub_modules(REDIRECT_HEAVY_DEPS)):
         from redirect_service import RedirectService
         svc = RedirectService(
             wrapper,

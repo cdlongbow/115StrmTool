@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from conftest import API_HEAVY_DEPS, stub_modules
+
 
 def _sample_resp():
     """构建 fs_files_app 模拟响应（Android API 字段）"""
@@ -47,10 +49,7 @@ def browse(client):
     with patch.dict(
         "sys.modules",
         {
-            "config_manager": MagicMock(),
-            "database": MagicMock(),
-            "logger": MagicMock(),
-            "p115_client_wrapper": MagicMock(),
+            **stub_modules(API_HEAVY_DEPS),
             "p115client": _client_mod,
             "p115client.tool": _tool_mod,
             "p115client.tool.attr": _attr_mod,

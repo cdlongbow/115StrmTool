@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
+from conftest import REDIRECT_HEAVY_DEPS, stub_modules
+
 API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 PICKCODE = "2" * 17
 UA = "ttl-test-ua"
@@ -23,9 +25,7 @@ def _build_service(expires_time: int):
         "movie.mp4",
         expires_time,
     )
-    with patch.dict("sys.modules", {
-        "p115_client_wrapper": MagicMock(),
-    }):
+    with patch.dict("sys.modules", stub_modules(REDIRECT_HEAVY_DEPS)):
         from redirect_service import RedirectService
         svc = RedirectService(wrapper)
     return svc

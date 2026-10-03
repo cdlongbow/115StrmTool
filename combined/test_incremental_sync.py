@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from conftest import DB_HEAVY_DEPS, stub_modules
+
 tmp_dir = Path(tempfile.mkdtemp())
 
 
@@ -21,15 +23,7 @@ def _build_fake_iter_files(items):
 
 @pytest.fixture
 def db():
-    with patch.dict("sys.modules", {
-        "p115cipher": MagicMock(),
-        "p115client": MagicMock(),
-        "p115_client_wrapper": MagicMock(),
-        "httpx": MagicMock(),
-        "app_ver": MagicMock(),
-        "config_manager": MagicMock(),
-        "logger": MagicMock(),
-    }):
+    with patch.dict("sys.modules", stub_modules(DB_HEAVY_DEPS)):
         from database import Database
         _db = Database(str(tmp_dir / "test.db"))
         yield _db
@@ -39,13 +33,7 @@ def db():
 @pytest.fixture
 def gen(db):
     with patch.dict("sys.modules", {
-        "p115cipher": MagicMock(),
-        "p115client": MagicMock(),
-        "p115_client_wrapper": MagicMock(),
-        "httpx": MagicMock(),
-        "app_ver": MagicMock(),
-        "config_manager": MagicMock(),
-        "logger": MagicMock(),
+        **stub_modules(DB_HEAVY_DEPS),
         "database": MagicMock(),
     }):
         import strm_generator as sg
@@ -330,23 +318,14 @@ class TestIncrementalSync:
         assert rec is not None and rec["status"] == "active"
 
 
-_MOCK_MODULES = {
-    "p115cipher": MagicMock(),
-    "p115client": MagicMock(),
-    "p115_client_wrapper": MagicMock(),
-    "httpx": MagicMock(),
-    "app_ver": MagicMock(),
-    "config_manager": MagicMock(),
-    "logger": MagicMock(),
-    "database": MagicMock(),
-}
-
-
 class TestSyncLockAndSingleton:
 
     @pytest.fixture
     def sg_module(self):
-        with patch.dict("sys.modules", _MOCK_MODULES):
+        with patch.dict(
+            "sys.modules",
+            {**stub_modules(DB_HEAVY_DEPS), "database": MagicMock()},
+        ):
             import strm_generator as sg
             sg.strm_generator = None
             yield sg

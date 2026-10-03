@@ -7,18 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_HEAVY_DEPS = {
-    "config_manager": MagicMock(),
-    "database": MagicMock(),
-    "logger": MagicMock(),
-    "p115_client_wrapper": MagicMock(),
-}
+from conftest import API_HEAVY_DEPS, stub_modules
 
 
 @pytest.fixture
 def api_routes():
     # patch.dict 退出时自动还原 sys.modules，避免污染其他测试
-    with patch.dict(sys.modules, _HEAVY_DEPS):
+    with patch.dict(sys.modules, stub_modules(API_HEAVY_DEPS)):
         import api_routes as mod
         yield mod
 

@@ -4,13 +4,12 @@
 开发环境未安装 p115client / p115cipher / p115pickcode，
 通过 sys.modules 注入替身模块使封装层可独立测试
 """
-import sys
 from threading import Lock
 from unittest.mock import MagicMock
 
-sys.modules.setdefault("p115client", MagicMock())
-sys.modules.setdefault("p115cipher", MagicMock())
-sys.modules.setdefault("p115pickcode", MagicMock())
+from conftest import P115_NATIVE_MODULES, stub_missing
+
+stub_missing(P115_NATIVE_MODULES)
 
 from p115_client_wrapper import P115ClientWrapper  # noqa: E402
 
