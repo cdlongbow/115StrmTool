@@ -1,3 +1,5 @@
+import threading
+from typing import Callable, Optional, Tuple
 import os
 import sys
 from urllib.request import Request, urlopen
@@ -26,7 +28,15 @@ def _create_icon():
     return img
 
 
-def _post_api(path: str, port: int = 8100) -> str:
+def _post_api(path: str, port: int = 8100) -> Tuple[bool, str]:
+    """
+    向本地管理接口发起 POST 请求
+
+    :param path (str): 接口路径
+    :param port (int): 管理端口
+
+    :return Tuple: (是否成功, 响应正文或错误描述)
+    """
     try:
         req = Request(f"http://127.0.0.1:{port}{path}", method="POST")
         try:
@@ -38,9 +48,10 @@ def _post_api(path: str, port: int = 8100) -> str:
         except Exception:
             logger.debug("读取管理令牌失败，按无令牌请求", exc_info=True)
         with urlopen(req, timeout=5) as r:
-            return r.read().decode("utf-8")
+            return True, r.read().decode("utf-8")
     except Exception as e:
-        return f"请求失败: {e}"
+        logger.exception("托盘请求管理接口失败: %s", path)
+        return False, "请求失败: " + str(e)
 
 
 def _open_browser(url: str):
@@ -59,35 +70,45 @@ def run_tray(
     app_name: str = "App",
     admin_url: str = "http://localhost:8100",
     admin_port: int = 8100,
-    on_exit: callable = None,
-):
-    if not _HAS_PYSTRAY:
-        logger.warning("pystray 未安装，运行在控制台模式。pip install pystray Pillow")
-        import threading as _threading
+    on_exit: Optional[Callable[[], None]] = None,
+) -> None:
+    """
+    运行系统托盘，菜单回调在工作线程执行
 
-        _threading.Event().wait()
-        return
+    :param app_name (str): 托盘显示名
+    :param admin_url (str): 管理界面地址
+    :param admin_port (int): 管理端口
+    :param on_exit (Callable): 退出时的清理回调
+    """
+    if not _HAS_PYSTRAY:
+        raise RuntimeError("pystray 未安装，无法运行托盘")
+
+    def _run_async(fn):
+        threading.Thread(target=fn, daemon=True).start()
 
     def _open_admin(icon, item):
-        _open_browser(admin_url)
+        _run_async(lambda: _open_browser(admin_url))
+
+    def _notify_task(icon, label, path):
+        def _work():
+            ok, result = _post_api(path, admin_port)
+            logger.info("托盘菜单 - %s: %s", label, result)
+            title = label if ok else label + " 失败"
+            icon.notify(title + "\n" + result[:80], app_name)
+
+        _run_async(_work)
 
     def _sync(icon, item):
-        result = _post_api("/api/sync/start", admin_port)
-        logger.info("托盘菜单 - 全量同步: %s", result)
-        icon.notify("全量同步结果\n" + result[:80], app_name)
+        _notify_task(icon, "全量同步", "/api/sync/start")
 
     def _incr_sync(icon, item):
-        result = _post_api("/api/sync/incremental", admin_port)
-        logger.info("托盘菜单 - 增量同步: %s", result)
-        icon.notify("增量同步结果\n" + result[:80], app_name)
+        _notify_task(icon, "增量同步", "/api/sync/incremental")
 
     def _checkin(icon, item):
-        result = _post_api("/api/checkin/run", admin_port)
-        logger.info("托盘菜单 - 立即签到: %s", result)
-        icon.notify("签到结果\n" + result[:80], app_name)
+        _notify_task(icon, "立即签到", "/api/checkin/run")
 
     def _open_logs(icon, item):
-        _open_logs_dir()
+        _run_async(_open_logs_dir)
 
     def _quit(icon, item):
         icon.stop()

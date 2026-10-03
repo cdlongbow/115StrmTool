@@ -197,7 +197,16 @@ if sys.platform == "win32":
     _AUTOSTART_NAME = "115StrmTool"
 
 
-def _get_autostart() -> bool:
+def _autostart_supported() -> bool:
+    """
+    是否支持开机自启配置
+
+    :return bool: 仅打包后的 Windows 环境支持
+    """
+    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+
+
+def  _get_autostart() -> bool:
     if sys.platform != "win32":
         return False
     try:
@@ -214,25 +223,45 @@ def _get_autostart() -> bool:
 
 
 def _set_autostart(enable: bool):
-    if sys.platform != "win32":
-        return
+    """
+    写入或删除 HKCU Run 开机自启项
+
+    :param enable (bool): 写入或删除自启项
+
+    :raises ServiceError: 不支持的环境或注册表操作失败
+    """
+    if not _autostart_supported():
+        raise ServiceError("当前环境不支持开机自启", status_code=501)
+    key = None
     try:
-        key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY, 0, _winreg.KEY_SET_VALUE)
+        key = _winreg.OpenKey(
+            _winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY, 0, _winreg.KEY_SET_VALUE
+        )
         if enable:
-            _winreg.SetValueEx(key, _AUTOSTART_NAME, 0, _winreg.REG_SZ, sys.executable)
+            _winreg.SetValueEx(
+                key, _AUTOSTART_NAME, 0, _winreg.REG_SZ, sys.executable
+            )
         else:
             try:
                 _winreg.DeleteValue(key, _AUTOSTART_NAME)
             except FileNotFoundError:
                 pass
-        _winreg.CloseKey(key)
-    except Exception as e:
-        logger.error("设置自动启动失败: %s", e)
+    except OSError as e:
+        logger.error("开机自启设置失败: %s", e, exc_info=True)
+        raise ServiceError("开机自启设置失败", status_code=501)
+    finally:
+        if key is not None:
+            _winreg.CloseKey(key)
 
 
 @router.get("/autostart")
-def get_autostart() -> Dict:
-    return {"enabled": _get_autostart()}
+def  get_autostart() -> Dict:
+    """
+    读取开机自启状态与支持性
+
+    :return Dict: 自启状态与支持性标志
+    """
+    return {"enabled": _get_autostart(), "supported": _autostart_supported()}
 
 
 class AutostartRequest(BaseModel):
@@ -240,6 +269,13 @@ class AutostartRequest(BaseModel):
 
 
 @router.post("/autostart")
-def set_autostart(req: AutostartRequest) -> Dict:
+def  set_autostart(req: AutostartRequest) -> Dict:
+    """
+    设置开机自启，不支持的环境返回 501
+
+    :param req (AutostartRequest): 启用开关
+
+    :return Dict: 含 supported 的自启状态
+    """
     _set_autostart(req.enabled)
-    return {"enabled": _get_autostart()}
+    return {"enabled": _get_autostart(), "supported": _autostart_supported()}
