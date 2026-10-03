@@ -121,11 +121,29 @@ class Database:
 
 
     def batch_add_files(self, files: List[Dict[str, Any]]):
+        """
+        批量写入或更新文件记录
+
+        使用 UPSERT 而非 INSERT OR REPLACE，重扫已有文件时保留
+        created_at 等历史字段，仅刷新元数据并重新置为 active
+
+        :param files (List): 文件记录字典列表
+        """
         with self.conn:
             self.conn.executemany(
-                """INSERT OR REPLACE INTO files
-                   (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id)
-                   VALUES (:pickcode, :file_name, :file_size, :file_type, :pan_path, :local_strm_path, :sha1, :parent_id)""",
+                """INSERT INTO files
+                   (pickcode, file_name, file_size, file_type, pan_path, local_strm_path, sha1, parent_id, status)
+                   VALUES (:pickcode, :file_name, :file_size, :file_type, :pan_path, :local_strm_path, :sha1, :parent_id, 'active')
+                   ON CONFLICT(pickcode) DO UPDATE SET
+                       file_name=excluded.file_name,
+                       file_size=excluded.file_size,
+                       file_type=excluded.file_type,
+                       pan_path=excluded.pan_path,
+                       local_strm_path=excluded.local_strm_path,
+                       sha1=excluded.sha1,
+                       parent_id=excluded.parent_id,
+                       status='active',
+                       updated_at=datetime('now','localtime')""",
                 files,
             )
 

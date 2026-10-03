@@ -255,6 +255,8 @@ def reset_sync_baseline() -> Dict[str, Any]:
 
 @router.get("/strm/list")
 def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
+    page = max(1, page)
+    page_size = min(500, max(1, page_size))
     offset = (page - 1) * page_size
     cursor = db.conn.execute(
         "SELECT * FROM files WHERE status='active' ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -296,8 +298,12 @@ def checkin_save_config(data: dict) -> Dict:
 # ── 二维码登录 ──
 
 
+QRCODE_APPS = frozenset({"alipaymini", "wechatmini"})
+
+
 @router.get("/qrcode")
 def get_qrcode(app: str = "alipaymini") -> Dict:
+    app = app if app in QRCODE_APPS else "alipaymini"
     client = get_client()
     try:
         result = client.get_qrcode(app)

@@ -165,9 +165,29 @@ class CheckinScheduler:
             logger.error("115 签到调度异常: %s", e, exc_info=True)
 
     def manual_checkin(self) -> Tuple[bool, str]:
+        """
+        手动执行一次签到，成功后回写调度状态避免同日重复自动签到
+
+        :return Tuple: (是否成功, 结果描述)
+        """
         if not self._client:
             return False, "客户端未初始化"
-        return run_p115_checkin_once(self._client)
+        ok, detail = run_p115_checkin_once(self._client)
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone(timedelta(hours=8)))
+        if ok:
+            tomorrow_d = (now + timedelta(days=1)).date()
+            from config_manager import config_manager
+
+            cfg = config_manager.get().get("checkin", {})
+            self._save_state_fields({
+                "last_done_date": now.strftime("%Y-%m-%d"),
+                "last_detail": detail,
+                "next_run_ts": self._random_epoch(tomorrow_d, cfg),
+            })
+        else:
+            self._save_state_fields({"last_detail": detail})
+        return ok, detail
 
     def get_status(self) -> Dict:
         from config_manager import config_manager
