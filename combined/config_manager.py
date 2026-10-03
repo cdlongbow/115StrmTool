@@ -6,8 +6,8 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from threading import Lock
-from typing import Any, Dict, List, Tuple
+from threading import RLock
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -163,7 +163,7 @@ DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump(by_alias=True)
 
 class ConfigManager:
     def __init__(self):
-        self._lock = Lock()
+        self._lock = RLock()
         self._config: Dict[str, Any] = {}
         self.load()
 
@@ -206,20 +206,27 @@ class ConfigManager:
             return self._deep_copy(self._config)
 
     def _write(self) -> bool:
+        tmp_path: Optional[Path] = None
         try:
-            config_to_write = self._deep_copy(self._config)
-            cookie = config_to_write.get("p115", {}).get("cookie", "")
-            if cookie:
-                config_to_write["p115"]["cookie"] = _encrypt_cookie(cookie)
-            # 原子写：先写临时文件再替换，避免写一半崩溃产生损坏的配置
-            tmp_path = CONFIG_FILE.with_suffix(".json.tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(config_to_write, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, CONFIG_FILE)
+            with self._lock:
+                config_to_write = self._deep_copy(self._config)
+                cookie = config_to_write.get("p115", {}).get("cookie", "")
+                if cookie:
+                    config_to_write["p115"]["cookie"] = _encrypt_cookie(cookie)
+                # 原子写：进程唯一临时文件 + 替换目标；整体持锁防止并发写交叉
+                tmp_path = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{os.getpid()}.tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(config_to_write, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, CONFIG_FILE)
             logger.info("配置已保存: %s", CONFIG_FILE.resolve())
             return True
         except OSError as e:
             logger.error("配置保存失败: %s", e)
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return False
 
     def parse_pin_rules(self, raw: str) -> List[Tuple[str, str]]:
