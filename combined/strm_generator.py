@@ -279,12 +279,9 @@ class StrmGenerator:
                             pickcode = attr.get("pickcode", "")
                             pan_full_path = attr.get("path", "")
 
-                            if self._auto_download_mediainfo and ext in self._download_mediaext:
-                                local_file_path = self._to_local_path(
-                                    pan_full_path, pan_path, local_path
-                                )
-                                if local_file_path is not None and not local_file_path.exists():
-                                    self._download_aux_file(pickcode, name, local_file_path)
+                            self._try_download_aux(
+                                ext, pickcode, name, pan_full_path, pan_path, local_path
+                            )
 
                             if ext in self._rmt_mediaext:
                                 if not pickcode:
@@ -446,12 +443,9 @@ class StrmGenerator:
                             pickcode = attr.get("pickcode", "")
                             pan_full_path = attr.get("path", "")
 
-                            if self._auto_download_mediainfo and ext in self._download_mediaext:
-                                local_file_path = self._to_local_path(
-                                    pan_full_path, pan_path, local_path
-                                )
-                                if local_file_path is not None and not local_file_path.exists():
-                                    self._download_aux_file(pickcode, name, local_file_path)
+                            self._try_download_aux(
+                                ext, pickcode, name, pan_full_path, pan_path, local_path
+                            )
 
                             if ext not in self._rmt_mediaext:
                                 continue
@@ -630,23 +624,69 @@ class StrmGenerator:
         rel_path = pan_full_path[len(base_pan_path):].lstrip("/")
         return sanitize_path_parts(Path(local_strm_dir) / rel_path)
 
+    def _try_download_aux(
+        self,
+        ext: str,
+        pickcode: str,
+        name: str,
+        pan_full_path: str,
+        base_pan_path: str,
+        local_strm_dir: str,
+    ) -> None:
+        """
+        按扩展名与开关判定并触发附属文件下载
+
+        :param ext (str): 文件扩展名（含点，小写）
+        :param pickcode (str): 文件 pickcode
+        :param name (str): 文件名
+        :param pan_full_path (str): 网盘完整路径
+        :param base_pan_path (str): 同步根目录
+        :param local_strm_dir (str): 本地映射目录
+        """
+        if not (self._auto_download_mediainfo and ext in self._download_mediaext):
+            return
+        local_file_path = self._to_local_path(pan_full_path, base_pan_path, local_strm_dir)
+        if local_file_path is not None and not local_file_path.exists():
+            self._download_aux_file(pickcode, name, local_file_path)
+
     def _download_aux_file(self, pickcode: str, name: str, local_file_path: Path) -> None:
         """
-        下载媒体附属文件（nfo、海报等）到本地 STRM 目录
+        下载媒体附属文件（字幕、歌词等）到本地 STRM 目录
+
+        SDK 的 download_url 返回含 URL 字段的原始响应，先提取直链再流式下载，
+        先写 .part 临时文件成功后原子替换，避免中断留下半截文件
 
         :param pickcode (str): 文件 pickcode
         :param name (str): 原始文件名，用于日志
         :param local_file_path (Path): 本地保存路径
         """
+        result = self._client.download_url(pickcode)
+        if isinstance(result, dict):
+            file_url = result.get("url") or result.get("file_url")
+        elif isinstance(result, str):
+            file_url = result
+        else:
+            file_url = None
+        if not file_url:
+            logger.warning("附属文件无下载地址，跳过: %s", name)
+            return
         local_file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = local_file_path.with_name(local_file_path.name + ".part")
         try:
-            file_url = self._client.download_url(pickcode)
-            if file_url:
-                import httpx
-                file_resp = httpx.get(file_url, follow_redirects=True, timeout=30)
-                local_file_path.write_bytes(file_resp.content)
-                logger.info("已下载附属文件: %s", name)
+            import httpx
+
+            with httpx.stream("GET", file_url, follow_redirects=True, timeout=30) as resp:
+                resp.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_bytes():
+                        f.write(chunk)
+            tmp_path.replace(local_file_path)
+            logger.info("已下载附属文件: %s", name)
         except Exception as e:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             logger.warning("下载附属文件失败 %s: %s", name, e)
 
     def _migrate_strm_file(self, old_entry: Dict[str, str], new_strm_path: Path):
