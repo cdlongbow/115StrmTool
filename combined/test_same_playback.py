@@ -32,7 +32,7 @@ def _build_service(same_playback):
             same_playback=same_playback,
             same_playback_dir="/多端播放",
         )
-    svc._copy_dir_pid = 123
+    svc._copy_dir_pids["/多端播放"] = 123
     return svc
 
 
@@ -106,10 +106,10 @@ def test_disabled_same_playback_never_copies():
 
 def test_copy_uses_stable_dir_pid():
     svc = _build_service(True)
-    svc._copy_dir_pid = None
+    svc._copy_dir_pids = {}
     svc._client.ensure_folder.return_value = 777
     _, r2 = _request_seq(svc, [UA_FIRST, UA_SECOND])
     assert r2.status_code == 302
     pid = svc._client.copy_pickcode.call_args.args[1]
     assert pid == 777
-    assert svc._copy_dir_pid == 777, "目录 ID 应缓存复用"
+    assert svc._copy_dir_pids["/多端播放"] == 777, "目录 ID 应按目录缓存复用"

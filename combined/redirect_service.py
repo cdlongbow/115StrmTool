@@ -1,7 +1,7 @@
 from hashlib import sha256
 from json import dumps as json_dumps
 from time import time
-from typing import Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
 import asyncio
@@ -32,7 +32,8 @@ class RedirectService:
         self._key_lock = AsyncKeyLock()
         self._same_playback_override = same_playback
         self._same_playback_dir_override = same_playback_dir
-        self._copy_dir_pid: Optional[int] = None
+        self._copy_dir_pids: Dict[str, int] = {}
+        self._pending_cleanup: Set[str] = set()
 
     def _get_same_playback(self) -> Tuple[bool, str]:
         """
@@ -53,17 +54,18 @@ class RedirectService:
 
     async def _resolve_copy_dir_pid(self, copy_dir: str) -> Optional[int]:
         """
-        解析副本目录 ID，首次调用时创建目录并缓存
+        解析副本目录 ID，按目录路径分别缓存，目录配置切换后互不影响
 
         :param copy_dir (str): 副本目录网盘路径
 
         :return int: 目录 ID，失败返回 None
         """
-        if self._copy_dir_pid is not None:
-            return self._copy_dir_pid
+        cached = self._copy_dir_pids.get(copy_dir)
+        if cached is not None:
+            return cached
         pid = await asyncio.to_thread(self._client.ensure_folder, copy_dir)
         if pid:
-            self._copy_dir_pid = pid
+            self._copy_dir_pids[copy_dir] = pid
         return pid
 
     async def _create_copy(self, pickcode: str, copy_dir: str) -> Optional[str]:
@@ -79,22 +81,37 @@ class RedirectService:
         if not pid:
             logger.warning("【302跳转服务】无法解析多端播放目录: %s", copy_dir)
             return None
-        return await asyncio.to_thread(self._client.copy_pickcode, pickcode, pid)
+        copied = await asyncio.to_thread(self._client.copy_pickcode, pickcode, pid)
+        if copied == pickcode:
+            logger.warning(
+                "【302跳转服务】复制返回了源文件 pickcode，按失败处理避免误删原文件: pickcode=%s",
+                pickcode,
+            )
+            return None
+        return copied
 
     def _schedule_copy_cleanup(self, pickcode: str) -> None:
         """
-        延迟清理多端播放副本，避免长期占用网盘空间
+        延迟清理多端播放副本，避免长期占用网盘空间；同一副本在清理完成前只调度一次
 
         :param pickcode (str): 副本 pickcode
         """
+        refs = self._pending_cleanup
+        if pickcode in refs:
+            return
+        refs.add(pickcode)
 
         async def _cleanup():
-            await asyncio.sleep(COPY_CLEANUP_DELAY)
-            await asyncio.to_thread(self._client.delete_file, pickcode)
+            try:
+                await asyncio.sleep(COPY_CLEANUP_DELAY)
+                await asyncio.to_thread(self._client.delete_file, pickcode)
+            finally:
+                refs.discard(pickcode)
 
         try:
             asyncio.create_task(_cleanup())
         except RuntimeError:
+            refs.discard(pickcode)
             logger.warning("【302跳转服务】无法调度副本清理: %s", pickcode)
 
     def create_app(self) -> FastAPI:
@@ -227,6 +244,7 @@ class RedirectService:
     def _build_302(self, url: str, pickcode: str, file_name: str = "") -> Response:
         if not file_name:
             file_name = pickcode
+        file_name = file_name.replace('"', "").replace("\r", "").replace("\n", "")
         try:
             file_name.encode("ascii")
             content_disposition = f'attachment; filename="{file_name}"'
