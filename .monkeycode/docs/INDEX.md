@@ -93,6 +93,7 @@ pip install -r combined/requirements.txt
 | `combined/proxy_app.py` | 反向代理核心 |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
 | `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试） |
-| `.github/workflows/release.yml` | CI/CD 发布工作流（测试 → 打包 → Release） |
+| `.github/workflows/release.yml` | CI/CD 发布工作流（版本一致性校验 → 测试 → 打包 → Release） |
 | `combined/requirements.txt` | 运行时依赖 |
-| `combined/wheels/` | PyPI 缺失依赖的离线 wheel 源（45 个） |
+| `combined/wheels/` | 发版构建锁包快照（45 个，含平台专用 wheel，勿整目录安装） |
+| `combined/conftest.py` | 测试共享替身工具（sys.modules 重量级依赖集中定义） |
