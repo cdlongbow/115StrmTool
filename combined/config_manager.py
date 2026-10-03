@@ -43,9 +43,6 @@ def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
-# ── Pydantic 配置模型 ──
-
-
 class EmbyConfig(BaseModel):
     enabled: bool = False
     emby_host: str = "http://192.168.2.100:8096"

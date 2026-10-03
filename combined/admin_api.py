@@ -23,9 +23,6 @@ _emby_status = {"running": False}
 _restart_p115_callback: Callable = None
 
 
-# ── 全局配置 ──
-
-
 @router.get("/config")
 def get_config() -> Dict[str, Any]:
     return mask_config(config_manager.get())
@@ -68,9 +65,6 @@ def set_emby_status(running: bool):
     _emby_status["running"] = running
 
 
-# ── Emby 配置 ──
-
-
 class EmbyConfigRequest(BaseModel):
     enabled: Optional[bool] = None
     emby_host: Optional[str] = None
@@ -103,9 +97,6 @@ def restart_emby() -> Dict:
         return {"status": "ok", "message": "Emby 代理已重启"}
     return {"status": "error", "message": "重启回调未注册"}
 
-
-# ── P115 状态 ──
-
 _p115_client_ref = {"instance": None}
 _p115_status = {"running": False}
 
@@ -132,9 +123,6 @@ def get_p115_status() -> Dict[str, Any]:
     return result
 
 
-# ── 统一状态 ──
-
-
 @router.get("/status")
 def get_combined_status() -> Dict[str, Any]:
     config = config_manager.get()
@@ -142,9 +130,6 @@ def get_combined_status() -> Dict[str, Any]:
         "emby": {"running": _emby_status["running"], "enabled": config.get("emby", {}).get("enabled", False)},
         "p115": {"running": _p115_status["running"], "enabled": config.get("p115", {}).get("enabled", False)},
     }
-
-
-# ── 日志 ──
 
 
 @router.get("/logs")
@@ -185,9 +170,6 @@ def clear_logs() -> Dict:
         return {"status": "ok", "message": "日志已清空"}
     except OSError as e:
         raise ServiceError(f"清空日志失败: {e}")
-
-
-# ── 系统自动启动 ──
 
 
 if sys.platform == "win32":

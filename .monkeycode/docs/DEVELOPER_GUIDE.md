@@ -80,6 +80,22 @@ python build_exe.py
 
 配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。
 
+### 管理访问令牌
+
+首次启动时程序自动生成随机管理令牌并打印在控制台日志：
+
+```
+管理界面访问令牌: xxxxxxxxxxxxxxxx
+```
+
+- 所有 `/api` 与 `/admin/api` 接口都要求请求头 `X-Admin-Token` 与令牌一致，否则返回 401。
+- 管理页面首次访问会弹窗要求粘贴一次令牌，之后浏览器 localStorage 自动携带。
+- 托盘"打开管理界面"会以 `/?token=...` 形式自动注入，无需手动输入。
+- 令牌存放在 `config.json` 的 `admin_token` 字段（管理界面回显中掩码显示）。测试或脚本里需要带令牌调用接口时，用 `curl -H "X-Admin-Token: $(python3 -c "import json;print(json.load(open('combined/config.json'))['admin_token'])")" ...` 读取。
+- 若删除该字段并重启，会重新生成新令牌。
+
+
+
 ## 开发工作流
 
 ### 代码质量工具
@@ -180,3 +196,25 @@ Co-authored-by: <AI Name> <email>
 - 避免 bare `except:`
 - 网络操作设置超时
 - 关键 API 调用包装在 try/except 中并记录详细上下文
+
+## 前端调试与手工测试
+
+### fetch / 轮询 helper 用法
+
+`combined/web/index.html` 内定义了三个全局 helper，新增页面逻辑必须使用它们，不再直接调 `fetch`/`setInterval`：
+
+- `apiFetch(url, opts)`：沿用 bootstrap 注入的 `X-Admin-Token` 请求头；HTTP 非 2xx 时抛出带 `status` 与响应 `detail` 的 Error，调用方 `try/catch` 或 `.catch` 即可统一报错。
+- `apiJson(url, opts)`：`apiFetch` + `r.json()` 组合，直接得到 JSON 数据。
+- `startPolling(poll, interval, onData)`：递归定时器代替 `setInterval`。`poll` 为零参 async 函数（返回 Promise 数据）；页面切到后台自动挂起；连续失败按 2 的幂退避（上限 30 秒），连续失败 10 次自动停止。返回对象含 `stop()`；在 `onData(data, handle)` 内可调用 `handle.stop()` 终止。`stopPolling(handle)` 是"停止并置空"的便捷封装。
+
+使用要点：手工调用一次性 `startPolling` 的地方保存返回句柄（如 `_syncProgressTimer`、`_qrcodeTimer`），重入场景先 `stopPolling` 再启动，防止定时器堆叠。
+
+### 浏览器手工测试路径
+
+代码层由 ruff + pytest + `node --check`（各 script 块语法）把关，涉及管理面板交互的改动建议按下述路径点一遍：
+
+1. 启动 `python combined/main.py --no-tray`，从控制台日志复制令牌，浏览器打开 `http://127.0.0.1:8100/`，弹窗粘贴令牌。
+2. 概览页两张状态卡在无需操作时应每 10 秒保持刷新；断网/杀进程后页面不崩溃，恢复后数字重新变化。
+3. P115 配置页点"扫码登录"，获取二维码后直接关闭弹窗，确认没有后台持续轮询（DevTools Network 停止刷屏）。
+4. Emby 配置页故意填错服务地址保存再点保存+重启组合，确认失败提示出现且不再触发重启调用。
+5. 同步页启动全量同步观察进度条秒级刷新，完成后 5 秒隐藏。

@@ -30,9 +30,6 @@ def get_client() -> P115ClientWrapper:
     return _client
 
 
-# ── 目录选择与状态 ──
-
-
 @router.get("/select-directory")
 async def select_directory() -> Dict:
     try:
@@ -150,7 +147,6 @@ def get_status() -> Dict[str, Any]:
     result = build_p115_status(_client)
     result["config"] = mask_config(config)
     return result
-# ── 浏览目录 ──
 
 
 @router.get("/browse")
@@ -193,9 +189,6 @@ def browse_directory(pid: str = "0", path: str = ""):
     except Exception as e:
         logger.error("浏览目录失败 pid=%s: %s", pid, e, exc_info=True)
         raise ServiceError(f"浏览目录失败: {e}")
-
-
-# ── 同步 ──
 
 
 def _launch_sync(sync_type: str) -> Dict[str, Any]:
@@ -288,9 +281,6 @@ def reset_sync_baseline() -> Dict[str, Any]:
     return {"success": True}
 
 
-# ── STRM 管理 ──
-
-
 @router.get("/strm/list")
 def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
     page = max(1, page)
@@ -308,9 +298,6 @@ def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
 @router.get("/strm/count")
 def count_strm_files() -> Dict:
     return {"total": db.count_active_files()}
-
-
-# ── 签到 ──
 
 
 @router.get("/checkin/status")
@@ -331,9 +318,6 @@ def checkin_save_config(data: dict) -> Dict:
         "time_range": str(data.get("time_range", "06:00-09:00")),
     }})
     return {"status": "ok", "message": "签到配置已保存"}
-
-
-# ── 二维码登录 ──
 
 
 QRCODE_APPS = frozenset({"alipaymini", "wechatmini"})

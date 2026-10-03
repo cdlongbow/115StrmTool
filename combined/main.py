@@ -131,9 +131,6 @@ def _shutdown_for_tray_exit():
     os._exit(0)
 
 
-# ── Emby 代理 ──
-
-
 def _start_emby():
     global EMBY_SERVER, EMBY_THREAD
     config = config_manager.get().get("emby", {})
@@ -180,9 +177,6 @@ def _restart_emby():
     _stop_emby()
     config_manager.load()
     _start_emby()
-
-
-# ── P115 STRM ──
 
 
 def _start_p115():
@@ -239,9 +233,6 @@ def _restart_p115():
     _stop_p115_redirect()
     config_manager.load()
     _start_p115()
-
-
-# ── 管理服务 ──
 
 
 def create_admin_app() -> FastAPI:

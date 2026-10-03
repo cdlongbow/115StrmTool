@@ -623,7 +623,7 @@ def create_app(
 
         :param request: 当前请求
         :param item_id: 媒体项 ID
-        :param name: 路径中的名称（未使用，由路由匹配）
+        :param name: 路径末段名称，用于识别非媒体辅助请求
         :return: 重定向、流式响应或错误 JSON
         """
         if name.lower() in NON_MEDIA_NAMES:
