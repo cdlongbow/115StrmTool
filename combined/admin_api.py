@@ -81,12 +81,12 @@ class EmbyConfigRequest(BaseModel):
 
 
 @router.get("/emby/config")
-async def get_emby_config() -> Dict[str, Any]:
+def get_emby_config() -> Dict[str, Any]:
     return config_manager.get().get("emby", {})
 
 
 @router.post("/emby/config")
-async def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
+def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
     updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
     if updates:
         config_manager.update({"emby": updates})
@@ -95,7 +95,7 @@ async def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
 
 
 @router.post("/emby/restart")
-async def restart_emby() -> Dict:
+def restart_emby() -> Dict:
     if _restart_emby_callback:
         _restart_emby_callback()
         return {"status": "ok", "message": "Emby 代理已重启"}
@@ -144,7 +144,7 @@ def get_p115_status() -> Dict[str, Any]:
 
 
 @router.get("/status")
-async def get_combined_status() -> Dict[str, Any]:
+def get_combined_status() -> Dict[str, Any]:
     config = config_manager.get()
     return {
         "emby": {"running": _emby_status["running"], "enabled": config.get("emby", {}).get("enabled", False)},
@@ -156,7 +156,7 @@ async def get_combined_status() -> Dict[str, Any]:
 
 
 @router.get("/logs")
-async def get_logs(lines: int = 200) -> Dict:
+def get_logs(lines: int = 200) -> Dict:
     log_path = LOG_DIR / "combined.log"
     if not log_path.exists():
         return {"logs": []}
@@ -169,7 +169,7 @@ async def get_logs(lines: int = 200) -> Dict:
 
 
 @router.delete("/logs")
-async def clear_logs() -> Dict:
+def clear_logs() -> Dict:
     """
     清空日志文件
     """
@@ -239,7 +239,7 @@ def _set_autostart(enable: bool):
 
 
 @router.get("/autostart")
-async def get_autostart() -> Dict:
+def get_autostart() -> Dict:
     return {"enabled": _get_autostart()}
 
 
@@ -248,6 +248,6 @@ class AutostartRequest(BaseModel):
 
 
 @router.post("/autostart")
-async def set_autostart(req: AutostartRequest) -> Dict:
+def set_autostart(req: AutostartRequest) -> Dict:
     _set_autostart(req.enabled)
     return {"enabled": _get_autostart()}

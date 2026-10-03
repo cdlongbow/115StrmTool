@@ -208,24 +208,24 @@ def _launch_sync(sync_type: str) -> Dict[str, Any]:
 
 
 @router.get("/sync/progress")
-async def get_sync_progress() -> Dict[str, Any]:
+def get_sync_progress() -> Dict[str, Any]:
     from strm_generator import get_strm_generator
     gen = get_strm_generator(_client, "")
     return gen.get_progress()
 
 
 @router.post("/sync/start")
-async def start_full_sync() -> Dict[str, Any]:
+def start_full_sync() -> Dict[str, Any]:
     return _launch_sync("full")
 
 
 @router.post("/sync/incremental")
-async def start_incremental_sync() -> Dict[str, Any]:
+def start_incremental_sync() -> Dict[str, Any]:
     return _launch_sync("incremental")
 
 
 @router.post("/sync/cancel")
-async def cancel_sync() -> Dict[str, Any]:
+def cancel_sync() -> Dict[str, Any]:
     from strm_generator import get_strm_generator
     gen = get_strm_generator(_client)
     gen.cancel()
@@ -233,18 +233,18 @@ async def cancel_sync() -> Dict[str, Any]:
 
 
 @router.get("/sync/history")
-async def get_sync_history(limit: int = 20) -> List[Dict]:
+def get_sync_history(limit: int = 20) -> List[Dict]:
     return db.get_sync_history(limit)
 
 
 @router.post("/sync/history/clear")
-async def clear_sync_history() -> Dict[str, Any]:
+def clear_sync_history() -> Dict[str, Any]:
     db.clear_sync_history()
     return {"success": True}
 
 
 @router.post("/sync/reset-baseline")
-async def reset_sync_baseline() -> Dict[str, Any]:
+def reset_sync_baseline() -> Dict[str, Any]:
     db.clear_all_files()
     db.clear_sync_history()
     return {"success": True}
@@ -254,7 +254,7 @@ async def reset_sync_baseline() -> Dict[str, Any]:
 
 
 @router.get("/strm/list")
-async def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
+def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
     offset = (page - 1) * page_size
     cursor = db.conn.execute(
         "SELECT * FROM files WHERE status='active' ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -266,7 +266,7 @@ async def list_strm_files(page: int = 1, page_size: int = 50) -> Dict:
 
 
 @router.get("/strm/count")
-async def count_strm_files() -> Dict:
+def count_strm_files() -> Dict:
     return {"total": db.count_active_files()}
 
 
@@ -274,7 +274,7 @@ async def count_strm_files() -> Dict:
 
 
 @router.get("/checkin/status")
-async def checkin_status() -> Dict:
+def checkin_status() -> Dict:
     return checkin_scheduler.get_status()
 
 
@@ -285,7 +285,7 @@ def checkin_manual_exec() -> Dict:
 
 
 @router.post("/checkin/config")
-async def checkin_save_config(data: dict) -> Dict:
+def checkin_save_config(data: dict) -> Dict:
     config_manager.update({"checkin": {
         "enabled": bool(data.get("enabled", False)),
         "time_range": str(data.get("time_range", "06:00-09:00")),
