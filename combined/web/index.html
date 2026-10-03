@@ -111,6 +111,65 @@ tr:hover{background:#f5f5f5}
   };
 })();
 </script>
+<script>
+// central fetch and polling helpers
+function apiFetch(url, opts) {
+  return fetch(url, opts || {}).then(function (r) {
+    if (r.ok) { return r; }
+    return r.text().then(function (txt) {
+      var msg = "HTTP " + r.status;
+      try { var d = JSON.parse(txt); if (d && d.detail) { msg += ": " + d.detail; } } catch (e) {}
+      var err = new Error(msg);
+      err.status = r.status;
+      throw err;
+    });
+  });
+}
+function apiJson(url, opts) {
+  return apiFetch(url, opts).then(function (r) { return r.json(); });
+}
+function startPolling(poll, interval, onData) {
+  var stopped = false, timer = null, fails = 0, running = false;
+  function schedule(delay) {
+    timer = setTimeout(function () { timer = null; tick(); }, delay);
+  }
+  async function tick() {
+    if (stopped || running) { return; }
+    running = true;
+    try {
+      if (!document.hidden) {
+        try {
+          var data = await poll();
+          fails = 0;
+          if (onData) { onData(data, handle); }
+        } catch (e) {
+          fails += 1;
+          if (fails >= 10) { handle.stop(); return; }
+        }
+      }
+      if (!stopped) { schedule(fails ? Math.min(interval * Math.pow(2, Math.min(fails, 5)), 30000) : interval); }
+    } finally { running = false; }
+  }
+  function onVis() {
+    if (!document.hidden && !stopped && !running) { tick(); }
+  }
+  var handle = {
+    stop: function () {
+      stopped = true;
+      if (timer) { clearTimeout(timer); }
+      timer = null;
+      document.removeEventListener("visibilitychange", onVis);
+    }
+  };
+  document.addEventListener("visibilitychange", onVis);
+  tick();
+  return handle;
+}
+function stopPolling(h) {
+  if (h && h.stop) { h.stop(); }
+  return null;
+}
+</script>
 
 <div class="nav">
   <h1>115网盘STRM生成与302工具</h1>
@@ -396,30 +455,31 @@ document.querySelectorAll('.nav a').forEach(a => {
 });
 
 function loadConfig() {
-  fetch('/admin/api/config').then(r => r.json()).then(config => {
+  apiFetch('/admin/api/config').then(r => r.json()).then(config => {
     currentConfig = config;
     loadEmbyConfig(config.emby || {});
     loadP115Config(config.p115 || {});
     loadCheckinConfig(config.checkin || {});
-    updateDashboard();
+    updateDashboard().catch(() => {});
   }).catch(err => showToast('加载失败: ' + err.message, 'error'));
-  fetch('/admin/api/autostart').then(r => r.json()).then(d => {
+  apiFetch('/admin/api/autostart').then(r => r.json()).then(d => {
     document.getElementById('p115_autostart').checked = d.enabled;
   }).catch(() => {});
 }
 
 function updateDashboard() {
-  fetch('/admin/api/status').then(r => r.json()).then(s => {
-    document.getElementById('svcEmby').textContent = s.emby.running ? '运行中' : '已停止';
-    document.getElementById('svcEmbySub').textContent = s.emby.enabled ? '(已启用)' : '(未启用)';
-    document.getElementById('svcP115').textContent = s.p115.running ? '运行中' : '已停止';
-    document.getElementById('svcP115Sub').textContent = s.p115.enabled ? '(已启用)' : '(未启用)';
-  }).catch(() => {});
-  fetch('/admin/api/p115/status').then(r => r.json()).then(s => {
-    const n = (s.stats && s.stats.total_files) || 0;
-    document.getElementById('svcStrmFiles').textContent = n;
-    document.getElementById('svcStrmSub').textContent = s.client_ready ? '115 已连接' : '未连接 115';
-  }).catch(() => {});
+  return Promise.all([
+    apiJson('/admin/api/status').then(s => {
+      document.getElementById('svcEmby').textContent = s.emby.running ? '运行中' : '已停止';
+      document.getElementById('svcEmbySub').textContent = s.emby.enabled ? '(已启用)' : '(未启用)';
+      document.getElementById('svcP115').textContent = s.p115.running ? '运行中' : '已停止';
+      document.getElementById('svcP115Sub').textContent = s.p115.enabled ? '(已启用)' : '(未启用)';
+    }),
+    apiJson('/admin/api/p115/status').then(s => {
+      document.getElementById('svcStrmFiles').textContent = n;
+      document.getElementById('svcStrmSub').textContent = s.client_ready ? '115 已连接' : '未连接 115';
+    }),
+  ]);
 }
 
 // ── Emby 配置 ──
@@ -441,22 +501,23 @@ async function saveEmbyConfig() {
     proxy_port: parseInt(document.getElementById('emby_proxy_port').value) || 8097,
     pin_rules: document.getElementById('emby_pin_rules').value,
     external_player_url: document.getElementById('emby_external_player_url').checked,
-    external_player_list: [],
     redirect_mode: document.getElementById('emby_redirect_mode').checked,
   };
   try {
-    const r = await fetch('/admin/api/emby/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});
-    if (!r.ok) throw new Error(await r.text());
+    const r = await apiFetch('/admin/api/emby/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});
     showToast('Emby 配置已保存', 'success');
-    updateDashboard();
-  } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+    updateDashboard().catch(() => {});
+    return true;
+  } catch(err) { showToast('保存失败: ' + err.message, 'error');  return false; }
 }
 
 async function restartEmby() {
-  await saveEmbyConfig();
+  if (!await saveEmbyConfig()) { return; }
   try {
-    await fetch('/admin/api/emby/restart', {method:'POST'});
-    showToast('Emby 代理已重启', 'success');
+    const r = await apiFetch('/admin/api/emby/restart', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (d && d.status === "error") { showToast((d.message ? d.message : '重启失败'), 'error'); }
+    else { showToast('Emby 代理已重启', 'success'); }
   } catch(err) { showToast('重启失败: ' + err.message, 'error'); }
 }
 
@@ -506,7 +567,7 @@ function collectPaths() {
 async function browseLocalPath(i) {
   let path = '';
   try {
-    const resp = await fetch('/api/select-directory');
+    const resp = await apiFetch('/api/select-directory');
     const data = await resp.json();
     path = data.path || '';
   } catch {}
@@ -536,7 +597,7 @@ async function loadBrowserDir(pid, displayPath) {
   const el = document.getElementById('browserList');
   el.innerHTML = '<p style="padding:16px;color:#999">加载中...</p>';
   try {
-    const r = await fetch(`/api/browse?pid=${pid}&path=${encodeURIComponent(displayPath)}`);
+    const r = await apiFetch(`/api/browse?pid=${pid}&path=${encodeURIComponent(displayPath)}`);
     const d = await r.json();
     document.getElementById('browserPath').textContent = d.path || '/';
     _browsePath = d.path || '/';
@@ -597,17 +658,17 @@ async function saveP115Config() {
     paths: collectPaths(),
   };
   try {
-    const r = await fetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p115:c})});
+    const r = await apiFetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p115:c})});
     if (!r.ok) throw new Error(await r.text());
     showToast('P115 配置已保存', 'success');
-    updateDashboard();
+    updateDashboard().catch(() => {});
   } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
 }
 
 async function saveAutostart() {
   const enabled = document.getElementById('p115_autostart').checked;
   try {
-    await fetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    await apiFetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
     showToast(enabled ? '已开启开机自启' : '已关闭开机自启', 'success');
   } catch(err) { showToast('设置失败: ' + err.message, 'error'); }
 }
@@ -619,33 +680,30 @@ let _qrcodeClientType = 'alipaymini';
 
 async function showQrcodeLogin() {
   document.getElementById('qrcodeModal').style.display = 'flex';
+  _qrcodeTimer = stopPolling(_qrcodeTimer);
   document.getElementById('qrcodeImage').innerHTML = '获取中...';
   document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
   _qrcodePayload = null;
   const app = document.getElementById('qrcodeAppType').value;
   _qrcodeClientType = app;
   try {
-    const r = await fetch(`/api/qrcode?app=${app}`);
+    const r = await apiFetch(`/api/qrcode?app=${app}`);
     const d = await r.json();
     if (!d.qrcode) { throw new Error('获取二维码失败'); }
     document.getElementById('qrcodeImage').innerHTML = `<img src="${d.qrcode}" style="width:200px;height:200px">`;
     document.getElementById('qrcodeStatus').textContent = '请使用 115 客户端扫描二维码';
     _qrcodePayload = d.payload;
-    _qrcodeTimer = setInterval(pollQrcode, 2000);
-  } catch(e) {
-    document.getElementById('qrcodeImage').innerHTML = '获取失败';
-    document.getElementById('qrcodeStatus').textContent = e.message;
-  }
-}
-
-async function pollQrcode() {
-  if (!_qrcodePayload) return;
-  try {
-    const body = {..._qrcodePayload, client_type: _qrcodeClientType};
-    const r = await fetch('/api/qrcode/check', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d = await r.json();
+    _qrcodeTimer = startPolling(
+      async () => {
+        if (!_qrcodePayload) { throw new Error("qrcode-payload-not-ready"); }
+        const body = {..._qrcodePayload, client_type: _qrcodeClientType};
+        const r = await apiFetch('/api/qrcode/check', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        return r.json();
+      },
+      2000,
+      (d, h) => {
     if (d.status === 'success' && d.cookie) {
-      clearInterval(_qrcodeTimer);
+      _qrcodeTimer = stopPolling(h);
       document.getElementById('p115_cookie').value = d.cookie;
       document.getElementById('qrcodeCookie').value = d.cookie;
       document.getElementById('qrcodeStatus').innerHTML = '登录成功! Cookie 已填入';
@@ -653,10 +711,15 @@ async function pollQrcode() {
     } else if (d.status === 'scanned') {
       document.getElementById('qrcodeStatus').textContent = '已扫码，请在手机上确认';
     } else if (d.status === 'expired') {
-      clearInterval(_qrcodeTimer);
+      _qrcodeTimer = stopPolling(h);
       document.getElementById('qrcodeStatus').textContent = '二维码已过期，请重新获取';
     }
-  } catch {}
+      }
+    );
+  } catch(e) {
+    document.getElementById('qrcodeImage').innerHTML = '获取失败';
+    document.getElementById('qrcodeStatus').textContent = e.message;
+  }
 }
 
 function copyQrcodeCookie() {
@@ -670,7 +733,7 @@ function copyQrcodeCookie() {
 }
 
 function closeQrcode() {
-  clearInterval(_qrcodeTimer);
+  _qrcodeTimer = stopPolling(_qrcodeTimer);
   document.getElementById('qrcodeModal').style.display = 'none';
 }
 
@@ -680,44 +743,44 @@ let _syncProgressTimer = null;
 function startSyncProgressPoll() {
   const el = document.getElementById('syncProgress');
   el.style.display = 'block';
-  if (_syncProgressTimer) clearInterval(_syncProgressTimer);
-  _syncProgressTimer = setInterval(async () => {
-    try {
-      const r = await fetch('/api/sync/progress');
-      const p = await r.json();
-      document.getElementById('syncProgressMsg').textContent = p.message || '';
-      document.getElementById('syncProgressCount').textContent =
+  _syncProgressTimer = stopPolling(_syncProgressTimer);
+  _syncProgressTimer = startPolling(
+    () => apiFetch('/api/sync/progress').then(r => r.json()),
+    1000,
+    async (p, h) => {
+        document.getElementById('syncProgressMsg').textContent = p.message || '';
+        document.getElementById('syncProgressCount').textContent =
         p.total > 0 ? p.current + ' / ' + p.total : p.current > 0 ? p.current : '';
-      const pct = p.total > 0 ? Math.min(100, Math.round(p.current / p.total * 100)) : 0;
-      document.getElementById('syncProgressBar').style.width = pct + '%';
-      if (p.phase === 'completed' || p.phase === 'error' || p.phase === 'cancelled') {
-        clearInterval(_syncProgressTimer);
-        _syncProgressTimer = null;
+        const pct = p.total > 0 ? Math.min(100, Math.round(p.current / p.total * 100)) : 0;
+        document.getElementById('syncProgressBar').style.width = pct + '%';
+        if (p.phase === 'completed' || p.phase === 'error' || p.phase === 'cancelled') {
+        _syncProgressTimer = stopPolling(h);
+        
         if (p.phase === 'completed') {
-          showToast(p.message || '同步完成', 'success');
-          updateDashboard();
-          loadSyncHistory();
+        showToast(p.message || '同步完成', 'success');
+        updateDashboard().catch(() => {});
+        loadSyncHistory();
         }
         if (p.phase === 'error') {
-          showToast(p.message || '同步异常', 'error');
+        showToast(p.message || '同步异常', 'error');
         }
         if (p.phase === 'cancelled') {
-          showToast('同步已取消', 'info');
+        showToast('同步已取消', 'info');
         }
         setTimeout(() => { el.style.display = 'none'; }, 5000);
+        }
       }
-    } catch(e) {}
-  }, 1000);
+  );
 }
 
 async function startFullSync() {
   startSyncProgressPoll();
   try {
-    const r = await fetch('/api/sync/start', {method:'POST'});
+    const r = await apiFetch('/api/sync/start', {method:'POST'});
     const d = await r.json();
     if (d.status === 'error') {
       showToast(d.message || '同步启动失败', 'error');
-      if (_syncProgressTimer) { clearInterval(_syncProgressTimer); _syncProgressTimer = null; }
+      _syncProgressTimer = stopPolling(_syncProgressTimer);
       document.getElementById('syncProgress').style.display = 'none';
     } else {
       showToast(d.message || '同步任务已启动', 'info');
@@ -727,11 +790,11 @@ async function startFullSync() {
 async function startIncrementalSync() {
   startSyncProgressPoll();
   try {
-    const r = await fetch('/api/sync/incremental', {method:'POST'});
+    const r = await apiFetch('/api/sync/incremental', {method:'POST'});
     const d = await r.json();
     if (d.status === 'error') {
       showToast(d.message || '同步启动失败', 'error');
-      if (_syncProgressTimer) { clearInterval(_syncProgressTimer); _syncProgressTimer = null; }
+      _syncProgressTimer = stopPolling(_syncProgressTimer);
       document.getElementById('syncProgress').style.display = 'none';
     } else {
       showToast(d.message || '增量同步任务已启动', 'info');
@@ -740,17 +803,17 @@ async function startIncrementalSync() {
 }
 async function cancelSync() {
   showToast('正在取消...', 'info');
-  try { await fetch('/api/sync/cancel', {method:'POST'}); } catch(e) {}
+  try { await apiFetch('/api/sync/cancel', {method:'POST'}); } catch(e) {}
 }
 async function resetSyncBaseline() {
   if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;
   if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步数据？')) return;
-  try { await fetch('/api/sync/reset-baseline', {method:'POST'}); loadSyncHistory(); updateDashboard(); showToast('同步数据已重置', 'success'); }
+  try { await apiFetch('/api/sync/reset-baseline', {method:'POST'}); loadSyncHistory(); updateDashboard().catch(() => {}); showToast('同步数据已重置', 'success'); }
   catch(e) { showToast('重置失败: ' + e.message, 'error'); }
 }
 async function loadSyncHistory() {
   try {
-    const r = await fetch('/api/sync/history');
+    const r = await apiFetch('/api/sync/history');
     const items = await r.json();
     const el = document.getElementById('syncHistory');
     if (!items.length) { el.innerHTML = '<p style="color:#999">暂无同步记录</p>'; return; }
@@ -765,7 +828,7 @@ async function loadSyncHistory() {
 async function clearSyncHistory() {
   if (!confirm('确定清空所有同步记录？此操作不可恢复。')) return;
   try {
-    await fetch('/api/sync/history/clear', {method:'POST'});
+    await apiFetch('/api/sync/history/clear', {method:'POST'});
     loadSyncHistory();
     showToast('同步记录已清空', 'success');
   } catch(e) { showToast('清空失败: ' + e.message, 'error'); }
@@ -779,7 +842,7 @@ async function listStrmFiles(page=1) {
     return;
   }
   try {
-    const r = await fetch(`/api/strm/list?page=${page}&page_size=20`);
+    const r = await apiFetch(`/api/strm/list?page=${page}&page_size=20`);
     const d = await r.json();
     document.getElementById('strmCount').textContent = '共 ' + d.total + ' 个文件';
     const tbl = document.getElementById('strmTable');
@@ -825,7 +888,7 @@ async function saveCheckinConfig() {
     time_range: document.getElementById('checkin_time_range').value.trim() || '06:00-09:00',
   };
   try {
-    const r = await fetch('/api/checkin/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    const r = await apiFetch('/api/checkin/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
     if (!r.ok) throw new Error(await r.text());
     showToast('签到配置已保存', 'success');
   } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
@@ -836,7 +899,7 @@ async function manualCheckin() {
   btn.disabled = true;
   btn.textContent = '签到中...';
   try {
-    const r = await fetch('/api/checkin/run', {method:'POST'});
+    const r = await apiFetch('/api/checkin/run', {method:'POST'});
     const d = await r.json();
     showToast(d.message, d.status === 'ok' ? 'success' : 'error');
     refreshCheckinStatus();
@@ -847,7 +910,7 @@ async function manualCheckin() {
 
 async function refreshCheckinStatus() {
   try {
-    const r = await fetch('/api/checkin/status');
+    const r = await apiFetch('/api/checkin/status');
     const s = await r.json();
     const stEl = document.getElementById('chkStatus');
     if (s.signed_today) {
@@ -871,7 +934,7 @@ async function refreshCheckinStatus() {
 
 async function refreshLogs() {
   try {
-    const r = await fetch('/admin/api/logs');
+    const r = await apiFetch('/admin/api/logs');
     const d = await r.json();
     document.getElementById('logBox').textContent = (d.logs||[]).join('\n') || '暂无日志';
   } catch(e) {
@@ -882,7 +945,7 @@ async function refreshLogs() {
 async function clearLogs() {
   if (!confirm('确定清空所有日志吗？')) return;
   try {
-    const r = await fetch('/admin/api/logs', { method: 'DELETE' });
+    const r = await apiFetch('/admin/api/logs', { method: 'DELETE' });
     const d = await r.json();
     showToast(d.message, 'success');
     document.getElementById('logBox').textContent = '暂无日志';
@@ -892,7 +955,7 @@ async function clearLogs() {
 }
 
 loadConfig();
-setInterval(updateDashboard, 10000);
+startPolling(updateDashboard, 10000);
 </script>
 </body>
 </html>
