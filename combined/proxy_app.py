@@ -23,6 +23,7 @@ from fastapi.responses import (
 from httpx import (
     AsyncClient,
     Limits,
+    Request as HttpxRequest,
     Response as HttpxResponse,
     Timeout,
     TimeoutException,
@@ -495,6 +496,23 @@ def create_app(
 
     _external_player_script = build_external_player_script(_player_keys)
 
+    async def _strip_credentials_cross_host(request: HttpxRequest) -> None:
+        """
+        httpx request hook：跟随重定向跨主机时剥离凭据头，
+        防止 Emby token / Cookie 随重定向链外发到第三方主机
+
+        :param request (httpx.Request): 本次将发出的请求（含每一跳）
+        """
+        origin_host = request.extensions.get("_origin_host")
+        current_host = request.url.host or ""
+        if origin_host is None:
+            request.extensions["_origin_host"] = current_host
+            return
+        if origin_host == current_host:
+            return
+        for header in ("authorization", "cookie", "x-emby-token", "x-emby-authorization"):
+            request.headers.pop(header, None)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """
@@ -504,7 +522,10 @@ def create_app(
         # 媒体流经此客户端长距转发，读超时须放开，否则 CDN 停顿即中断且仅有状态码可见
         media_timeout = Timeout(connect=10.0, read=None, write=None, pool=10.0)
         app.state.http_client_follow = AsyncClient(
-            follow_redirects=True, limits=limits, timeout=media_timeout
+            follow_redirects=True,
+            limits=limits,
+            timeout=media_timeout,
+            event_hooks={"request": [_strip_credentials_cross_host]},
         )
         app.state.http_client_no_follow = AsyncClient(
             follow_redirects=False, limits=limits, timeout=media_timeout
@@ -522,7 +543,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -871,7 +892,7 @@ def create_app(
                 status_code=502,
                 content={
                     "error": "Bad Gateway",
-                    "detail": f"System/Info 请求失败: {err_msg}",
+                    "detail": "请求失败",
                 },
             )
         if resp.status_code != 200:
@@ -998,7 +1019,7 @@ def create_app(
                 status_code=502,
                 content={
                     "error": "Bad Gateway",
-                    "detail": f"无法连接到 Emby 服务器: {emby_host}",
+                    "detail": "无法连接到媒体服务器",
                 },
             )
 
@@ -1125,7 +1146,7 @@ def create_app(
                 status_code=502,
                 content={
                     "error": "Bad Gateway",
-                    "detail": f"无法连接到 Emby 服务器: {emby_host}",
+                    "detail": "无法连接到媒体服务器",
                 },
             )
 
@@ -1199,7 +1220,7 @@ def create_app(
                 status_code=502,
                 content={
                     "error": "Bad Gateway",
-                    "detail": f"无法连接到 Emby 服务器: {emby_host}",
+                    "detail": "无法连接到媒体服务器",
                 },
             )
 
