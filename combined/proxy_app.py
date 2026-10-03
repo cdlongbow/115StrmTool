@@ -7,7 +7,7 @@ from asyncio import (
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
-from typing import Any, List, Tuple
+from typing import Any, Iterable, List, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
 from utils import AsyncKeyLock, AsyncTtlCache
@@ -204,6 +204,48 @@ def _strip_response_validators(headers: dict[str, str]) -> dict[str, str]:
         for key, value in headers.items()
         if key.lower() not in validators
     }
+
+
+RESPONSE_VALIDATOR_HEADERS = frozenset({"content-md5", "etag", "last-modified"})
+
+
+def _filter_response_headers(
+    resp: HttpxResponse, drop: Iterable[str] = ()
+) -> list[tuple[str, str]]:
+    """
+    生成透传给客户端的响应头列表，剔除 hop-by-hop 与附加排除项
+
+    使用二元组列表而非字典，保留 Set-Cookie 等重复同名头
+
+    :param resp (HttpxResponse): 上游响应
+    :param drop (Iterable): 额外的排除头名（小写）
+
+    :return List: (header 名, 值) 列表
+    """
+    excluded = HOP_BY_HOP_HEADERS | {name.lower() for name in drop}
+    return [
+        (k, v)
+        for k, v in resp.headers.multi_items()
+        if k.lower() not in excluded
+    ]
+
+
+def _with_raw_headers(response: Response, pairs: list[tuple[str, str]]) -> Response:
+    """
+    用 raw_headers 将（含重复同名头的）响应头列表应用到 Response
+
+    :param response (Response): 目标响应对象
+    :param pairs (List): (header 名, 值) 列表
+
+    :return Response: 同一响应对象，便于链式使用
+    """
+    raw = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in pairs]
+    lower_names = {k for k, _ in raw}
+    body = getattr(response, "body", None)
+    if b"content-length" not in lower_names and isinstance(body, bytes):
+        raw.append((b"content-length", str(len(body)).encode("latin-1")))
+    response.raw_headers = raw
+    return response
 
 
 def _may_return_emby_html_shell(path: str) -> bool:
@@ -941,12 +983,13 @@ def create_app(
                         body[key] = str(body[key]).replace(
                             str(origin_port), str(current_port)
                         )
-        excluded = HOP_BY_HOP_HEADERS | {"content-length", "content-encoding"}
-        resp_headers = {
-            k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded
-        }
-        resp_headers = _strip_response_validators(resp_headers)
-        return JSONResponse(status_code=200, content=body, headers=resp_headers)
+        pairs = _filter_response_headers(
+            resp,
+            drop=("content-length", "content-encoding") | RESPONSE_VALIDATOR_HEADERS,
+        )
+        return _with_raw_headers(
+            JSONResponse(status_code=200, content=body), pairs
+        )
 
     for _path in ("/emby/system/info", "/system/info"):
         app.api_route(
@@ -978,12 +1021,10 @@ def create_app(
             return Response(status_code=204, content=b"")
         client = request.app.state.http_client_follow
 
-        excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-
-        def _resp_headers_from_httpx(r: HttpxResponse) -> dict[str, str]:
-            return {
-                k: v for k, v in r.headers.multi_items() if k.lower() not in excluded
-            }
+        def _resp_headers_from_httpx(r: HttpxResponse) -> list[tuple[str, str]]:
+            return _filter_response_headers(
+                r, drop=("content-encoding", "content-length")
+            )
 
         if request.method == "HEAD":
             try:
@@ -999,10 +1040,9 @@ def create_app(
                     status_code=502,
                     content={"error": "Bad Gateway"},
                 )
-            return Response(
-                content=b"",
-                status_code=resp.status_code,
-                headers=_resp_headers_from_httpx(resp),
+            return _with_raw_headers(
+                Response(content=b"", status_code=resp.status_code),
+                _resp_headers_from_httpx(resp),
             )
 
         try:
@@ -1024,36 +1064,32 @@ def create_app(
             )
 
         if resp.status_code != 200:
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=_resp_headers_from_httpx(resp),
+            return _with_raw_headers(
+                Response(content=resp.content, status_code=resp.status_code),
+                _resp_headers_from_httpx(resp),
             )
 
         try:
             data = resp.json()
         except Exception:
             logger.warning("PlaybackInfo 响应非 JSON: %s", target_url, exc_info=True)
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=_resp_headers_from_httpx(resp),
+            return _with_raw_headers(
+                Response(content=resp.content, status_code=resp.status_code),
+                _resp_headers_from_httpx(resp),
             )
 
         if not isinstance(data, dict):
-            return JSONResponse(
-                content=data,
-                status_code=200,
-                headers=_resp_headers_from_httpx(resp),
+            return _with_raw_headers(
+                JSONResponse(content=data, status_code=200),
+                _resp_headers_from_httpx(resp),
             )
 
         is_strm = _media_sources_indicate_strm(data)
         is_pin = _media_sources_match_pin_rules(data, pin_rules)
         if not is_strm and not is_pin:
-            return JSONResponse(
-                content=data,
-                status_code=200,
-                headers=_resp_headers_from_httpx(resp),
+            return _with_raw_headers(
+                JSONResponse(content=data, status_code=200),
+                _resp_headers_from_httpx(resp),
             )
 
         _apply_force_direct_play_to_media_sources(data, item_id)
@@ -1098,10 +1134,13 @@ def create_app(
             reason,
             item_id,
         )
-        return JSONResponse(
-            content=data,
-            status_code=200,
-            headers=_strip_response_validators(_resp_headers_from_httpx(resp)),
+        return _with_raw_headers(
+            JSONResponse(content=data, status_code=200),
+            [
+                (k, v)
+                for k, v in _resp_headers_from_httpx(resp)
+                if k.lower() not in RESPONSE_VALIDATOR_HEADERS
+            ],
         )
 
     for _playback_path in (
@@ -1163,23 +1202,26 @@ def create_app(
                 out = injected.encode("utf-8")
                 logger.info("已在 HTML 注入脚本: path=%s", path)
 
-        excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-        resp_headers = {
-            k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded
-        }
+        pairs = _filter_response_headers(
+            resp, drop=("content-encoding", "content-length")
+        )
         if out != raw and resp.status_code == 200 and "text/html" in ct:
-            resp_headers["cache-control"] = "no-cache, no-store, must-revalidate"
-            resp_headers["pragma"] = "no-cache"
-            resp_headers["expires"] = "0"
-            lk = {k.lower(): k for k in resp_headers}
-            for name in ("etag", "last-modified"):
-                if name in lk:
-                    del resp_headers[lk[name]]
+            pairs = [
+                (k, v)
+                for k, v in pairs
+                if k.lower() not in RESPONSE_VALIDATOR_HEADERS
+            ]
+            pairs.extend(
+                [
+                    ("cache-control", "no-cache, no-store, must-revalidate"),
+                    ("pragma", "no-cache"),
+                    ("expires", "0"),
+                ]
+            )
 
-        return Response(
-            content=out,
-            status_code=resp.status_code,
-            headers=resp_headers,
+        return _with_raw_headers(
+            Response(content=out, status_code=resp.status_code),
+            pairs,
         )
 
     async def _reverse_proxy(
@@ -1224,12 +1266,10 @@ def create_app(
                 },
             )
 
-        excluded = HOP_BY_HOP_HEADERS | {"content-encoding"}
+        drop_headers = {"content-encoding"}
         if resp.headers.get("content-encoding"):
-            excluded = excluded | {"content-length"}
-        resp_headers = {
-            k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded
-        }
+            drop_headers.add("content-length")
+        resp_raw_headers = _filter_response_headers(resp, drop=drop_headers)
 
         async def stream():
             """
@@ -1244,27 +1284,28 @@ def create_app(
             finally:
                 await resp.aclose()
 
-        return StreamingResponse(
-            stream(),
-            status_code=resp.status_code,
-            headers=resp_headers,
+        return _with_raw_headers(
+            StreamingResponse(stream(), status_code=resp.status_code),
+            resp_raw_headers,
         )
 
     def _patch_js_response_headers(
         resp: HttpxResponse, extra: dict[str, str] | None = None
-    ) -> dict[str, str]:
+    ) -> list[tuple[str, str]]:
         """
-        从 httpx 响应构造转发头，并可选附加 Cache-Control 等
+        从 httpx 响应构造转发头列表，并可选附加 Cache-Control 等
 
         :param resp: httpx Response
         :param extra: 额外头
-        :return: 适合 FastAPI Response 的头字典
+
+        :return List: (header 名, 值) 列表
         """
-        excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-        h = {k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded}
+        pairs = _filter_response_headers(
+            resp, drop=("content-encoding", "content-length")
+        )
         if extra:
-            h.update(extra)
-        return h
+            pairs.extend(extra.items())
+        return pairs
 
     async def _patch_basehtmlplayer_js(request: Request) -> JSONResponse | Response:
         """
@@ -1287,10 +1328,9 @@ def create_app(
             return JSONResponse(status_code=502, content={"error": "Bad Gateway"})
 
         if resp.status_code != 200:
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=_patch_js_response_headers(resp),
+            return _with_raw_headers(
+                Response(content=resp.content, status_code=resp.status_code),
+                _patch_js_response_headers(resp),
             )
 
         content = resp.text
@@ -1315,10 +1355,9 @@ def create_app(
             extra["cache-control"] = "no-cache, no-store, must-revalidate"
             extra["pragma"] = "no-cache"
             extra["expires"] = "0"
-        return Response(
-            content=patched.encode("utf-8"),
-            status_code=resp.status_code,
-            headers=_patch_js_response_headers(resp, extra=extra),
+        return _with_raw_headers(
+            Response(content=patched.encode("utf-8"), status_code=resp.status_code),
+            _patch_js_response_headers(resp, extra=extra),
         )
 
     async def _patch_plugin_js(request: Request) -> JSONResponse | Response:
@@ -1344,10 +1383,9 @@ def create_app(
 
         # 非 200 响应原样透传（错误页/重定向），避免把错误内容当 JS 修补
         if resp.status_code != 200:
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=_patch_js_response_headers(resp),
+            return _with_raw_headers(
+                Response(content=resp.content, status_code=resp.status_code),
+                _patch_js_response_headers(resp),
             )
 
         content = resp.text
@@ -1364,10 +1402,9 @@ def create_app(
             extra["cache-control"] = "no-cache, no-store, must-revalidate"
             extra["pragma"] = "no-cache"
             extra["expires"] = "0"
-        return Response(
-            content=patched.encode("utf-8"),
-            status_code=resp.status_code,
-            headers=_patch_js_response_headers(resp, extra=extra),
+        return _with_raw_headers(
+            Response(content=patched.encode("utf-8"), status_code=resp.status_code),
+            _patch_js_response_headers(resp, extra=extra),
         )
 
     for _js_path in (
@@ -1423,29 +1460,21 @@ def create_app(
                 )
 
             if resp.status_code != 200:
-                excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-                return Response(
-                    content=resp.content,
-                    status_code=resp.status_code,
-                    headers={
-                        k: v
-                        for k, v in resp.headers.multi_items()
-                        if k.lower() not in excluded
-                    },
+                return _with_raw_headers(
+                    Response(content=resp.content, status_code=resp.status_code),
+                    _filter_response_headers(
+                        resp, drop=("content-encoding", "content-length")
+                    ),
                 )
 
             try:
                 data = resp.json()
             except Exception:
-                excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-                return Response(
-                    content=resp.content,
-                    status_code=resp.status_code,
-                    headers={
-                        k: v
-                        for k, v in resp.headers.multi_items()
-                        if k.lower() not in excluded
-                    },
+                return _with_raw_headers(
+                    Response(content=resp.content, status_code=resp.status_code),
+                    _filter_response_headers(
+                        resp, drop=("content-encoding", "content-length")
+                    ),
                 )
 
             if isinstance(data, dict):
@@ -1464,11 +1493,12 @@ def create_app(
                         item_id,
                     )
 
-            excluded = HOP_BY_HOP_HEADERS | {"content-encoding", "content-length"}
-            resp_headers = {
-                k: v for k, v in resp.headers.multi_items() if k.lower() not in excluded
-            }
-            return JSONResponse(content=data, status_code=200, headers=resp_headers)
+            return _with_raw_headers(
+                JSONResponse(content=data, status_code=200),
+                _filter_response_headers(
+                    resp, drop=("content-encoding", "content-length")
+                ),
+            )
 
         for _items_path in (
             "/users/{user_id}/items/{item_id}",
