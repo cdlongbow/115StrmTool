@@ -54,6 +54,7 @@ class P115ClientWrapper:
         self._cookie = cookie
         self._client = None
         self._http_client: Optional[Client] = None
+        self._cookie_lock = Lock()
         self._cooldown_lock = Lock()
         self._limiters: Dict[str, RateLimiter] = {}
         self._cooldowns = dict(DEFAULT_ENDPOINT_COOLDOWNS)
@@ -143,11 +144,21 @@ class P115ClientWrapper:
         return result
 
     def update_cookie(self, cookie: str):
-        self._cookie = cookie
-        if self._http_client:
-            self._http_client.close()
+        """
+        切换 Cookie 并重建底层客户端；加锁串行化，旧 HTTP 客户端在新客户端就绪后才关闭
+
+        :param cookie (str): 新的 Cookie 字符串
+        """
+        with self._cookie_lock:
+            previous_http = self._http_client
             self._http_client = None
-        self._init_client()
+            self._cookie = cookie
+            self._init_client()
+            if previous_http is not None:
+                try:
+                    previous_http.close()
+                except Exception:
+                    logger.debug("关闭旧 HTTP 客户端失败", exc_info=True)
 
     @property
     def client(self):
@@ -198,9 +209,39 @@ class P115ClientWrapper:
             logger.warning("【115客户端】%s Web API 返回 405，切换 App API", operation)
             return fallback_call()
 
+    def _mkdirs_web(self, path: str) -> Dict:
+        """
+        通过 Web API 逐层创建目录，已存在的层直接复用其目录 ID
+
+        fs_mkdir 仅支持单层创建，嵌套路径需要逐层下钻父目录 ID
+
+        :param path (str): 网盘目录绝对路径
+
+        :return Dict: 最深层 mkdir 的响应
+
+        :raises Exception: 某一层创建失败且未返回有效目录 ID
+        """
+        parts = path.strip("/").split("/")
+        parent = 0
+        resp: Dict = {}
+        for i, name in enumerate(parts):
+            cur = "/" + "/".join(parts[: i + 1])
+            self._wait_cooling("fs_dir_getid")
+            resp = self._client.fs_dir_getid(cur) or {}
+            pid = str(resp.get("id", "-1"))
+            if pid not in ("-1", "0"):
+                parent = int(pid)
+                continue
+            resp = self._client.fs_mkdir(name, parent) or {}
+            pid = str(resp.get("cid") or resp.get("id") or "-1")
+            if pid in ("-1", "0"):
+                raise Exception(f"创建目录未返回有效 ID: {cur}")
+            parent = int(pid)
+        return resp
+
     def ensure_folder(self, pan_path: str) -> Optional[int]:
         """
-        获取网盘目录 ID，目录不存在时自动创建
+        获取网盘目录 ID，目录不存在时自动创建（支持多层嵌套路径）
 
         :param pan_path (str): 网盘目录绝对路径
 
@@ -217,20 +258,30 @@ class P115ClientWrapper:
             pid = (resp or {}).get("id", "-1")
             if str(pid) not in ("-1", "0"):
                 return int(pid)
-            resp = self._call_with_405_fallback(
-                primary_call=lambda: self._client.fs_mkdir(path.strip("/"), 0),
-                fallback_call=lambda: self._client.fs_makedirs_app(path, 0),
-                operation="创建多端播放目录",
-            )
+            try:
+                resp = self._call_with_405_fallback(
+                    primary_call=lambda: self._mkdirs_web(path),
+                    fallback_call=lambda: self._client.fs_makedirs_app(path, 0),
+                    operation="创建网盘目录",
+                )
+            except Exception:
+                logger.debug(
+                    "Web 方式创建网盘目录失败，改用 App 端 makedirs: %s",
+                    path,
+                    exc_info=True,
+                )
+                try:
+                    resp = self._client.fs_makedirs_app(path, 0)
+                except Exception:
+                    resp = None
             new_pid = (resp or {}).get("cid") or (resp or {}).get("id")
-            if new_pid and str(new_pid) not in ("-1", "0"):
-                return int(new_pid)
-            resp = self._client.fs_dir_getid(path)
-            pid = (resp or {}).get("id", "-1")
-            if str(pid) in ("-1", "0"):
+            if not new_pid or str(new_pid) in ("-1", "0"):
+                resp = self._client.fs_dir_getid(path)
+                new_pid = (resp or {}).get("id", "-1")
+            if str(new_pid) in ("-1", "0"):
                 logger.warning("创建网盘目录后仍无法获取目录 ID: %s", path)
                 return None
-            return int(pid)
+            return int(new_pid)
         except Exception as e:
             logger.error("获取/创建网盘目录失败: %s", e, exc_info=True)
             return None
