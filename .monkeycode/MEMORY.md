@@ -51,3 +51,12 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Context: 用户在分析报告后明确要求
 - Instructions:
   - 所有回复与推理过程使用简体中文
+
+### 115 SDK 依赖升级约束
+- Date: 2026-10-03
+- Context: Agent 在执行 zkmydgth 上游仓库借鉴分析时发现
+- Category: 环境配置
+- Instructions:
+  - p115client 禁止升级到 0.0.9.7.x：iterdir 大重构删除约 29 个符号（iter_file_list、iter_files_with_path_skim、traverse_tree_with_path 等），与本仓库 p115_client_wrapper 不兼容，上游同版本升级当天即回滚
+  - python-concurrenttools 必须 <0.1.9（0.1.9 将 threadpool_map 改名 thread_conmap，p115client 0.0.9.6.5.1 导入即崩）；requirements.txt 已钉上限
+  - 上游本地 wheels + --find-links 不防 pip 拉远端高版本，钉版必须写进 requirements 显式约束
