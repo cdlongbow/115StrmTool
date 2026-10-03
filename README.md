@@ -53,10 +53,11 @@ Emby 客户端 → 反向代理 (:8097) → Emby 服务器 (:8096)
 ```bash
 cd combined
 pip install -r requirements.txt
-pip install wheels/*.whl
 python main.py              # 控制台模式
 python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 ```
+
+`combined/wheels/` 是发布构建使用的锁包快照（含平台专用 wheel，不能整目录直接安装）；发版流水线会自动按平台挑选安装。
 
 运行单元测试（140 个用例，需 Python 3.12+ 环境）：
 

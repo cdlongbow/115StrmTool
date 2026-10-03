@@ -81,9 +81,8 @@ ruff check .
 # 构建 exe
 cd combined && python build_exe.py
 
-# 安装依赖
+# 安装依赖（PyPI 全量可解析；wheels/ 为发版构建锁包快照，勿整目录安装）
 pip install -r combined/requirements.txt
-pip install combined/wheels/*.whl
 ```
 
 ### 重要文件

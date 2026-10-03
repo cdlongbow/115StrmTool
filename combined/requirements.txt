@@ -8,5 +8,7 @@ Pillow>=10.0
 p115cipher==0.0.5.4
 p115client==0.0.9.6.5.1
 p115pickcode==0.0.5.4
+# 上限钉死：0.1.9 将 threadpool_map 改名 thread_conmap，p115client 0.0.9.6.5.1 导入即崩；待升级 p115client 0.0.9.7.x 后移除
+python-concurrenttools<0.1.9
 # Windows 系统托盘（可选）: pip install pystray Pillow
 # 测试（可选）: pip install pytest pytest-asyncio
