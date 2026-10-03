@@ -1,7 +1,7 @@
 """
 通用工具模块：异步 TTL 缓存、按 key 互斥锁、速率控制、异常捕获装饰器
 """
-from asyncio import Lock
+from asyncio import Lock, shield
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from functools import wraps
@@ -140,12 +140,17 @@ class AsyncKeyLock:
         finally:
             if acquired:
                 lock.release()
-            async with self._guard:
-                current_lock, users = self._locks[key]
-                if users == 1:
-                    self._locks.pop(key)
-                else:
-                    self._locks[key] = (current_lock, users - 1)
+
+            async def _cleanup() -> None:
+                async with self._guard:
+                    current_lock, users = self._locks[key]
+                    if users == 1:
+                        self._locks.pop(key)
+                    else:
+                        self._locks[key] = (current_lock, users - 1)
+
+            # shield 保证调用方被取消时引用计数清理仍完整执行，避免锁泄漏
+            await shield(_cleanup())
 
 
 class RateLimiter:
