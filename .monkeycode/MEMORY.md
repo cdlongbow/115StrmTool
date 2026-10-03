@@ -45,3 +45,9 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Instructions:
   - 每次代码改动提交前，必须先本地跑通：`ruff check .`（仓库根目录）和 `cd combined && python -m pytest -q`，两者全绿才允许提交推送
   - 日常 CI（.github/workflows/ci.yml，push/PR 触发）已承担同样门禁，但不以此替代本地验证
+
+### 回复语言偏好
+- Date: 2026-10-03
+- Context: 用户在分析报告后明确要求
+- Instructions:
+  - 所有回复与推理过程使用简体中文
