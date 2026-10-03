@@ -1,7 +1,7 @@
 from base64 import b64decode, b64encode, urlsafe_b64encode
 from re import IGNORECASE, compile as re_compile
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import Request
 
@@ -64,6 +64,52 @@ def decode_redirect_link(link: str) -> str:
     """
     padding = "=" * (-len(link) % 4)
     return b64decode((link + padding).encode("ascii")).decode("utf-8")
+
+
+_RE_HOST_HEADER = re_compile(r"^(?:[A-Za-z0-9.\-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$", IGNORECASE)
+
+
+ALLOWED_REDIRECT_SCHEMES = frozenset({
+    "potplayer", "vlc", "vlc-x-callback", "iina", "infuse", "mpv-handler",
+    "nplayer", "nplayer-mac", "omniplayer", "figplayer", "senplayer",
+    "filebox", "stellar", "ddplay",
+})
+
+
+def is_safe_redirect_target(url: str, trusted_netloc: str) -> bool:
+    """
+    校验 redirect2external 解码后的目标是否允许跳转
+
+    仅放行已知播放器自定义 scheme；http/https 限制为本站主机，防止开放重定向
+
+    :param url (str): 解码后的目标链接
+    :param trusted_netloc (str): 本站主机（host[:port]）
+
+    :return bool: 允许跳转返回 True
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    scheme = (parsed.scheme or "").lower()
+    if scheme in ALLOWED_REDIRECT_SCHEMES:
+        return bool(parsed.netloc or parsed.path)
+    if scheme in ("http", "https"):
+        return bool(trusted_netloc) and parsed.netloc == trusted_netloc
+    return False
+
+
+def _sanitize_host_header(host_header: str) -> str:
+    """
+    校验 Host 头仅含合法主机字符，阻断注入到外发 URL 的攻击面
+
+    :param host_header (str): 原始 Host 头
+
+    :return str: 合法时返回原值，非法返回空串
+    """
+    if host_header and _RE_HOST_HEADER.fullmatch(host_header):
+        return host_header
+    return ""
 
 
 def build_external_player_script(player_keys: list[str]) -> str | None:
@@ -224,7 +270,7 @@ def build_stream_url_for_item(
 
     :return str: 完整的流地址 URL
     """
-    host_header = request.headers.get("host") or ""
+    host_header = _sanitize_host_header(request.headers.get("host") or "")
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
     base_url = f"{scheme}://{host_header}" if host_header else emby_host
 
@@ -233,8 +279,8 @@ def build_stream_url_for_item(
     media_type = str(source.get("Type", "")).lower()
     prefix = "audio" if media_type == "audio" else "videos"
     return (
-        f"{base_url}/emby/{prefix}/{item_id}/stream.{container}"
-        f"?Static=true&MediaSourceId={source_id}&api_key={api_key}"
+        f"{base_url}/emby/{prefix}/{quote(item_id, safe='')}/stream.{quote(container, safe='')}"
+        f"?Static=true&MediaSourceId={source_id}&api_key={quote(api_key, safe='')}"
     )
 
 
@@ -321,10 +367,11 @@ def _build_player_target_url(
     sec, ms, hhmmss = _position_parts(position_ticks)
 
     if key == "potplayer":
+        safe_title = quote(str(title).replace('"', ""), safe="")
         raw = (
             f"potplayer://{quote(stream_url, safe=':/?&=%')} "
             f"/sub={quote(sub_url, safe=':/?&=%')} "
-            f'/seek={hhmmss} /title="{title}"'
+            f'/seek={hhmmss} /title="{safe_title}"'
         )
     elif key == "vlc":
         if os_type == "windows" or os_type == "macOS":
@@ -416,7 +463,7 @@ def _position_parts(position_ticks: int) -> tuple[int, int, str]:
 
 
 def _wrap_redirect(request: Request, raw_url: str) -> str:
-    host_header = request.headers.get("host") or ""
+    host_header = _sanitize_host_header(request.headers.get("host") or "")
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
     server_addr = (
         f"{scheme}://{host_header}"

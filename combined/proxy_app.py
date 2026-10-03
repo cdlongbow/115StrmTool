@@ -40,6 +40,7 @@ from external_players import (
     build_external_player_script,
     decode_redirect_link,
     extract_api_key,
+    is_safe_redirect_target,
     inject_external_urls,
 )
 
@@ -1461,10 +1462,13 @@ def create_app(
     if _player_keys:
 
         @app.get(REDIRECT_PATH, response_model=None)
-        async def redirect_to_external(link: str | None = None) -> RedirectResponse:
+        async def redirect_to_external(
+            request: Request, link: str | None = None
+        ) -> RedirectResponse:
             """
-            解码外部播放器链接并 302 跳转
+            解码外部播放器链接并 302 跳转，目标 scheme/主机受白名单约束
 
+            :param request (Request): 当前请求，用于取本站 netloc 做同站校验
             :param link (str): base64 编码后的原始播放器链接
 
             :return RedirectResponse: 302 重定向响应
@@ -1475,6 +1479,9 @@ def create_app(
                 decoded = decode_redirect_link(link)
             except Exception:
                 logger.warning("无效的 redirect2external link 参数")
+                return RedirectResponse(url="/", status_code=302)
+            if not is_safe_redirect_target(decoded, request.url.netloc):
+                logger.warning("redirect2external 目标不在允许列表: %.120s", decoded)
                 return RedirectResponse(url="/", status_code=302)
             return RedirectResponse(url=decoded, status_code=302)
 
