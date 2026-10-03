@@ -29,6 +29,14 @@ def _create_icon():
 def _post_api(path: str, port: int = 8100) -> str:
     try:
         req = Request(f"http://127.0.0.1:{port}{path}", method="POST")
+        try:
+            from config_manager import config_manager
+
+            admin_token = config_manager.get().get("admin_token", "")
+            if admin_token:
+                req.add_header("X-Admin-Token", admin_token)
+        except Exception:
+            logger.debug("读取管理令牌失败，按无令牌请求", exc_info=True)
         with urlopen(req, timeout=5) as r:
             return r.read().decode("utf-8")
     except Exception as e:

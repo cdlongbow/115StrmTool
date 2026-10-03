@@ -38,6 +38,8 @@ def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cookie = data.get("p115", {}).get("cookie")
     if cookie:
         data["p115"]["cookie"] = COOKIE_MASK
+    if data.get("admin_token"):
+        data["admin_token"] = COOKIE_MASK
     return data
 
 
@@ -102,6 +104,7 @@ class CheckinConfig(BaseModel):
 class RootConfig(BaseModel):
     admin_host: str = "127.0.0.1"
     admin_port: int = 8100
+    admin_token: str = Field(default="", description="管理接口访问令牌，空值时启动自动生成")
     emby: EmbyConfig = Field(default_factory=EmbyConfig)
     p115: P115Config = Field(default_factory=P115Config)
     checkin: CheckinConfig = Field(default_factory=CheckinConfig)

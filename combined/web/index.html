@@ -71,6 +71,46 @@ tr:hover{background:#f5f5f5}
 </style>
 </head>
 <body>
+<script>
+(function () {
+  // 管理令牌统一注入：URL 查询参数（托盘打开自动带）优先，随后存 localStorage
+  var params = new URLSearchParams(location.search);
+  if (params.get("token")) {
+    localStorage.setItem("adminToken", params.get("token"));
+    params.delete("token");
+    var qs = params.toString();
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+  }
+  window.__adminToken = function () {
+    return localStorage.getItem("adminToken") || "";
+  };
+  var origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    init = init || {};
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    var isApi = /^\/(api|admin\/api)(\/|\?|$)/.test(url);
+    if (isApi) {
+      var h = new Headers(init.headers || (input && input.headers) || {});
+      var t = window.__adminToken();
+      if (t) h.set("X-Admin-Token", t);
+      init.headers = h;
+    }
+    var p = origFetch(input, init);
+    if (!isApi) return p;
+    return p.then(function (res) {
+      if (res.status === 401 && !window.__admin401Shown) {
+        window.__admin401Shown = true;
+        var t2 = prompt("访问令牌缺失或错误，请粘贴程序控制台日志中显示的管理界面访问令牌：");
+        if (t2) {
+          localStorage.setItem("adminToken", t2.trim());
+          window.__admin401Shown = false;
+        }
+      }
+      return res;
+    });
+  };
+})();
+</script>
 
 <div class="nav">
   <h1>115网盘STRM生成与302工具</h1>

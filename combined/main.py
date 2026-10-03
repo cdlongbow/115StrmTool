@@ -258,6 +258,28 @@ def create_admin_app() -> FastAPI:
             content={"error": exc.message},
         )
 
+    @app.middleware("http")
+    async def admin_token_gate(request, call_next):
+        """
+        API 端点访问令牌校验：配置令牌为空时跳过（未初始化/开发模式）
+
+        :param request: 进入的 HTTP 请求
+        :param call_next: 下游处理器
+        """
+        path = request.url.path
+        api_paths = ("/api/", "/admin/api/")
+        if not (path.startswith(api_paths) or path in ("/api", "/admin/api")):
+            return await call_next(request)
+        token = config_manager.get().get("admin_token") or ""
+        if not token:
+            return await call_next(request)
+        if request.headers.get("x-admin-token") != token:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "缺少或错误的访问令牌（X-Admin-Token）"},
+            )
+        return await call_next(request)
+
     # 挂载 P115 API 路由
     from api_routes import router as p115_router
 
@@ -293,7 +315,7 @@ def _run_admin():
     app = create_admin_app()
     admin_config = Config(
         app=app,
-        host=config.get("admin_host", "0.0.0.0"),
+        host=config.get("admin_host", "127.0.0.1"),
         port=int(config.get("admin_port", 8100)),
         log_config=None,
     )
@@ -314,6 +336,13 @@ def main():
     logger.info("=" * 56)
 
     config = config_manager.get()
+    admin_token = config.get("admin_token") or ""
+    if not admin_token:
+        from secrets import token_urlsafe
+
+        admin_token = token_urlsafe(24)
+        config_manager.update({"admin_token": admin_token})
+    logger.info("管理界面访问令牌: %s", admin_token)
     set_emby_restart_callback(_restart_emby)
     set_p115_restart_callback(_restart_p115)
 
@@ -334,7 +363,7 @@ def main():
         admin_thread.start()
         run_tray(
             app_name="115网盘STRM生成与302工具",
-            admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/",
+            admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/?token={admin_token}",
             admin_port=int(config.get("admin_port", 8100)),
             on_exit=_shutdown_for_tray_exit,
         )
