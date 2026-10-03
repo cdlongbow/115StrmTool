@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from hashlib import sha256
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
 from typing import Any, List, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 from utils import AsyncKeyLock, AsyncTtlCache
 
@@ -605,11 +605,15 @@ def create_app(
                 if resp.status_code in (301, 302, 303, 307, 308):
                     location = resp.headers.get("Location")
                     if location:
-                        return location, True
+                        # 相对 Location 必须按本次请求 URL 绝对化，否则下发后基址错位
+                        return urljoin(str(resp.url), location), True
                     logger.warning(
-                        "重定向响应缺少 Location 头: url=%s status=%s",
+                        "重定向响应缺少 Location 头 url=%s status=%s",
                         url, resp.status_code,
                     )
+                    return url, False
+                if resp.status_code >= 400:
+                    # 非重定向且非 2xx 说明地址或权限已坏，按未解析短缓存处理
                     return url, False
                 return str(resp.url), True
             except TimeoutException as e:
