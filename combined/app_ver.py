@@ -14,7 +14,7 @@ _VERSIONS_TTL = 3600.0
 _VERSIONS_FAIL_TTL = 600.0
 
 _versions_cache: Optional[Dict[str, str]] = None
-_versions_cached_at: float = 0.0
+_versions_cached_at: float = float("-inf")
 _versions_lock = threading.Lock()
 
 
@@ -104,6 +104,11 @@ class AppVerPatcher:
 
     @classmethod
     def enable(cls) -> None:
+        """
+        将真实 Android 版本号写入 p115client；仅在拿到真实版本时标记补丁已激活
+
+        版本号获取失败时应用回退版本但不激活，允许后续调用再次尝试刷新
+        """
         if cls._active:
             return
         try:
@@ -115,10 +120,15 @@ class AppVerPatcher:
                 )
                 return
 
-            real = get_real_app_ver()
-            setattr(_p115_client_mod, _APP_VERSION_ATTR, real)
-            cls._active = True
-            logger.info("app_ver 补丁已应用: %s", real)
+            versions = _fetch_app_versions()
+            real = versions.get("Android") if versions else None
+            effective = real or FALLBACK_ANDROID_VER
+            setattr(_p115_client_mod, _APP_VERSION_ATTR, effective)
+            if real:
+                cls._active = True
+                logger.info("app_ver 补丁已应用: %s", effective)
+            else:
+                logger.warning("app_ver 使用回退版本（未激活补丁，后续可重试）: %s", effective)
         except ImportError:
             logger.warning("p115client 未安装，跳过 app_ver 补丁")
 
