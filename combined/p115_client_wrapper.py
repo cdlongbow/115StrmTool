@@ -1,5 +1,6 @@
 from base64 import b64encode
 from json import loads as json_loads
+from re import search as re_search
 from time import sleep
 from threading import Lock
 from typing import Callable, Dict, Optional, Tuple
@@ -168,8 +169,11 @@ class P115ClientWrapper:
             return True
         if getattr(error, "code", None) == 405:
             return True
+        response = getattr(error, "response", None)
+        if response is not None and getattr(response, "status_code", None) == 405:
+            return True
         message = str(error)
-        return "405" in message or "Method Not Allowed" in message
+        return bool(re_search(r"\b405\b", message)) or "Method Not Allowed" in message
 
     def _call_with_405_fallback(
         self,
