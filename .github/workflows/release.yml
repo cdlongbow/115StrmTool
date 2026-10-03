@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release 版本号（如 v2.8.33）'
+        description: 'Release 版本号（需与 CHANGELOG 顶部条目标题一致，如 20261003）'
         required: true
         type: string
 
@@ -20,6 +20,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version consistency check
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          python -c "
+          import os, re
+          from pathlib import Path
+
+          ref = os.environ['RELEASE_REF'].strip().lstrip('v')
+          m = re.search(r'^##\s*\[(.+?)\]', Path('CHANGELOG.md').read_text(encoding='utf-8'), re.M)
+          if not ref:
+              raise SystemExit('release ref is empty')
+          if not m:
+              raise SystemExit('CHANGELOG.md has no version heading like: ## [2026-10-03]')
+          head = m.group(1)
+          norm = lambda s: s.replace('-', '').replace('_', '')
+          if norm(ref) != norm(head):
+              raise SystemExit('version mismatch: release ref=' + ref + ' changelog head=' + head)
+          print('OK: release ref ' + ref + ' matches CHANGELOG head ' + head)
+          "
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
