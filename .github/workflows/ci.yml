@@ -49,3 +49,10 @@ jobs:
       - name: Run tests
         working-directory: combined
         run: python -m pytest -q
+
+      - name: Run each test file standalone
+        working-directory: combined
+        run: |
+          for f in test_*.py; do
+            python -m pytest "$f" -q || exit 1
+          done

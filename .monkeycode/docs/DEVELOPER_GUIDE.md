@@ -107,7 +107,7 @@ python build_exe.py
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
-测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止，且流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致。测试的重量级依赖替身统一定义在 `combined/conftest.py`（`stub_modules` 生成 patch.dict 用的替身字典、`stub_missing` 按需注入未安装模块），配合 `patch.dict(sys.modules, ...)` 隔离，无需真实 Cookie 或网络即可运行，新增测试直接复用而不要再散建替身字典。SDK 相关依赖仅发布 Python 3.12 版本，本地开发环境需 3.12 才能完整安装。
+测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止，且流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致。测试的重量级依赖替身统一定义在 `combined/conftest.py`（`stub_modules` 生成 patch.dict 用的替身字典、`stub_missing` 按需注入未安装模块），配合 `patch.dict(sys.modules, ...)` 隔离，无需真实 Cookie 或网络即可运行，新增测试直接复用而不要再散建替身字典。每个测试文件必须能单独运行通过（`python -m pytest test_xxx.py -q`），不依赖其他文件先跑的模块导入泄漏，日常 CI 在跑完全量后会逐文件独立执行校验。SDK 相关依赖仅发布 Python 3.12 版本，本地开发环境需 3.12 才能完整安装。
 
 ### 分支策略
 
