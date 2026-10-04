@@ -10,7 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from conftest import REDIRECT_HEAVY_DEPS, stub_modules
+from conftest import P115_NATIVE_MODULES, REDIRECT_HEAVY_DEPS, stub_missing, stub_modules
+
+# patch 目标解析会重新导入 redirect_service，链式依赖真实 p115 底层库，需模块级兜底保证独立可跑
+stub_missing(P115_NATIVE_MODULES)
 
 API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
 PICKCODE = "3" * 17
