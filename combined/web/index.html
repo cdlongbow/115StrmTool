@@ -827,10 +827,18 @@ async function cancelSync() {
   showToast('正在取消...', 'info');
   try { await apiFetch('/api/sync/cancel', {method:'POST'}); } catch(e) {}
 }
+async function confirmDanger(op, text) {
+  if (!confirm(text)) { return null; }
+  try {
+    const d = await apiJson('/admin/api/confirm-ops', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: op }) });
+    return d.token;
+  } catch(e) { showToast('获取确认失败: ' + e.message, 'error'); return null; }
+}
+
 async function resetSyncBaseline() {
-  if (!confirm('此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。\n\n磁盘上已有的 .strm 文件不会被删除。\n\n确定要继续吗？')) return;
-  if (!confirm('⚠️ 二次确认：此操作不可恢复！确定重置同步数据？')) return;
-  try { await apiFetch('/api/sync/reset-baseline', {method:'POST'}); loadSyncHistory(); updateDashboard().catch(() => {}); showToast('同步数据已重置', 'success'); }
+  const token = await confirmDanger('sync.reset-baseline', '此操作将清空所有文件记录数据库，下次增量同步会重新扫描全量网盘文件并重建 .strm。磁盘上已有的 .strm 文件不会被删除。确认不可恢复的重置操作？');
+  if (!token) { return; }
+  try { await apiFetch('/api/sync/reset-baseline', {method:'POST', headers:{ 'X-Confirm-Token': token }}); loadSyncHistory(); updateDashboard().catch(() => {}); showToast('同步数据已重置', 'success'); }
   catch(e) { showToast('重置失败: ' + e.message, 'error'); }
 }
 async function loadSyncHistory() {
@@ -848,9 +856,10 @@ async function loadSyncHistory() {
   } catch(e) { document.getElementById('syncHistory').innerHTML = '<p>加载失败</p>'; }
 }
 async function clearSyncHistory() {
-  if (!confirm('确定清空所有同步记录？此操作不可恢复。')) return;
+  const tokenCs = await confirmDanger('sync.history-clear', '确定清空所有同步记录？此操作不可恢复。');
+  if (!tokenCs) { return; }
   try {
-    await apiFetch('/api/sync/history/clear', {method:'POST'});
+    await apiFetch('/api/sync/history/clear', {method:'POST', headers:{ 'X-Confirm-Token': tokenCs }});
     loadSyncHistory();
     showToast('同步记录已清空', 'success');
   } catch(e) { showToast('清空失败: ' + e.message, 'error'); }
@@ -965,9 +974,10 @@ async function refreshLogs() {
 }
 
 async function clearLogs() {
-  if (!confirm('确定清空所有日志吗？')) return;
+  const tokenLg = await confirmDanger('logs.clear', '确定清空所有日志吗？');
+  if (!tokenLg) { return; }
   try {
-    const r = await apiFetch('/admin/api/logs', { method: 'DELETE' });
+    const r = await apiFetch('/admin/api/logs', { method: 'DELETE', headers:{ 'X-Confirm-Token': tokenLg } });
     const d = await r.json();
     showToast(d.message, 'success');
     document.getElementById('logBox').textContent = '暂无日志';

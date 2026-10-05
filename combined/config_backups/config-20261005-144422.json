@@ -1,0 +1,36 @@
+{
+  "admin_host": "127.0.0.1",
+  "admin_port": 8100,
+  "admin_token": "",
+  "emby": {
+    "enabled": false,
+    "emby_host": "http://192.168.2.100:8096",
+    "proxy_host": "0.0.0.0",
+    "proxy_port": 8097,
+    "pin_rules": "",
+    "external_player_url": false,
+    "external_player_list": [],
+    "redirect_mode": false
+  },
+  "p115": {
+    "enabled": false,
+    "cookie": "",
+    "redirect_host": "0.0.0.0",
+    "redirect_port": 3333,
+    "strm_url_prefix": "http://192.168.2.100:3333",
+    "rmt_mediaext": "mp4,mkv,ts,iso,rmvb,avi,mov,mpeg,mpg,wmv,3gp,asf,m4v,flv,m2ts,tp,f4v,webm",
+    "download_mediaext": "srt,ssa,ass,sup,pgs,sub,idx",
+    "auto_download_mediainfo": false,
+    "overwrite_mode": "never",
+    "cleanup_deleted_strm": false,
+    "use_rust": false,
+    "fast_scan": true,
+    "same_playback": false,
+    "same_playback_dir": "/多端播放",
+    "paths": []
+  },
+  "checkin": {
+    "enabled": false,
+    "time_range": "06:00-09:00"
+  }
+}
