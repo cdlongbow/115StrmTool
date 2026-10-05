@@ -6,6 +6,18 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from database import db
+from fast_scan import FastScanUnavailable, iter_files_fast
+
+
+def _notes_suffix(notes: List[str]) -> str:
+    """
+    将同步过程备注拼接为完成消息后缀
+
+    :param notes (List): 备注列表
+
+    :return str: 圆括号包裹的备注串，无备注时为空字符串
+    """
+    return f"（{'；'.join(notes)}）" if notes else ""
 
 
 def sanitize_path_parts(rel_path: Path) -> Path:
@@ -71,6 +83,8 @@ class StrmGenerator:
         self._overwrite_mode = "never"
         self._cleanup_deleted = False
         self._use_rust = False
+        self._fast_scan = True
+        self._sync_notes: List[str] = []
         self._rust_processor = None
         self._sync_lock = threading.RLock()
 
@@ -91,6 +105,7 @@ class StrmGenerator:
         overwrite_mode: str = "never",
         cleanup_deleted: bool = False,
         use_rust: Optional[bool] = None,
+        fast_scan: Optional[bool] = None,
     ):
         if rmt_mediaext:
             new_ext = {f".{e.strip().lower()}" for e in rmt_mediaext.replace("，", ",").split(",") if e.strip()}
@@ -105,9 +120,37 @@ class StrmGenerator:
         self._cleanup_deleted = cleanup_deleted
         if use_rust is not None:
             self._use_rust = use_rust
+        if fast_scan is not None:
+            self._fast_scan = fast_scan
 
     def set_use_rust(self, enabled: bool):
         self._use_rust = enabled
+
+    def _iter_root_files(self, cid: int, pan_path: str):
+        """
+        按配置选择遍历方式产出同步根的文件属性流，快速扫描不可用时逐根降级
+
+        :param cid (int): 同步根目录 cid
+        :param pan_path (str): 同步根网盘路径
+
+        :return: 文件属性字典迭代器
+        """
+        if not self._fast_scan:
+            return _iter_files_115(self._client, cid)
+        try:
+            attrs = iter_files_fast(
+                self._client,
+                cid,
+                root_pan_path=pan_path,
+                cancellation=self._cancel_flag,
+            )
+            return iter(attrs)
+        except FastScanUnavailable as e:
+            logger.warning("快速扫描降级为逐目录遍历 [%s]: %s", pan_path, e)
+            note = f"{pan_path} 快速扫描降级"
+            if note not in self._sync_notes:
+                self._sync_notes.append(note)
+            return _iter_files_115(self._client, cid)
 
     def _get_rust_processor(self):
         if self._rust_processor is not None:
@@ -245,6 +288,7 @@ class StrmGenerator:
                     download_mediaext=kwargs.get("download_mediaext", ""),
                     auto_download_mediainfo=kwargs.get("auto_download_mediainfo", False),
                 )
+            self._sync_notes = []
             history_id = db.add_sync_history("full")
             self._set_progress("scanning", message="准备开始全量同步...")
             total_new = 0
@@ -269,7 +313,7 @@ class StrmGenerator:
                     try:
                         cid = self._resolve_pan_path(pan_path)
 
-                        for attr in _iter_files_115(self._client, cid):
+                        for attr in self._iter_root_files(cid, pan_path):
                             if self._cancel_flag.is_set():
                                 break
                             if attr.get("is_dir"):
@@ -355,7 +399,7 @@ class StrmGenerator:
                     history_id, total_count, total_new, total_deleted, total_failed
                 )
 
-                self._set_progress("completed", current=total_count, total=total_count, message=f"全量同步完成: 新增 {total_new}，删除 {total_deleted}，失败 {total_failed}")
+                self._set_progress("completed", current=total_count, total=total_count, message=f"全量同步完成: 新增 {total_new}，删除 {total_deleted}，失败 {total_failed}{_notes_suffix(self._sync_notes)}")
                 logger.info(
                     "全量同步完成: 新增=%d, 删除=%d, 失败=%d",
                     total_new, total_deleted, total_failed,
@@ -394,6 +438,7 @@ class StrmGenerator:
                 logger.info("数据库中无同步记录，首次增量同步自动切换为全量同步")
                 return self.full_sync(path_mappings, **kwargs)
 
+            self._sync_notes = []
             history_id = db.add_sync_history("incremental")
             self._set_progress("scanning", message="准备开始增量同步...")
             total_new = 0
@@ -433,7 +478,7 @@ class StrmGenerator:
                     try:
                         cid = self._resolve_pan_path(pan_path)
 
-                        for attr in _iter_files_115(self._client, cid):
+                        for attr in self._iter_root_files(cid, pan_path):
                             if self._cancel_flag.is_set():
                                 break
                             if attr.get("is_dir"):
@@ -591,7 +636,7 @@ class StrmGenerator:
                     history_id, total_count, total_new + total_changed, total_deleted, total_failed
                 )
 
-                self._set_progress("completed", current=total_count, total=total_count, message=f"增量同步完成: 新增 {total_new}，变更 {total_changed}，删除 {total_deleted}，失败 {total_failed}")
+                self._set_progress("completed", current=total_count, total=total_count, message=f"增量同步完成: 新增 {total_new}，变更 {total_changed}，删除 {total_deleted}，失败 {total_failed}{_notes_suffix(self._sync_notes)}")
                 logger.info(
                     "增量同步完成: 新增=%d, 变更=%d, 未变=%d, 删除=%d, 失败=%d",
                     total_new, total_changed, total_unchanged, total_deleted, total_failed,

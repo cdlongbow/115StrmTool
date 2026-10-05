@@ -3,7 +3,7 @@ from json import loads as json_loads
 from re import search as re_search
 from time import sleep
 from threading import Lock
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import Client, Limits, Timeout
@@ -39,6 +39,13 @@ DEFAULT_ENDPOINT_COOLDOWNS = {
     "user_points_sign": 0.5,
     "user_points_sign_post": 0.5,
     "share_snap": 1.5,
+    "scan_files": 1.0,
+    "scan_dirs": 1.0,
+}
+
+SCAN_ENDPOINTS = {
+    "files": "https://webapi.115.com/files",
+    "downfolders": "https://proapi.115.com/app/chrome/downfolders",
 }
 
 
@@ -542,6 +549,34 @@ class P115ClientWrapper:
         if self._http_client:
             self._http_client.close()
             self._http_client = None
+
+    def scan_get_json(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        发起整树扫描类 GET 请求（带冷却与应用 UA），返回校验前的响应体
+
+        :param endpoint (str): 端点名，取值须属于 SCAN_ENDPOINTS
+        :param params (Dict): 查询参数
+
+        :return Dict: 解析后的 JSON 响应体
+
+        :raises RuntimeError: 客户端未就绪、端点未知、HTTP 405 或非 200
+        """
+        url = SCAN_ENDPOINTS.get(endpoint)
+        if not url:
+            raise RuntimeError(f"未知扫描端点: {endpoint}")
+        if not self._http_client:
+            raise RuntimeError("HTTP 客户端未就绪")
+        self._wait_cooling("scan_files" if endpoint == "files" else "scan_dirs")
+        resp = self._http_client.get(
+            url, params=params, headers={"User-Agent": generate_u115_ios()},
+        )
+        if resp.status_code == 405:
+            raise RuntimeError(f"扫描端点 {endpoint} 返回 405，疑似风控")
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"扫描端点 {endpoint} 返回非 200: status={resp.status_code}"
+            )
+        return resp.json()
 
     @capture_exceptions(default=None, log_message="浏览目录失败")
     def fs_files_app(self, payload: Dict) -> Optional[Dict]:
