@@ -106,6 +106,14 @@ scanner = iter_files_fast if self._fast_scan else _iter_files_115
 5. 取消与进度：中途置位 Event → 断言提前返回且 progress 单调
 6. 集成回归：现有 140 用例不改语义（开关默认开但 mock 环境快速路径会走 unavailable → 自动降级路径，若因此影响既有用例则在测试配置中显式关闭）
 
+## Implementation Notes
+
+落地实现与本设计的一处收敛（2026-10-05）：
+
+1. 属性字段由 `fast_scan.py` 直接映射（`n/s/sha1/pc/cid`），未走 `p115client.tool.attr.normalize_attr`——减少对一个未安装于测试环境的 SDK 内部键格式依赖，且便于 fixture 断言
+2. 扫描模式备注写入完成时的 progress message（`_notes_suffix`）与 WARNING 日志；不写入 `sync_history.error_message`，因该字段非空会触发既有 status="failed" 判定，降级不属于失败
+3. 取消语义：文件分页阶段收到取消返回空列表（调用方 `not cancelled` 守卫保证不误删），目录表阶段不再检查取消
+
 ## References
 
 [^1]: (Filename) - [115-station fast115.go](https://github.com/pancras-loe/115-station/blob/master/internal/api/fast115.go)
