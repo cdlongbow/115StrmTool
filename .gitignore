@@ -186,3 +186,8 @@ data/
 
 # Old wheel backups
 combined/wheels_backup_old/
+
+# 运行时配置与快照导出（沙箱/本地测试产物，不入库）
+config.json
+combined/config.json
+combined/config_backups/
