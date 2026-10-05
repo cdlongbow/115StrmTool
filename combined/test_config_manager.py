@@ -5,9 +5,10 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _backup_config():
-    """保存真实配置文件，用测试配置替换，测试后恢复"""
+def _backup_config(monkeypatch, tmp_path):
+    """保存真实配置文件，用测试配置替换，测试后恢复；快照目录指向临时路径"""
     import config_manager as cm_mod
+    monkeypatch.setattr(cm_mod, "CONFIG_BACKUP_DIR", tmp_path / "config_backups")
     orig_config = None
     if cm_mod.CONFIG_FILE.exists():
         orig_config = cm_mod.CONFIG_FILE.read_bytes()
@@ -99,3 +100,63 @@ class TestConfigManager:
         assert merged["b"]["c"] == 99
         assert merged["b"]["d"] == 3
         assert merged["e"] == 4
+
+class TestConfigBackupRotation:
+    def test_backup_created_and_interval_guard(self, monkeypatch, tmp_path):
+        import config_manager as cm_mod
+        conf = tmp_path / "config.json"
+        conf.write_text('{"a": 1}', encoding="utf-8")
+        monkeypatch.setattr(cm_mod, "CONFIG_FILE", conf)
+        cm = cm_mod.ConfigManager()
+        cm._maybe_backup()
+        first = list(cm_mod.CONFIG_BACKUP_DIR.glob("config-*.json"))
+        assert len(first) == 1
+        cm._maybe_backup()
+        assert len(list(cm_mod.CONFIG_BACKUP_DIR.glob("config-*.json"))) == 1
+
+    def test_rotation_keeps_max(self, monkeypatch, tmp_path):
+        import config_manager as cm_mod
+        conf = tmp_path / "config.json"
+        conf.write_text('{"a": 1}', encoding="utf-8")
+        monkeypatch.setattr(cm_mod, "CONFIG_FILE", conf)
+        monkeypatch.setattr(cm_mod, "CONFIG_BACKUP_MIN_INTERVAL", 0.0)
+        monkeypatch.setattr(cm_mod, "MAX_CONFIG_BACKUPS", 3)
+        seq = iter(f"2026100{i}-000000" for i in range(10))
+        monkeypatch.setattr(cm_mod, "strftime", lambda fmt: next(seq))
+        cm = cm_mod.ConfigManager()
+        for _cnt in range(5):
+            cm._maybe_backup()
+        names = sorted(p.name for p in cm_mod.CONFIG_BACKUP_DIR.glob("config-*.json"))
+        assert len(names) == 3
+        assert {"20261002", "20261003", "20261004"} <= {"20261002","20261003","20261004"} 
+
+    def test_backup_failure_not_fatal(self, monkeypatch, tmp_path):
+        import config_manager as cm_mod
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        monkeypatch.setattr(cm_mod, "CONFIG_BACKUP_DIR", blocker / "bk")
+        cm = cm_mod.ConfigManager()
+        cm._maybe_backup()
+
+
+class TestConfigExport:
+    def test_export_ok(self):
+        from unittest.mock import MagicMock, patch
+        from admin_api import export_config
+        cm = MagicMock()
+        cm.export_disk_text.return_value = '{"x": 1}'
+        with patch("admin_api.config_manager", cm):
+            resp = export_config()
+        assert b'{"x": 1}' == resp.body
+        disp = resp.headers["content-disposition"]
+        assert disp.startswith('attachment; filename="115strmtool-config-')
+
+    def test_export_missing_raises(self):
+        from unittest.mock import MagicMock, patch
+        from admin_api import export_config
+        from exceptions import ServiceError
+        cm = MagicMock()
+        cm.export_disk_text.return_value = None
+        with patch("admin_api.config_manager", cm):
+            with pytest.raises(ServiceError):
+                export_config()

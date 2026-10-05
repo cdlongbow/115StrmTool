@@ -1,7 +1,10 @@
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
+from datetime import datetime
+
 from fastapi import APIRouter
+from fastapi.responses import Response
 
 from exceptions import ServiceError
 
@@ -26,6 +29,19 @@ _restart_p115_callback: Callable = None
 @router.get("/config")
 def get_config() -> Dict[str, Any]:
     return mask_config(config_manager.get())
+
+
+@router.get("/config/export")
+def export_config() -> Response:
+    data = config_manager.export_disk_text()
+    if data is None:
+        raise ServiceError("配置文件不存在，无法导出")
+    filename = f"115strmtool-config-{datetime.now():%Y%m%d-%H%M%S}.json"
+    return Response(
+        content=data,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/config")

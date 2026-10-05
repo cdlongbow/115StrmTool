@@ -288,8 +288,10 @@ function stopPolling(h) {
     <div id="p115_pathMappings"></div>
     <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
   </div>
-  <div class="card" style="display:flex;gap:8px">
+  <div class="card" style="display:flex;gap:8px;align-items:center">
     <button class="btn btn-primary" onclick="saveP115Config()">保存配置</button>
+    <button class="btn btn-outline" onclick="exportConfig()">导出配置</button>
+    <span style="font-size:12px;color:#888">导出文件含加密 Cookie，请妥善保管</span>
   </div>
 </div>
 
@@ -641,6 +643,22 @@ function confirmBrowser() {
 
 function closeBrowser() {
   document.getElementById('browserModal').style.display = 'none';
+}
+
+async function exportConfig() {
+  try {
+    var r = await apiFetch('/admin/api/config/export');
+    var blob = await r.blob();
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    var cd = r.headers.get('Content-Disposition') || '';
+    var m = cd.match(/filename="?([^"]+)"?/);
+    a.download = m ? m[1] : 'config.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { alert('导出失败: ' + e.message); }
 }
 
 async function saveP115Config() {

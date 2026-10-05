@@ -7,6 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 from threading import RLock
+from time import strftime, time
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
@@ -19,6 +20,9 @@ else:
     _BASE_DIR = Path(__file__).parent
 
 CONFIG_FILE = _BASE_DIR / "config.json"
+CONFIG_BACKUP_DIR = _BASE_DIR / "config_backups"
+MAX_CONFIG_BACKUPS = 10
+CONFIG_BACKUP_MIN_INTERVAL = 3600.0
 
 PIN_RULES_SEP = " => "
 
@@ -203,6 +207,17 @@ class ConfigManager:
         with self._lock:
             return self._deep_copy(self._config)
 
+    def export_disk_text(self) -> Optional[str]:
+        """
+        读取磁盘当前配置原文用于导出（Cookie 保持密文形态）
+
+        :return str: 配置文件内容，文件不存在或读取失败返回 None
+        """
+        try:
+            return CONFIG_FILE.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
     def _write(self) -> bool:
         tmp_path: Optional[Path] = None
         try:
@@ -217,6 +232,7 @@ class ConfigManager:
                     json.dump(config_to_write, f, ensure_ascii=False, indent=2)
                 os.replace(tmp_path, CONFIG_FILE)
             logger.info("配置已保存: %s", CONFIG_FILE.resolve())
+            self._maybe_backup()
             return True
         except OSError as e:
             logger.error("配置保存失败: %s", e)
@@ -226,6 +242,28 @@ class ConfigManager:
                 except OSError:
                     pass
             return False
+
+    def _maybe_backup(self):
+        """
+        配置写盘成功后做滚动快照，保留最近 MAX_CONFIG_BACKUPS 份
+
+        距上一份不足 CONFIG_BACKUP_MIN_INTERVAL 秒则跳过，避免高频写
+        把有效历史轮换掉；快照内容沿用磁盘形态（Cookie 为密文）
+        """
+        try:
+            CONFIG_BACKUP_DIR.mkdir(exist_ok=True)
+            backups = sorted(CONFIG_BACKUP_DIR.glob("config-*.json"))
+            now = time()
+            if backups and now - backups[-1].stat().st_mtime < CONFIG_BACKUP_MIN_INTERVAL:
+                return
+            dest = CONFIG_BACKUP_DIR / f"config-{strftime('%Y%m%d-%H%M%S')}.json"
+            shutil.copy2(CONFIG_FILE, dest)
+            stale = sorted(CONFIG_BACKUP_DIR.glob("config-*.json"))[:-MAX_CONFIG_BACKUPS]
+            for old in stale:
+                old.unlink(missing_ok=True)
+            logger.info("配置快照已备份: %s", dest.name)
+        except OSError as e:
+            logger.warning("配置快照备份失败: %s", e)
 
     def parse_pin_rules(self, raw: str) -> List[Tuple[str, str]]:
         result = []
