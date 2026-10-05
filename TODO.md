@@ -1,6 +1,14 @@
 # TODO
 
-未来可做事项清单，按价值与成本排序。来源：上游 zkmydgth/MoviePilot-Plugins 借鉴分析与本项目遗留项。
+未来可做事项清单，按价值与成本排序。来源：上游 zkmydgth/MoviePilot-Plugins、pancras-loe/115-station、Ponphil/LitePan 的借鉴分析与本项目遗留项。
+
+## 同步与风控类（来自 115-station / LitePan）
+
+- [ ] 快速全量同步模式：改用 115 递归整树端点把请求数从 O(目录数) 压到个位数——`webapi.115.com/files?cid=&show_dir=0` 一次拿子树全部文件（1150/页），配 `proapi.115.com/app/chrome/downfolders` 递归拿全部目录（5000/页，参数 pickcode 可由 cid 本地换算），两边内存拼完整路径；万级库约 10 次请求 vs 现在逐目录 DFS。downfolders 属未公开端点，必须带开关且失败自动降级回现有 DFS 模式（照搬 115-station fast115 的降级纪律）
+- [ ] 行为事件流增量同步：拉 `proapi.115.com/android/behavior/detail`（失败降级 `webapi.115.com/behavior/detail`，端点状态持久化），以单调递增事件 id 做游标 + 去重，事件自带 pick_code 时零遍历直推 STRM；已知盲区"回收站还原不产生新增事件"须靠低频全量校对兜底（参考 115-station life115/incr115 分层：拉取层与应用层分离）。我们的"增量"目前是再扫一遍目录 diff，改造后可显著降低 API 频次与风控暴露
+- [ ] 115 开放平台 OpenAPI 通道评估：OAuth PKCE 设备码登录（authDeviceCode → 轮询扫码 → deviceCodeToToken → refreshToken 自动续期，access_token 约 2h），proapi `/open/*` 属官方授权接口、无 UA 指纹风控、错误码明确（770004 频繁 / 406 额度上限 / 401401xx 需刷新 token）；前提是在 open.115.com 申请个人 AppID 且有调用额度，建议先只覆盖列表/目录类只读接口试点，Cookie 通道保留兜底（实现参考 115-station open115.go 与 LitePan drivers/115_Open）
+- [ ] 缓存热度保持（可选低优先）：定时对近期播放的 STRM 目标文件做轻量 range 读（首块），保持 115CDN 边缘缓存热度、降低冷文件首播缓冲（参考 LitePan cacheretention：任务时间窗、配置指纹变更重排、与同步/整理类任务互斥调度）
+- [ ] 消息通知（最低优先）：同步失败、被风控、签到异常推送 telegram/ntfy/Server酱 任一渠道；桌面工具形态优先级低于以上各项
 
 ## 功能类
 
@@ -11,7 +19,7 @@
 ## 依赖与升级类
 
 - [ ] p115 依赖升级路线：`python-concurrenttools<0.1.9` 上限的解除以完成 p115client 0.0.9.7.x 迁移为前提（iterdir 新 API 重构，符号删改约 29 处，属较大工作量；期间维持 0.0.9.6.5.1 现状）。备选兜底：上游 `7e04f7a2` 的运行时别名方案（新名存在且旧名缺失时把 `thread_conmap/async_conmap` 别名回 `threadpool_map/taskgroup_map`，约 200 行含测试）；仅当未来需兼容无法强制降级的共享环境时再移植
-- [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的 db 文件
+- [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
 
 ## 测试类
 
