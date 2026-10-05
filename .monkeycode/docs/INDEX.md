@@ -27,6 +27,8 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | Emby 反向代理 | 302 直链重定向、PlaybackInfo 拦截、JS 修补 | `combined/proxy_app.py` |
 | 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存 | `combined/redirect_service.py` |
 | STRM 文件生成器 | 目录遍历、STRM 写入、附属元数据下载 | `combined/strm_generator.py` |
+| 快速整树扫描 | 递归整树端点一次取整棵子树、端点不可用自动回退 | `combined/fast_scan.py` |
+| 危险操作确认门 | 不可恢复操作的 90 秒一次性确认令牌 | `combined/confirm_gate.py` |
 | 115 客户端封装 | 加密下载 API、二维码登录、文件浏览 | `combined/p115_client_wrapper.py` |
 | 管理 API | STRM 同步、二维码登录、签到 | `combined/api_routes.py` |
 | 管理面板 API | 配置读写、服务控制、日志查看 | `combined/admin_api.py` |
@@ -72,7 +74,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（140 个用例）
+# 运行单元测试（165 个用例）
 cd combined && python -m pytest -q
 
 # 静态检查（规则集见根目录 ruff.toml）
@@ -92,7 +94,7 @@ pip install -r combined/requirements.txt
 | `combined/main.py` | 应用入口 |
 | `combined/proxy_app.py` | 反向代理核心 |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
-| `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试） |
+| `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试 + 逐文件独立执行校验） |
 | `.github/workflows/release.yml` | CI/CD 发布工作流（版本一致性校验 → 测试 → 打包 → Release） |
 | `combined/requirements.txt` | 运行时依赖 |
 | `combined/wheels/` | 发版构建锁包快照（45 个，含平台专用 wheel，勿整目录安装） |

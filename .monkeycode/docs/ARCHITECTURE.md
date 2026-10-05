@@ -54,6 +54,9 @@ MoviePilot-Windows/
 │   ├── database.py             # SQLite 持久化层
 │   ├── windows_tray.py         # Windows 系统托盘与原生窗口
 │   ├── checkin_scheduler.py    # 115 每日签到调度
+│   ├── fast_scan.py            # 快速整树扫描（递归整树端点 + 逐目录回退）
+│   ├── confirm_gate.py         # 危险操作确认有效期门（一次性令牌）
+│   ├── exceptions.py           # 统一业务异常定义
 │   ├── logger.py               # 日志设置
 │   ├── build_exe.py            # PyInstaller 构建脚本
 │   ├── web/
@@ -77,6 +80,7 @@ MoviePilot-Windows/
 **位置**: `combined/api_routes.py` + `combined/admin_api.py`
 **关键文件**: `main.py`（通过 `create_admin_app()` 组装路由）
 **依赖**: `config_manager`, `p115_client_wrapper`, `strm_generator`, `database`
+**安全**: 全局中间件校验 `X-Admin-Token`；不可恢复操作须经 `confirm_gate` 签发的一次性确认令牌（`X-Confirm-Token`）
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
@@ -97,7 +101,7 @@ MoviePilot-Windows/
 ### STRM 文件生成器
 **目的**: 遍历 115 网盘目录，为媒体文件生成 STRM 占位文件
 **位置**: `combined/strm_generator.py`
-**依赖**: `p115_client_wrapper`, `database`, `config_manager`
+**依赖**: `p115_client_wrapper`, `fast_scan`, `database`, `config_manager`
 **被依赖**: 管理 API（用户触发同步）
 
 ### 签到调度
@@ -109,7 +113,7 @@ MoviePilot-Windows/
 ### 持久化层
 **目的**: 存储 STRM 清单、同步历史
 **位置**: `combined/database.py` + `combined/config_manager.py`
-**关键文件**: `database.py`（SQLite，`PRAGMA user_version` 版本号增量迁移）, `config_manager.py`（JSON 配置）
+**关键文件**: `database.py`（SQLite，`PRAGMA user_version` 版本号增量迁移）, `config_manager.py`（JSON 配置，写盘后自动滚动快照到 `config_backups/`，保留 10 份）
 
 ## 图表
 

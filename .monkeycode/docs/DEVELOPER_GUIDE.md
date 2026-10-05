@@ -77,6 +77,9 @@ python build_exe.py
 | `p115.overwrite_mode` | `never` | STRM 覆盖模式（never/always） |
 | `p115.same_playback` | `false` | 多端播放开关（并发播放时复制副本换取独立播放地址） |
 | `p115.same_playback_dir` | `/多端播放` | 多端播放副本存放的网盘目录 |
+| `p115.fast_scan` | `true` | 快速整树扫描开关（递归整树端点不可用时自动回退逐目录遍历） |
+
+配置每次写盘后自动生成滚动快照（程序目录 `config_backups/`，保留最近 10 份、同一小时内去重）；管理面板"导出配置"按钮可下载当前配置文件（Cookie 保持 `#ENC#` 密文）。
 
 配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。
 
@@ -93,6 +96,7 @@ python build_exe.py
 - 托盘"打开管理界面"会以 `/?token=...` 形式自动注入，无需手动输入。
 - 令牌存放在 `config.json` 的 `admin_token` 字段（管理界面回显中掩码显示）。测试或脚本里需要带令牌调用接口时，用 `curl -H "X-Admin-Token: $(python3 -c "import json;print(json.load(open('combined/config.json'))['admin_token'])")" ...` 读取。
 - 若删除该字段并重启，会重新生成新令牌。
+- 重置同步数据、清空同步记录、清空日志这三类不可恢复接口除管理令牌外，还要求 `X-Confirm-Token` 请求头：先 `POST /admin/api/confirm-ops` 签发 90 秒一次性令牌，详见接口文档"危险操作确认"一节。
 
 
 
@@ -103,7 +107,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（140 个用例） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（165 个用例） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
