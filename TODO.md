@@ -10,7 +10,7 @@
 
 ## 依赖与升级类
 
-- [ ] p115 依赖升级路线：`python-concurrenttools<0.1.9` 上限的解除以完成 p115client 0.0.9.7.x 迁移为前提（iterdir 新 API 重构，符号删改约 29 处，属较大工作量；期间维持 0.0.9.6.5.1 现状）
+- [ ] p115 依赖升级路线：`python-concurrenttools<0.1.9` 上限的解除以完成 p115client 0.0.9.7.x 迁移为前提（iterdir 新 API 重构，符号删改约 29 处，属较大工作量；期间维持 0.0.9.6.5.1 现状）。备选兜底：上游 `7e04f7a2` 的运行时别名方案（新名存在且旧名缺失时把 `thread_conmap/async_conmap` 别名回 `threadpool_map/taskgroup_map`，约 200 行含测试）；仅当未来需兼容无法强制降级的共享环境时再移植
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的 db 文件
 
 ## 测试类

@@ -127,7 +127,11 @@ class P115ClientWrapper:
             )
             logger.info("115 客户端初始化成功")
         except ImportError:
-            logger.error("p115client 库未安装，请执行: pip install p115client==0.0.9.6.5.1")
+            logger.error(
+                "p115client 导入失败（未安装或依赖版本冲突，"
+                "如需修复: pip install p115client==0.0.9.6.5.1）",
+                exc_info=True,
+            )
             self._client = None
         except Exception as e:
             logger.error("115 客户端初始化失败: %s", e, exc_info=True)
