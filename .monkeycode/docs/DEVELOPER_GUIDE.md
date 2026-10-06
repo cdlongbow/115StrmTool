@@ -96,7 +96,6 @@ python build_exe.py
 - 托盘"打开管理界面"会以 `/?token=...` 形式自动注入，无需手动输入。
 - 令牌存放在 `config.json` 的 `admin_token` 字段（管理界面回显中掩码显示）。测试或脚本里需要带令牌调用接口时，用 `curl -H "X-Admin-Token: $(python3 -c "import json;print(json.load(open('combined/config.json'))['admin_token'])")" ...` 读取。
 - 若删除该字段并重启，会重新生成新令牌。
-- 重置同步数据、清空同步记录、清空日志这三类不可恢复接口除管理令牌外，还要求 `X-Confirm-Token` 请求头：先 `POST /admin/api/confirm-ops` 签发 90 秒一次性令牌，详见接口文档"危险操作确认"一节。
 
 
 

@@ -28,7 +28,6 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存 | `combined/redirect_service.py` |
 | STRM 文件生成器 | 目录遍历、STRM 写入、附属元数据下载 | `combined/strm_generator.py` |
 | 快速整树扫描 | 递归整树端点一次取整棵子树、端点不可用自动回退 | `combined/fast_scan.py` |
-| 危险操作确认门 | 不可恢复操作的 90 秒一次性确认令牌 | `combined/confirm_gate.py` |
 | 115 客户端封装 | 加密下载 API、二维码登录、文件浏览 | `combined/p115_client_wrapper.py` |
 | 管理 API | STRM 同步、二维码登录、签到 | `combined/api_routes.py` |
 | 管理面板 API | 配置读写、服务控制、日志查看 | `combined/admin_api.py` |

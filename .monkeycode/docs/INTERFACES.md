@@ -177,23 +177,6 @@ GET /admin/api/config/export
 
 导出磁盘当前配置原文（attachment 下载，文件名含时间戳）。Cookie 保持文件中的加密形态而非明文；每次配置写盘另有自动滚动快照（程序目录 `config_backups/`，保留 10 份、一小时内去重）。
 
-### 危险操作确认
-
-```
-POST /admin/api/confirm-ops
-Content-Type: application/json
-
-{ "op": "sync.reset-baseline" }
-```
-
-对破坏性操作签发 90 秒一次性确认令牌（`op` 取值：`sync.reset-baseline` / `sync.history-clear` / `logs.clear`）。被门禁的三个接口执行前必须携带请求头 `X-Confirm-Token`，缺失、过期、重放或操作不匹配均返回错误：
-
-```
-POST /api/sync/reset-baseline
-POST /api/sync/history/clear
-DELETE /admin/api/logs
-```
-
 ### Emby 配置
 
 ```

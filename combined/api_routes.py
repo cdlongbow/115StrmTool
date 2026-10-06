@@ -3,10 +3,9 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter
 
 from checkin_scheduler import checkin_scheduler
-from confirm_gate import confirm_gate
 from config_manager import config_manager, mask_config
 from database import db
 from exceptions import ClientNotReadyError, ServiceError
@@ -271,17 +270,13 @@ def get_sync_history(limit: int = 20) -> List[Dict]:
 
 
 @router.post("/sync/history/clear")
-def clear_sync_history(x_confirm_token: str = Header(default="")) -> Dict[str, Any]:
-    if not confirm_gate.consume("sync.history-clear", x_confirm_token):
-        raise ServiceError("确认已过期，请重新确认")
+def clear_sync_history() -> Dict[str, Any]:
     db.clear_sync_history()
     return {"success": True}
 
 
 @router.post("/sync/reset-baseline")
-def reset_sync_baseline(x_confirm_token: str = Header(default="")) -> Dict[str, Any]:
-    if not confirm_gate.consume("sync.reset-baseline", x_confirm_token):
-        raise ServiceError("确认已过期，请重新确认")
+def reset_sync_baseline() -> Dict[str, Any]:
     db.clear_all_files()
     db.clear_sync_history()
     return {"success": True}

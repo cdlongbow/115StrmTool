@@ -3,10 +3,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from datetime import datetime
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter
 from fastapi.responses import Response
 
-from confirm_gate import CONFIRM_TTL_SECONDS, DANGEROUS_OPS, confirm_gate
 
 from exceptions import ServiceError
 
@@ -24,9 +23,6 @@ class ConfigUpdateRequest(BaseModel):
     p115: Optional[Dict[str, Any]] = None
 
 
-class ConfirmOpsRequest(BaseModel):
-    op: str
-
 _restart_emby_callback: Callable = None
 _emby_status = {"running": False}
 _restart_p115_callback: Callable = None
@@ -35,14 +31,6 @@ _restart_p115_callback: Callable = None
 @router.get("/config")
 def get_config() -> Dict[str, Any]:
     return mask_config(config_manager.get())
-
-
-@router.post("/confirm-ops")
-def request_confirm(req: ConfirmOpsRequest) -> Dict[str, Any]:
-    if req.op not in DANGEROUS_OPS:
-        raise ServiceError(f"未知危险操作: {req.op}")
-    token = confirm_gate.issue(req.op)
-    return {"token": token, "expires_in": int(CONFIRM_TTL_SECONDS)}
 
 
 @router.get("/config/export")
@@ -176,12 +164,10 @@ def get_logs(lines: int = 200) -> Dict:
 
 
 @router.delete("/logs")
-def clear_logs(x_confirm_token: str = Header(default="")) -> Dict:
+def clear_logs() -> Dict:
     """
     清空日志文件
     """
-    if not confirm_gate.consume("logs.clear", x_confirm_token):
-        raise ServiceError("确认已过期，请重新确认")
     try:
         # 主日志由 RotatingFileHandler 持有，直接重置流内容避免 fd 偏移产生 NUL 空洞
         from logging.handlers import RotatingFileHandler

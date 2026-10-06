@@ -55,7 +55,6 @@ MoviePilot-Windows/
 │   ├── windows_tray.py         # Windows 系统托盘与原生窗口
 │   ├── checkin_scheduler.py    # 115 每日签到调度
 │   ├── fast_scan.py            # 快速整树扫描（递归整树端点 + 逐目录回退）
-│   ├── confirm_gate.py         # 危险操作确认有效期门（一次性令牌）
 │   ├── exceptions.py           # 统一业务异常定义
 │   ├── logger.py               # 日志设置
 │   ├── build_exe.py            # PyInstaller 构建脚本
@@ -80,7 +79,7 @@ MoviePilot-Windows/
 **位置**: `combined/api_routes.py` + `combined/admin_api.py`
 **关键文件**: `main.py`（通过 `create_admin_app()` 组装路由）
 **依赖**: `config_manager`, `p115_client_wrapper`, `strm_generator`, `database`
-**安全**: 全局中间件校验 `X-Admin-Token`；不可恢复操作须经 `confirm_gate` 签发的一次性确认令牌（`X-Confirm-Token`）
+**安全**: 全局中间件校验 `X-Admin-Token`
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
