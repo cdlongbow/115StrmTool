@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release 版本号（需与 CHANGELOG 顶部条目标题一致，如 20261003）'
+        description: 'Release 版本号（需与 CHANGELOG 顶部条目标题一致，如 20261003；同日再次发布加序号，如 20261003-2）'
         required: true
         type: string
 
@@ -33,13 +33,19 @@ jobs:
           m = re.search(r'^##\s*\[(.+?)\]', Path('CHANGELOG.md').read_text(encoding='utf-8'), re.M)
           if not ref:
               raise SystemExit('release ref is empty')
+          kb = re.fullmatch(r'(\d{8})(?:-(\d{1,2}))?', ref)
+          if not kb:
+              raise SystemExit('release ref must be YYYYMMDD or same-day serial YYYYMMDD-N: ' + ref)
+          if kb.group(2) is not None and int(kb.group(2)) < 1:
+              raise SystemExit('same-day serial suffix must be >= 1: ' + ref)
           if not m:
               raise SystemExit('CHANGELOG.md has no version heading like: ## [2026-10-03]')
           head = m.group(1)
           norm = lambda s: s.replace('-', '').replace('_', '')
-          if norm(ref) != norm(head):
+          if norm(kb.group(1)) != norm(head):
               raise SystemExit('version mismatch: release ref=' + ref + ' changelog head=' + head)
-          print('OK: release ref ' + ref + ' matches CHANGELOG head ' + head)
+          suffix = ' (same-day release #' + kb.group(2) + ')' if kb.group(2) else ''
+          print('OK: release ref ' + ref + ' matches CHANGELOG head ' + head + suffix)
           "
 
       - name: Setup Python 3.12

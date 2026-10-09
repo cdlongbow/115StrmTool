@@ -60,6 +60,7 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - p115client 禁止升级到 0.0.9.7.x：iterdir 大重构删除约 29 个符号（iter_file_list、iter_files_with_path_skim、traverse_tree_with_path 等），与本仓库 p115_client_wrapper 不兼容，上游同版本升级当天即回滚
   - python-concurrenttools 必须 <0.1.9（0.1.9 将 threadpool_map 改名 thread_conmap，p115client 0.0.9.6.5.1 导入即崩）；requirements.txt 已钉上限
   - 上游本地 wheels + --find-links 不防 pip 拉远端高版本，钉版必须写进 requirements 显式约束
+  - 2026-10-09 更新：两个上游已完成 p115client 0.0.9.7.2 适配（DDSRem `7ddd3ec3`、zkmydgth v2.7.19），本仓库 wrapper 迁移可对照其 diff 进行；在未完成迁移核对前，本仓库仍维持 0.0.9.6.5.1 钉版不动
 
 ### 发版流程与测试环境约束
 - Date: 2026-10-05
@@ -68,5 +69,6 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Instructions:
   - 发版动作 = 打日期 tag：`git tag YYYYMMDD && git push origin <tag>`，触发 release workflow 自动构建并上传 GitHub Release，产物 exe 命名 `115.STRM.302.exe`
   - release workflow 首步版本一致性校验：tag 名（去 v/-/_ 归一）必须等于 CHANGELOG 顶部 `## [YYYY-MM-DD]` 日期段日期，否则流水线失败；发版前确认顶部未发布日期段就是目标日期
+  - 同日多次发布用序号 tag（`YYYYMMDD-2` 起，序号 1-99 且从 1 开始），校验只比对主日期；同日新改动追加进 CHANGELOG 同一日期节（Release 说明取顶部日期节全文，天然包含累计内容）
   - 发版或推送后应检查失败 job 日志定位根因，勿假定流水线必绿
   - 本地沙箱为 Python 3.11，p115client 系列依赖要求 setuptools>=77（需 3.12）装不上真实 SDK；测试涉及 p115client 时一律用 patch.dict / conftest 的 stub_modules 注入假模块，不得在沙箱 pip install 真实 SDK

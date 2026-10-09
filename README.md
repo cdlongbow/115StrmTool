@@ -78,7 +78,7 @@ python build_exe.py
 
 生成 `dist/115网盘STRM生成与302工具.exe`。
 
-GitHub Actions 自动构建：推送日期格式 tag（如 `20261003`）或手动触发 workflow_dispatch（输入版本号）。发版流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致，不一致直接失败。构建流程先运行全部单元测试，测试通过后才打包 exe 并创建 Release。Release 说明自动取自 CHANGELOG.md 最顶部条目，发版前请先更新它。
+GitHub Actions 自动构建：推送日期格式 tag（如 `20261003`；当日需要再次发布时加序号，如 `20261003-2`，改动追加到 CHANGELOG 同一日期节内）或手动触发 workflow_dispatch（输入版本号）。发版流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致，不一致直接失败。构建流程先运行全部单元测试，测试通过后才打包 exe 并创建 Release。Release 说明自动取自 CHANGELOG.md 最顶部条目，发版前请先更新它。
 
 ## 技术栈
 

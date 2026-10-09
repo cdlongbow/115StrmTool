@@ -21,7 +21,7 @@
 ## 依赖与升级类
 
 - [ ] p115 依赖升级路线：上游两个仓库已于 2026-10-09 完成 p115client 0.0.9.7.2 适配（DDSRem `7ddd3ec3` + zkmydgth v2.7.19 同步；配套升级 bundled wheels、pyo3 v0.29），iterdir 新 API 重构已被上游消化——迁移参考基准从"等上游"变为"对照这两笔适配 diff 核对本仓库 p115_client_wrapper 的符号用法"；完成后解除 `python-concurrenttools<0.1.9` 上限。当前 0.0.9.6.5.1 稳定无 forcing factor，待出现只有新版才修的问题时再启动
-- [ ] 发版同日序号版本（低成本）：现版本一致性校验要求 tag 与 CHANGELOG 顶部日期相等，日内二次发布无路可走；115-station `6f9264b9` 采用"日期版本 + 同日 `-N` 序号当正式版"写法。候选方案：release.yml 校验放行 `YYYYMMDD-N` tag（归一后比对日期部分），配套 CHANGELOG 同日多节或节内追加约定
+- [x] 【已完成 2026-10-09】发版同日序号版本：现版本一致性校验要求 tag 与 CHANGELOG 顶部日期相等，日内二次发布无路可走；115-station `6f9264b9` 采用"日期版本 + 同日 `-N` 序号当正式版"写法。候选方案：release.yml 校验放行 `YYYYMMDD-N` tag（归一后比对日期部分），配套 CHANGELOG 同日多节或节内追加约定
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
 
 ## 测试类
