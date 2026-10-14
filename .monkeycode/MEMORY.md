@@ -72,3 +72,13 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 同日多次发布用序号 tag（`YYYYMMDD-2` 起，序号 1-99 且从 1 开始），校验只比对主日期；同日新改动追加进 CHANGELOG 同一日期节（Release 说明取顶部日期节全文，天然包含累计内容）
   - 发版或推送后应检查失败 job 日志定位根因，勿假定流水线必绿
   - 本地沙箱为 Python 3.11，p115client 系列依赖要求 setuptools>=77（需 3.12）装不上真实 SDK；测试涉及 p115client 时一律用 patch.dict / conftest 的 stub_modules 注入假模块，不得在沙箱 pip install 真实 SDK
+
+### 上游借鉴来源与跟踪重点
+- Date: 2026-10-14
+- Context: Agent 在周期性巡查四仓更新时发现
+- Category: 工作流协作
+- Instructions:
+  - 四个参考上游：DDSRem-Dev/MoviePilot-Plugins（本项目移植来源，README 记载）、zkmydgth/MoviePilot-Plugins（同源活跃 fork）、pancras-loe/115-station、Ponphil/LitePan
+  - **P115StrmHelper 参考主线在 DDSRem 本家**：zkmydgth 已于 2026-10-14（`db8ea296`）把该插件归档并从市场下架（package.v3.json 撤条目）；查该插件演进只看 DDSRem
+  - 巡查结论收窄：115-station 主线已分化到 NAS 整理/刮削/Emby 对账/订阅，本项目为桌面轻量定位，只关注其 115 端点变动与同步/清理类修复；LitePan 长期无提交
+  - 巡查方法用 GitHub API（需带 git credential 里的 token 以避开匿名限流），起点接上次巡查末条提交日期
