@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from config_manager import config_manager, mask_config, COOKIE_MASK
 from logger import logger
 
+from app_metadata import APP_VERSION
+
 router = APIRouter(prefix="/admin/api")
 
 # 全局配置模型
@@ -143,10 +145,16 @@ def get_p115_status() -> Dict[str, Any]:
 
 @router.get("/status")
 def get_combined_status() -> Dict[str, Any]:
+    """
+    返回各服务运行状态、启用开关与程序版本号，供概览页一次拉取
+
+    :return Dict: 含 emby/p115 状态与 version 的字典
+    """
     config = config_manager.get()
     return {
         "emby": {"running": _emby_status["running"], "enabled": config.get("emby", {}).get("enabled", False)},
         "p115": {"running": _p115_status["running"], "enabled": config.get("p115", {}).get("enabled", False)},
+        "version": APP_VERSION,
     }
 
 

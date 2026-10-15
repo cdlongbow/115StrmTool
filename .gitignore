@@ -191,3 +191,6 @@ combined/wheels_backup_old/
 config.json
 combined/config.json
 combined/config_backups/
+
+# 构建期注入的版本号（由 CI 依据 tag 生成，不入库）
+combined/_build_version.py

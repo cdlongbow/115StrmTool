@@ -71,6 +71,7 @@ def run_tray(
     admin_url: str = "http://localhost:8100",
     admin_port: int = 8100,
     on_exit: Optional[Callable[[], None]] = None,
+    tooltip: Optional[str] = None,
 ) -> None:
     """
     运行系统托盘，菜单回调在工作线程执行
@@ -79,6 +80,7 @@ def run_tray(
     :param admin_url (str): 管理界面地址
     :param admin_port (int): 管理端口
     :param on_exit (Callable): 退出时的清理回调
+    :param tooltip (str): 悬停提示文本，缺省与 app_name 相同
     """
     if not _HAS_PYSTRAY:
         raise RuntimeError("pystray 未安装，无法运行托盘")
@@ -127,7 +129,7 @@ def run_tray(
         pystray.MenuItem("退出", _quit),
     )
 
-    icon = pystray.Icon(app_name, icon_image, app_name, menu)
+    icon = pystray.Icon(app_name, icon_image, tooltip or app_name, menu)
     icon.run()
 
 

@@ -6,7 +6,9 @@ def main():
     hidden = [
         "admin_api",
         "api_routes",
+        "app_metadata",
         "app_ver",
+        "_build_version",
         "checkin_scheduler",
         "config_manager",
         "database",

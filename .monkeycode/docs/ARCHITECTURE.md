@@ -55,6 +55,7 @@ MoviePilot-Windows/
 │   ├── windows_tray.py         # Windows 系统托盘与原生窗口
 │   ├── checkin_scheduler.py    # 115 每日签到调度
 │   ├── fast_scan.py            # 快速整树扫描（递归整树端点 + 逐目录回退）
+│   ├── app_metadata.py         # 应用版本号（CI 注入 _build_version，本地回退 dev）
 │   ├── exceptions.py           # 统一业务异常定义
 │   ├── logger.py               # 日志设置
 │   ├── build_exe.py            # PyInstaller 构建脚本

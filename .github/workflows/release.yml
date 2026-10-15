@@ -81,6 +81,23 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
 
+      - name: Inject build version
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          python -c "
+          import os
+          from pathlib import Path
+
+          ref = os.environ['RELEASE_REF'].strip().lstrip('v')
+          if not ref:
+              raise SystemExit('release ref is empty')
+          Path('combined/_build_version.py').write_text(
+              '__version__ = ' + repr(ref) + '\n', encoding='utf-8'
+          )
+          print('Injected build version:', ref)
+          "
+
       - name: Build executable
         working-directory: combined
         run: python build_exe.py

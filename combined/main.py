@@ -13,6 +13,7 @@ from uvicorn import Config, Server
 
 from config_manager import config_manager
 from logger import logger
+from app_metadata import APP_VERSION
 from admin_api import (
     set_emby_status,
     set_emby_restart_callback,
@@ -323,7 +324,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     logger.info("=" * 56)
-    logger.info("  115网盘STRM生成与302工具")
+    logger.info("  115网盘STRM生成与302工具  v%s", APP_VERSION)
     logger.info("=" * 56)
 
     config = config_manager.get()
@@ -357,6 +358,7 @@ def main():
             admin_url=f"http://127.0.0.1:{config.get('admin_port', 8100)}/?token={admin_token}",
             admin_port=int(config.get("admin_port", 8100)),
             on_exit=_shutdown_for_tray_exit,
+            tooltip=f"115网盘STRM生成与302工具 v{APP_VERSION}",
         )
         # 正常退出路径已在 _shutdown_for_tray_exit 中强制终止进程，
         # 走到这里说明托盘异常退出，同样强制退出避免进程残留

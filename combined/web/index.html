@@ -194,6 +194,7 @@ function stopPolling(h) {
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 24px">
     <label class="switch"><input type="checkbox" id="p115_autostart" onchange="saveAutostart()"><span class="slider"></span></label>
     <span>开机自动启动（后台运行）</span>
+    <span id="appVersion" style="margin-left:auto;font-size:12px;color:#999"></span>
   </div>
 </div>
 
@@ -478,6 +479,7 @@ function updateDashboard() {
       document.getElementById('svcEmbySub').textContent = s.emby.enabled ? '(已启用)' : '(未启用)';
       document.getElementById('svcP115').textContent = s.p115.running ? '运行中' : '已停止';
       document.getElementById('svcP115Sub').textContent = s.p115.enabled ? '(已启用)' : '(未启用)';
+      document.getElementById('appVersion').textContent = s.version ? '版本 v' + s.version : '';
     }),
     apiJson('/admin/api/p115/status').then(s => {
       const n = (s.stats && s.stats.total_files) || 0;
