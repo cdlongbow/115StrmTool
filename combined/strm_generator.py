@@ -299,6 +299,9 @@ class StrmGenerator:
             try:
                 all_files = []
                 rust_items = []
+                # 仅对整根扫描成功的目录做删除判定，
+                # 防止根级解析或遍历异常导致该根存量被整体误判为已删除
+                scanned_roots: set = set()
                 for mapping in path_mappings:
                     if self._cancel_flag.is_set():
                         self._set_progress("cancelled", message="全量同步已取消")
@@ -363,6 +366,12 @@ class StrmGenerator:
                     except Exception as e:
                         logger.error("同步目录失败 %s: %s", pan_path, e, exc_info=True)
                         total_failed += 1
+                        note = f"{pan_path} 扫描失败，已跳过该目录残留清理"
+                        if note not in self._sync_notes:
+                            self._sync_notes.append(note)
+                    else:
+                        if not self._cancel_flag.is_set():
+                            scanned_roots.add(pan_path)
 
                 if self._use_rust and rust_items and not self._cancel_flag.is_set():
                     files_by_pan_path = {
@@ -382,6 +391,8 @@ class StrmGenerator:
                             if mapping.get("enabled") is False:
                                 continue
                             pan_path = mapping["from"]
+                            if pan_path not in scanned_roots:
+                                continue
                             for f in db.get_active_files_by_parent(pan_path):
                                 if f["pickcode"] not in seen_pickcodes:
                                     db.mark_file_deleted(f["pickcode"])
@@ -455,6 +466,9 @@ class StrmGenerator:
                 # 所有映射的存量记录汇总后再统一判定删除，
                 # 避免前序映射扫描时把尚未轮到的兄弟目录文件误判为已删除
                 all_existing: Dict[str, Dict] = {}
+                # 仅对整根扫描成功的目录做删除判定，
+                # 防止根级解析或遍历异常导致该根存量被整体误判为已删除
+                scanned_roots: set = set()
 
                 for mapping in path_mappings:
                     if self._cancel_flag.is_set():
@@ -473,6 +487,7 @@ class StrmGenerator:
                             "sha1": f["sha1"],
                             "pan_path": f["pan_path"],
                             "local_strm_path": f["local_strm_path"],
+                            "root": pan_path,
                         }
 
                     try:
@@ -607,10 +622,18 @@ class StrmGenerator:
                     except Exception as e:
                         logger.error("增量同步目录失败 %s: %s", pan_path, e, exc_info=True)
                         total_failed += 1
+                        note = f"{pan_path} 扫描失败，已跳过该目录残留清理"
+                        if note not in self._sync_notes:
+                            self._sync_notes.append(note)
+                    else:
+                        if not self._cancel_flag.is_set():
+                            scanned_roots.add(pan_path)
 
                 if not self._cancel_flag.is_set():
                     deleted_pickcodes = [
-                        pc for pc in all_existing if pc not in seen_pickcodes
+                        pc for pc in all_existing
+                        if pc not in seen_pickcodes
+                        and all_existing[pc]["root"] in scanned_roots
                     ]
                     for pc in deleted_pickcodes:
                         entry = all_existing[pc]

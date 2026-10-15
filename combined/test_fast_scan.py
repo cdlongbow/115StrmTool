@@ -114,7 +114,7 @@ def test_progress_callback():
     assert progress[0][1] == 4
 
 
-def test_empty_page_shortcut():
+def test_empty_page_truncated_raises():
     def handler(endpoint, nth):
         if endpoint == "files":
             if nth == 1:
@@ -122,8 +122,15 @@ def test_empty_page_shortcut():
             return {"state": True, "count": 99, "data": []}
         return DIRS_PAGE1
 
-    results, _ = _run(handler)
-    assert len(results) == 3
+    with pytest.raises(FastScanUnavailable):
+        _run(handler)
+
+
+def test_empty_first_page_zero_count_breaks():
+    wrapper = FakeWrapper(lambda endpoint, nth: {"state": True, "count": 0, "data": []})
+    entries, total = fast_scan._fetch_all_files(wrapper, ROOT_CID, None, None)
+    assert entries == []
+    assert total == 0
 
 
 def test_state_false_raises():

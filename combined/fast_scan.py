@@ -164,9 +164,10 @@ def _fetch_all_files(
         except (TypeError, ValueError):
             raise FastScanUnavailable("递归文件列表 count 字段异常")
         if not page:
-            if 0 < total > len(collected):
-                logger.warning(
-                    "快速扫描空页提前结束: 已收 %d/%d", len(collected), total,
+            if total > len(collected):
+                raise FastScanUnavailable(
+                    f"递归文件列表提前结束: 已收 {len(collected)}/{total}，"
+                    "结果不完整，降级逐目录遍历"
                 )
             break
         collected.extend(item for item in page if isinstance(item, dict))

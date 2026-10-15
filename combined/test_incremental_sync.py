@@ -317,6 +317,66 @@ class TestIncrementalSync:
         rec = db.get_file_by_pickcode("sub001")
         assert rec is not None and rec["status"] == "active"
 
+    def test_scan_failure_no_false_deletion(self, gen, db):
+        """根扫描失败防护：异常根目录的存量不应被当作已删除清掉"""
+        _reset_db(db)
+        sp = tmp_dir / "guard.strm"
+        sp.write_text("guard", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "guard001", "file_name": "guard.mp4", "file_size": 100,
+            "file_type": ".mp4", "pan_path": "/test/guard.mp4",
+            "local_strm_path": str(sp), "sha1": "sha_guard", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+
+        def _boom(*a, **kw):
+            raise RuntimeError("scan failed")
+
+        sg._iter_files_115 = _boom
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["failed"] == 1, f"r={r}"
+        assert r["deleted"] == 0, f"扫描失败的根不应触发删除: r={r}"
+        assert sp.exists(), "扫描失败时残留 STRM 应保留"
+        rec = db.get_file_by_pickcode("guard001")
+        assert rec is not None and rec["status"] == "active"
+        assert any("扫描失败" in n for n in gen._sync_notes), f"notes={gen._sync_notes}"
+
+    def test_full_sync_scan_failure_no_false_deletion(self, gen, db):
+        """全量同步根扫描失败防护：成功根的清理不应波及失败根"""
+        _reset_db(db)
+        gen._cleanup_deleted = True
+        sp = tmp_dir / "fsguard.strm"
+        sp.write_text("x", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "fsg001", "file_name": "fsguard.mp4", "file_size": 100,
+            "file_type": ".mp4", "pan_path": "/broot/fsguard.mp4",
+            "local_strm_path": str(sp), "sha1": "sha_fsg", "parent_id": "/broot",
+        }])
+        import strm_generator as sg
+        calls = {"n": 0}
+
+        def _seq(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return iter([
+                    {"name": "ok.mp4", "is_dir": False, "pickcode": "ok001",
+                     "pick_code": "ok001", "sha1": "sha_ok", "id": 1, "parent_id": 0,
+                     "size": 100, "path": "/aroot/ok.mp4"},
+                ])
+            raise RuntimeError("root scan failed")
+
+        sg._iter_files_115 = _seq
+        r = gen.full_sync([
+            {"from": "/aroot", "to": str(tmp_dir)},
+            {"from": "/broot", "to": str(tmp_dir)},
+        ])
+        assert r["failed"] == 1, f"r={r}"
+        assert r["deleted"] == 0, f"扫描失败的根不应误删: r={r}"
+        assert sp.exists(), "失败根的残留 STRM 应保留"
+        rec = db.get_file_by_pickcode("fsg001")
+        assert rec is not None and rec["status"] == "active"
+        assert any("扫描失败" in n for n in gen._sync_notes), f"notes={gen._sync_notes}"
+
 
 class TestSyncLockAndSingleton:
 
