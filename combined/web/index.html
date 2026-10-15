@@ -480,6 +480,7 @@ function updateDashboard() {
       document.getElementById('svcP115Sub').textContent = s.p115.enabled ? '(已启用)' : '(未启用)';
     }),
     apiJson('/admin/api/p115/status').then(s => {
+      const n = (s.stats && s.stats.total_files) || 0;
       document.getElementById('svcStrmFiles').textContent = n;
       document.getElementById('svcStrmSub').textContent = s.client_ready ? '115 已连接' : '未连接 115';
     }),
