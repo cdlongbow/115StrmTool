@@ -87,6 +87,15 @@ class P115Config(BaseModel):
     same_playback_dir: str = "/多端播放"
     paths: List[PathMapping] = Field(default_factory=list)
 
+    @field_validator("strm_url_prefix", mode="before")
+    @classmethod
+    def _normalize_strm_url_prefix(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        if v is None:
+            return ""
+        return v
+
     @field_validator("overwrite_mode")
     @classmethod
     def _validate_overwrite_mode(cls, v: str) -> str:

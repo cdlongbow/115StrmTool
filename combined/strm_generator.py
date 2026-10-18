@@ -68,7 +68,7 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
 class StrmGenerator:
     def __init__(self, client: P115ClientWrapper, url_prefix: str = ""):
         self._client = client
-        self._url_prefix = url_prefix.rstrip("/")
+        self._url_prefix = (url_prefix or "").strip().rstrip("/")
         self._cancel_flag = threading.Event()
         self._progress_callback: Optional[Callable] = None
         self._progress: Dict[str, Any] = {"phase": "idle", "current": 0, "total": 0, "message": ""}
@@ -787,6 +787,8 @@ class StrmGenerator:
     def _ensure_strm_file(self, strm_path: Path, pickcode: str, force: bool = False):
         if not force and self._overwrite_mode == "never" and strm_path.exists():
             return
+        if not self._url_prefix:
+            raise ValueError("未配置 STRM 跳转地址，请先在 P115 配置中填写服务地址")
         strm_path.parent.mkdir(parents=True, exist_ok=True)
         strm_url = f"{self._url_prefix}/api/v1/plugin/P115StrmHelper/redirect_url?pickcode={pickcode}"
         strm_path.write_text(strm_url, encoding="utf-8")

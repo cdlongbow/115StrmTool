@@ -210,6 +210,8 @@ def _launch_sync(sync_type: str) -> Dict[str, Any]:
 
     config = config_manager.get()
     p115_cfg = config.get("p115", {})
+    if not (p115_cfg.get("strm_url_prefix") or "").strip():
+        return {"status": "error", "message": "STRM 跳转地址未配置，请先在 P115 配置中填写服务地址"}
     from strm_generator import get_strm_generator
 
     gen = get_strm_generator(client, p115_cfg.get("strm_url_prefix", ""))
