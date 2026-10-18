@@ -287,3 +287,154 @@ def  set_autostart(req: AutostartRequest) -> Dict:
     """
     _set_autostart(req.enabled)
     return {"enabled": _get_autostart(), "supported": _autostart_supported()}
+
+
+class WebdavBackupConfigRequest(BaseModel):
+    """WebDAV 备份设置保存请求，password 传掩码串表示保留已存密码"""
+
+    enabled: Optional[bool] = None
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    remote_subdir: Optional[str] = None
+    keep_count: Optional[int] = None
+
+
+class RestoreRequest(BaseModel):
+    """恢复请求，档案名需通过白名单校验"""
+
+    name: str
+
+
+@router.get("/backup/webdav/config")
+def get_backup_webdav_config() -> Dict[str, Any]:
+    """
+    读取 WebDAV 备份配置（password 掩码展示）
+
+    :return Dict: masked 形态的 webdav 配置节
+    """
+    return mask_config(config_manager.get()).get("webdav", {})
+
+
+@router.post("/backup/webdav/config")
+def save_backup_webdav_config(req: WebdavBackupConfigRequest) -> Dict[str, Any]:
+    """
+    保存 WebDAV 备份配置，密码字段传掩码值时保留已存密码
+
+    :param req (WebdavBackupConfigRequest): 配置字段
+
+    :return Dict: 保存后的脱敏配置
+    """
+    update = {k: v for k, v in req.model_dump(exclude_none=True).items()}
+    if update.get("password") == COOKIE_MASK:
+        update.pop("password")
+    config_manager.update({"webdav": update})
+    masked_view = mask_config(config_manager.get()).get("webdav", {})
+    return masked_view
+
+
+@router.post("/backup/webdav/test")
+def test_backup_webdav() -> Dict[str, Any]:
+    """连接测试：建目录、写探针、删探针、读列表
+
+    :return Dict: 含 ok 与 message
+
+    :raises ServiceError: 未启用或未配置地址（参数类问题）
+    """
+    cfg = config_manager.get().get("webdav", {})
+    if not cfg.get("enabled"):
+        raise ServiceError("远端备份未启用，请先开启并保存配置", 400)
+    url = (cfg.get("url") or "").strip()
+    if not url:
+        raise ServiceError("未配置 WebDAV 根地址", 400)
+    from webdav_backup import WebdavClient
+
+    client = WebdavClient(
+        url,
+        username=cfg.get("username") or "",
+        password=cfg.get("password") or "",
+    )
+    try:
+        ok, msg = client.test_connection((cfg.get("remote_subdir") or "").strip("/"))
+        return {"ok": ok, "message": msg}
+    finally:
+        client.close()
+
+
+@router.get("/backup/status")
+def get_backup_status() -> Dict[str, Any]:
+    """
+    返回备份开关状态与最近一次任务结果摘要，供面板结果卡展示
+
+    :return Dict: 含 enabled 与 last 字段
+    """
+    from webdav_backup import backup_service
+
+    enabled = bool(config_manager.get().get("webdav", {}).get("enabled"))
+    return {"enabled": enabled, "last": backup_service.last_result()}
+
+
+@router.post("/backup/run")
+def run_config_backup() -> Dict[str, Any]:
+    """
+    执行一次 WebDAV 手动备份
+
+    :return Dict: 备份结果摘要（name/size/pruned）
+    """
+    from webdav_backup import backup_service
+
+    return backup_service.run_backup()
+
+
+@router.get("/backup/remote")
+def list_remote_backups() -> Dict[str, Any]:
+    """
+    查看远端备份档案列表
+
+    :return Dict: 含 archives 列表
+    """
+    from webdav_backup import backup_service
+
+    return {"archives": backup_service.list_remote()}
+
+
+@router.get("/backup/remote/download")
+def download_remote_archive(name: str) -> Response:
+    """
+    下载单个远端档案为 zip 附件
+
+    :param name (str): query 参数档案名，白名单校验在 service 内完成
+
+    :return Response: 附件响应字节流
+
+    :raises BadRequestError: 档案名非法
+    :raises NotFoundError: 档案不存在
+    """
+    from webdav_backup import backup_service
+
+    archive_name, data = backup_service.download_remote(name)
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{archive_name}"'},
+    )
+
+
+@router.post("/backup/restore")
+def restore_from_backup(req: RestoreRequest) -> Dict[str, Any]:
+    """
+    从远端档案恢复配置，成功后触发 p115/emby 服务重建使新配置立即生效
+
+    :param req (RestoreRequest): 档案名请求体，白名单校验在服务层
+
+    :return Dict: 恢复结果摘要（含 guard 快照编号）
+    """
+    from webdav_backup import backup_service
+
+    result = backup_service.restore_backup(req.name)
+    if result.get("ok"):
+        if _restart_p115_callback:
+            _restart_p115_callback()
+        if _restart_emby_callback:
+            _restart_emby_callback()
+    return result
