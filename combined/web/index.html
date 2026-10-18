@@ -179,6 +179,7 @@ function stopPolling(h) {
   <a data-tab="sync">同步</a>
   <a data-tab="strm">STRM</a>
   <a data-tab="checkin">签到</a>
+  <a data-tab="backup">备份</a>
   <a data-tab="logs">日志</a>
 </div>
 
@@ -424,6 +425,40 @@ function stopPolling(h) {
   </div>
 </div>
 
+<!-- 备份 -->
+<div id="tab-backup" class="tab-content">
+  <div class="card">
+    <div class="switch-group">
+      <label class="switch"><input type="checkbox" id="wd_enabled"><span class="slider"></span></label>
+      <span class="switch-label">启用 WebDAV 配置备份</span>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>WebDAV 根地址</label><input type="text" id="wd_url" placeholder="https://dav.example.com/dav"></div>
+      <div class="form-group"><label>远端子目录</label><input type="text" id="wd_remote_subdir" placeholder="115strmtool-backup"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>用户名</label><input type="text" id="wd_username" autocomplete="off"></div>
+      <div class="form-group"><label>密码</label><input type="password" id="wd_password" autocomplete="new-password"></div>
+      <div class="form-group" style="max-width:120px"><label>保留份数</label><input type="number" id="wd_keep_count" min="1" max="99" placeholder="10"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary" onclick="saveWebdavConfig()">保存配置</button>
+      <button class="btn btn-outline" id="wdTestBtn" onclick="testWebdavConn()">测试连接</button>
+      <button class="btn btn-success" id="wdRunBtn" onclick="runBackupNow()">立即备份</button>
+    </div>
+    <div class="hint" style="margin-top:8px">备份内容为 config.json、config.key 与签到状态；恢复会覆盖当前配置并自动重启相关服务</div>
+  </div>
+  <div class="grid-3" style="margin-bottom:16px">
+    <div class="stat-card"><div class="num" id="bkLastKind">-</div><div class="label">最近任务</div><div class="sub" id="bkLastTime">-</div></div>
+    <div class="stat-card"><div class="num" id="bkLastState">-</div><div class="label">任务结果</div><div class="sub" id="bkLastMsg" title="-">-</div></div>
+    <div class="stat-card"><div class="num" id="bkRemoteCount">-</div><div class="label">远端档案数</div><div class="sub" id="bkRemoteSize">-</div></div>
+  </div>
+  <div class="card">
+    <h2>远端档案</h2>
+    <div id="bkRemoteList" style="overflow-x:auto"><p style="color:#999">加载中...</p></div>
+  </div>
+</div>
+
 <!-- 115 目录浏览弹窗 -->
 <div id="browserModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:99998;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:8px;width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(0,0,0,.2)">
@@ -456,6 +491,7 @@ document.querySelectorAll('.nav a').forEach(a => {
     if (a.dataset.tab === 'sync') loadSyncHistory();
     if (a.dataset.tab === 'strm') listStrmFiles();
     if (a.dataset.tab === 'checkin') refreshCheckinStatus();
+    if (a.dataset.tab === 'backup') loadBackupTab();
   });
 });
 
@@ -465,6 +501,7 @@ function loadConfig() {
     loadEmbyConfig(config.emby || {});
     loadP115Config(config.p115 || {});
     loadCheckinConfig(config.checkin || {});
+    loadWebdavConfig(config.webdav || {});
     updateDashboard().catch(() => {});
   }).catch(err => showToast('加载失败: ' + err.message, 'error'));
   apiFetch('/admin/api/autostart').then(r => r.json()).then(d => {
@@ -955,6 +992,153 @@ async function refreshCheckinStatus() {
     document.getElementById('chkLastDetail').textContent = lastDetail.length > 20 ? lastDetail.substring(0, 20) + '...' : lastDetail;
     document.getElementById('chkLastDetailSub').textContent = s.last_done ? '上次签到: ' + s.last_done : '-';
   } catch(e) {}
+}
+
+// ── 备份 ──
+function loadWebdavConfig(c) {
+  document.getElementById('wd_enabled').checked = c.enabled || false;
+  document.getElementById('wd_url').value = c.url || '';
+  document.getElementById('wd_username').value = c.username || '';
+  document.getElementById('wd_password').value = c.password || '';
+  document.getElementById('wd_remote_subdir').value = c.remote_subdir || '';
+  document.getElementById('wd_keep_count').value = c.keep_count || 10;
+}
+
+async function loadBackupTab() {
+  try {
+    const r = await apiFetch('/admin/api/backup/webdav/config');
+    loadWebdavConfig(await r.json());
+  } catch(e) { showToast('加载备份配置失败: ' + e.message, 'error'); }
+  refreshBackupStatus();
+  loadRemoteBackups();
+}
+
+async function saveWebdavConfig() {
+  const cfg = {
+    enabled: document.getElementById('wd_enabled').checked,
+    url: document.getElementById('wd_url').value.trim(),
+    username: document.getElementById('wd_username').value.trim(),
+    password: document.getElementById('wd_password').value,
+    remote_subdir: document.getElementById('wd_remote_subdir').value.trim(),
+    keep_count: parseInt(document.getElementById('wd_keep_count').value, 10) || 10,
+  };
+  try {
+    const r = await apiFetch('/admin/api/backup/webdav/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    await r.json();
+    showToast('备份配置已保存', 'success');
+    document.getElementById('wd_password').value = '';
+  } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+async function testWebdavConn() {
+  const btn = document.getElementById('wdTestBtn');
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  try {
+    const r = await apiFetch('/admin/api/backup/webdav/test', {method:'POST'});
+    const d = await r.json();
+    showToast(d.message || (d.ok ? '连接成功' : '连接失败'), d.ok ? 'success' : 'error');
+  } catch(err) { showToast('测试失败: ' + err.message, 'error'); }
+  btn.disabled = false;
+  btn.textContent = '测试连接';
+}
+
+async function runBackupNow() {
+  const btn = document.getElementById('wdRunBtn');
+  btn.disabled = true;
+  btn.textContent = '备份中...';
+  try {
+    const r = await apiFetch('/admin/api/backup/run', {method:'POST'});
+    const d = await r.json();
+    showToast('备份完成: ' + (d.name || '') + ' (' + fmtSize(d.size || 0) + ')', 'success');
+  } catch(err) { showToast('备份失败: ' + err.message, 'error'); }
+  btn.disabled = false;
+  btn.textContent = '立即备份';
+  refreshBackupStatus();
+  loadRemoteBackups();
+}
+
+async function refreshBackupStatus() {
+  try {
+    const r = await apiFetch('/admin/api/backup/status');
+    const s = await r.json();
+    const last = s.last || {};
+    const kindEl = document.getElementById('bkLastKind');
+    if (!last.kind) {
+      kindEl.textContent = '-';
+      document.getElementById('bkLastTime').textContent = '-';
+    } else {
+      kindEl.textContent = last.kind === 'backup' ? '备份' : '恢复';
+      document.getElementById('bkLastTime').textContent = last.time || '-';
+    }
+    const stateEl = document.getElementById('bkLastState');
+    if (!last.kind) {
+      stateEl.textContent = '-';
+      stateEl.style.color = '#999';
+    } else if (last.ok) {
+      stateEl.textContent = '成功';
+      stateEl.style.color = '#34a853';
+    } else {
+      stateEl.textContent = '失败';
+      stateEl.style.color = '#ea4335';
+    }
+    const msgEl = document.getElementById('bkLastMsg');
+    const msg = last.ok ? (last.name || '完成') : (last.error || '未知错误');
+    msgEl.textContent = msg.length > 28 ? msg.substring(0, 28) + '...' : msg;
+    msgEl.title = msg;
+  } catch(e) {}
+}
+
+async function loadRemoteBackups() {
+  const el = document.getElementById('bkRemoteList');
+  try {
+    const r = await apiFetch('/admin/api/backup/remote');
+    const d = await r.json();
+    const files = d.archives || [];
+    document.getElementById('bkRemoteCount').textContent = files.length;
+    const total = files.reduce((s, f) => s + (f.size || 0), 0);
+    document.getElementById('bkRemoteSize').textContent = fmtSize(total);
+    if (!files.length) { el.innerHTML = '<p style="color:#999">远端暂无档案</p>'; return; }
+    let html = '<table><thead><tr><th>档案名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody>';
+    files.slice().sort((a, b) => b.name.localeCompare(a.name)).forEach(f => {
+      const n = escAttr(f.name);
+      html += '<tr><td>' + escAttr(f.name) + '</td><td>' + fmtSize(f.size || 0) + '</td><td>'
+        + escAttr(f.modified || '-') + '</td><td style="white-space:nowrap">'
+        + '<button class="btn btn-outline btn-sm" onclick="downloadRemoteBackup(\'' + n + '\')">下载</button> '
+        + '<button class="btn btn-outline btn-sm" style="color:#ea4335" onclick="restoreRemoteBackup(\'' + n + '\')">恢复</button>'
+        + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) {
+    document.getElementById('bkRemoteCount').textContent = '-';
+    el.innerHTML = '<p style="color:#f00">加载失败: ' + escAttr(e.message) + '</p>';
+  }
+}
+
+async function downloadRemoteBackup(name) {
+  try {
+    const r = await apiFetch('/admin/api/backup/remote/download?name=' + encodeURIComponent(name));
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch(err) { showToast('下载失败: ' + err.message, 'error'); }
+}
+
+async function restoreRemoteBackup(name) {
+  if (!confirm('确定用档案 ' + name + ' 覆盖当前配置吗？\n当前配置会先保存为恢复前快照，覆盖后服务将自动重启')) return;
+  try {
+    const r = await apiFetch('/admin/api/backup/restore', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
+    const d = await r.json();
+    showToast(d.ok ? '恢复成功，服务已重启' : '恢复失败', d.ok ? 'success' : 'error');
+    if (d.ok) loadConfig();
+  } catch(err) { showToast('恢复失败: ' + err.message, 'error'); }
+  refreshBackupStatus();
 }
 
 async function refreshLogs() {
