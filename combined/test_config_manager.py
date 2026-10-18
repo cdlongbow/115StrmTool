@@ -128,7 +128,11 @@ class TestConfigBackupRotation:
             cm._maybe_backup()
         names = sorted(p.name for p in cm_mod.CONFIG_BACKUP_DIR.glob("config-*.json"))
         assert len(names) == 3
-        assert {"20261002", "20261003", "20261004"} <= {"20261002","20261003","20261004"} 
+        assert names == [
+            "config-20261003-000000.json",
+            "config-20261004-000000.json",
+            "config-20261005-000000.json",
+        ]
 
     def test_backup_failure_not_fatal(self, monkeypatch, tmp_path):
         import config_manager as cm_mod
