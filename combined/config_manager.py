@@ -28,6 +28,7 @@ PIN_RULES_SEP = " => "
 
 _COOKIE_ENCRYPTED_PREFIX = "#ENC#"
 COOKIE_MASK = "********"
+_SECRET_FIELDS: List[Tuple[str, str]] = [("p115", "cookie"), ("webdav", "password")]
 
 
 def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -42,6 +43,9 @@ def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cookie = data.get("p115", {}).get("cookie")
     if cookie:
         data["p115"]["cookie"] = COOKIE_MASK
+    webdav = data.get("webdav")
+    if isinstance(webdav, dict) and webdav.get("password"):
+        webdav["password"] = COOKIE_MASK
     if data.get("admin_token"):
         data["admin_token"] = COOKIE_MASK
     return data
@@ -103,6 +107,26 @@ class CheckinConfig(BaseModel):
         return v
 
 
+class WebdavBackupConfig(BaseModel):
+    """
+    WebDAV 远端备份配置
+    """
+
+    enabled: bool = Field(default=False, description="远端备份总开关")
+    url: str = Field(default="", description="WebDAV 根地址，http(s) 开头")
+    username: str = Field(default="", description="WebDAV 账号")
+    password: str = Field(default="", description="WebDAV 密码，落盘加密、展示掩码")
+    remote_subdir: str = Field(default="115strmtool-backups", description="远端备份子目录，逐级创建")
+    keep_count: int = Field(default=10, description="远端保留档案份数")
+
+    @field_validator("keep_count")
+    @classmethod
+    def _validate_keep_count(cls, v: int) -> int:
+        if not isinstance(v, int) or v < 1:
+            return 10
+        return v
+
+
 class RootConfig(BaseModel):
     admin_host: str = "127.0.0.1"
     admin_port: int = 8100
@@ -110,6 +134,7 @@ class RootConfig(BaseModel):
     emby: EmbyConfig = Field(default_factory=EmbyConfig)
     p115: P115Config = Field(default_factory=P115Config)
     checkin: CheckinConfig = Field(default_factory=CheckinConfig)
+    webdav: WebdavBackupConfig = Field(default_factory=WebdavBackupConfig)
 
 
 def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,6 +185,40 @@ def _decrypt_cookie(encoded: str) -> str:
     decrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(encrypted)])
     return decrypted.decode("utf-8")
 
+
+def _encrypt_secrets(config: Dict[str, Any]) -> None:
+    """
+    按秘密字段表就地加密配置字典中的全部敏感值（空值跳过）
+
+    :param config (Dict): 即将写盘的配置字典，就地修改
+    """
+    for section, field in _SECRET_FIELDS:
+        target = config.get(section)
+        if not isinstance(target, dict):
+            continue
+        value = target.get(field)
+        if value:
+            target[field] = _encrypt_cookie(value)
+
+
+def _decrypt_secrets(config: Dict[str, Any]) -> None:
+    """
+    按秘密字段表就地解密配置字典中的全部敏感值，无 #ENC# 前缀按明文兼容
+
+    :param config (Dict): 刚从磁盘读取的配置字典，就地修改
+    """
+    for section, field in _SECRET_FIELDS:
+        target = config.get(section)
+        if not isinstance(target, dict):
+            continue
+        value = target.get(field)
+        if value and value.startswith(_COOKIE_ENCRYPTED_PREFIX):
+            try:
+                target[field] = _decrypt_cookie(value)
+            except Exception as e:
+                logger.warning("秘密字段解密失败，保留原始值: %s.%s - %s", section, field, e)
+
+
 DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump(by_alias=True)
 
 
@@ -177,12 +236,7 @@ class ConfigManager:
                         loaded = json.load(f)
                     self._config = _deep_merge(dict(DEFAULT_CONFIG), loaded)
                     self._config = _validate_config(self._config)
-                    cookie = self._config.get("p115", {}).get("cookie", "")
-                    if cookie and cookie.startswith(_COOKIE_ENCRYPTED_PREFIX):
-                        try:
-                            self._config["p115"]["cookie"] = _decrypt_cookie(cookie)
-                        except Exception as e:
-                            logger.warning("Cookie 解密失败，保留原始值: %s", e)
+                    _decrypt_secrets(self._config)
                     logger.info("配置已加载: %s", CONFIG_FILE.resolve())
                 except (json.JSONDecodeError, OSError) as e:
                     logger.error("配置文件加载失败，使用默认配置: %s", e)
@@ -223,9 +277,7 @@ class ConfigManager:
         try:
             with self._lock:
                 config_to_write = self._deep_copy(self._config)
-                cookie = config_to_write.get("p115", {}).get("cookie", "")
-                if cookie:
-                    config_to_write["p115"]["cookie"] = _encrypt_cookie(cookie)
+                _encrypt_secrets(config_to_write)
                 # 原子写：进程唯一临时文件 + 替换目标；整体持锁防止并发写交叉
                 tmp_path = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{os.getpid()}.tmp")
                 with open(tmp_path, "w", encoding="utf-8") as f:

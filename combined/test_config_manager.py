@@ -164,3 +164,64 @@ class TestConfigExport:
         with patch("admin_api.config_manager", cm):
             with pytest.raises(ServiceError):
                 export_config()
+
+
+class TestWebdavBackupConfig:
+    def test_webdav_defaults(self):
+        from config_manager import ConfigManager
+        cm = ConfigManager()
+        webdav = cm.get()["webdav"]
+        assert webdav["enabled"] is False
+        assert webdav["url"] == ""
+        assert webdav["remote_subdir"] == "115strmtool-backups"
+        assert webdav["keep_count"] == 10
+
+    def test_webdav_password_encrypted_on_disk(self):
+        from config_manager import CONFIG_FILE, ConfigManager
+        cm = ConfigManager()
+        cm.update({"webdav": {"url": "https://dav.example.com/d", "password": "s3cret-pw"}})
+        disk_text = CONFIG_FILE.read_text(encoding="utf-8")
+        assert "s3cret-pw" not in disk_text
+        assert "#ENC#" in disk_text
+        reopened = ConfigManager()
+        assert reopened.get()["webdav"]["password"] == "s3cret-pw"
+        assert reopened.get()["webdav"]["url"] == "https://dav.example.com/d"
+
+    def test_mask_config_webdav_password(self):
+        from config_manager import COOKIE_MASK, mask_config
+        masked = mask_config(
+            {"p115": {"cookie": "c"}, "webdav": {"password": "p", "url": "u"}, "admin_token": "t"}
+        )
+        assert masked["webdav"]["password"] == COOKIE_MASK
+        assert masked["webdav"]["url"] == "u"
+        assert masked["p115"]["cookie"] == COOKIE_MASK
+        assert masked["admin_token"] == COOKIE_MASK
+
+    def test_mask_config_without_webdav_section(self):
+        from config_manager import mask_config
+        masked = mask_config({"admin_host": "127.0.0.1"})
+        assert masked == {"admin_host": "127.0.0.1"}
+
+    def test_plaintext_password_backward_compat(self, monkeypatch, tmp_path):
+        import json
+
+        import config_manager as cm_mod
+        conf = tmp_path / "config.json"
+        conf.write_text(
+            json.dumps({"webdav": {"enabled": True, "password": "legacy-plain"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cm_mod, "CONFIG_FILE", conf)
+        cm = cm_mod.ConfigManager()
+        assert cm.get()["webdav"]["password"] == "legacy-plain"
+        disk_text = conf.read_text(encoding="utf-8")
+        assert "legacy-plain" not in disk_text
+        assert "#ENC#" in disk_text
+
+    def test_keep_count_invalid_falls_back(self):
+        from config_manager import ConfigManager
+        cm = ConfigManager()
+        cm.update({"webdav": {"keep_count": 0}})
+        assert cm.get()["webdav"]["keep_count"] == 10
+        cm.update({"webdav": {"keep_count": 5}})
+        assert cm.get()["webdav"]["keep_count"] == 5
