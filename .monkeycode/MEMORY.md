@@ -89,5 +89,6 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 四个参考上游：DDSRem-Dev/MoviePilot-Plugins（本项目移植来源，README 记载）、zkmydgth/MoviePilot-Plugins（同源活跃 fork）、pancras-loe/115-station、Ponphil/LitePan
   - **P115StrmHelper 参考主线在 DDSRem 本家**：zkmydgth 已于 2026-10-14（`db8ea296`）把该插件归档并从市场下架（package.v3.json 撤条目）；查该插件演进只看 DDSRem
   - 巡查结论收窄：115-station 主线已分化到 NAS 整理/刮削/Emby 对账/订阅，本项目为桌面轻量定位，只关注其 115 端点变动与同步/清理类修复；LitePan 长期无提交
+  - 115 响应数字字段类型不可信（115-station `36e654f` 2026-10-17 事故：index_info 容量带小数/科学计数/字符串形态，严格解析整段失败被误报 Cookie 失效）；凡解析 115 返回的 size/count 类数值必须宽容处理（float 化再向零取整、识别失败按 0 或 None 降级，绝不让单字段拖垮整段解析）
   - 2026-10-16 巡查补充：DDSRem 的 P115StrmHelper 已拆 V2/V3 双线（V3 要求 Python>=3.14，worker 队列/decision register/分享上报重架构，v3-decision-register.md 记录决策），V2 侧仍有独立修复；借鉴参考盯 V2 侧修复与 V3 设计走向即可，本仓库无需跟进 V3 架构
   - 巡查方法用 GitHub API（需带 git credential 里的 token 以避开匿名限流），起点接上次巡查末条提交日期
