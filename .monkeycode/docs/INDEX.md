@@ -31,9 +31,10 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 版本号显示 | 发布号由 CI 按 tag 注入，概览页/启动日志/托盘悬停显示，本地回退 dev | `combined/app_metadata.py` |
 | 115 客户端封装 | 加密下载 API、二维码登录、文件浏览 | `combined/p115_client_wrapper.py` |
 | 管理 API | STRM 同步、二维码登录、签到 | `combined/api_routes.py` |
-| 管理面板 API | 配置读写、服务控制、日志查看 | `combined/admin_api.py` |
+| 管理面板 API | 配置读写、服务控制、日志查看、WebDAV 远端备份恢复 | `combined/admin_api.py` |
+| 配置管理 | JSON 配置读写、顶置规则解析、秘密字段加密、WebDAV 备份配置 | `combined/config_manager.py` |
+| WebDAV 配置备份 | 配置打包自检、远端上传滚动清理、下载与恢复回滚 | `combined/webdav_backup.py` |
 | 外部播放器注入 | 14 个播放器的协议 URL 构建与 UI 注入 | `combined/external_players.py` |
-| 配置管理 | JSON 配置读写、顶置规则解析 | `combined/config_manager.py` |
 | 数据持久化 | SQLite 数据库、文件清单、同步历史 | `combined/database.py` |
 | Windows 桌面集成 | 系统托盘 | `combined/windows_tray.py` |
 | 签到调度 | 115 每日签到定时与手动触发 | `combined/checkin_scheduler.py` |
@@ -74,7 +75,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（165 个用例）
+# 运行单元测试（202 个用例）
 cd combined && python -m pytest -q
 
 # 静态检查（规则集见根目录 ruff.toml）

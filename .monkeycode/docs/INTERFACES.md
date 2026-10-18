@@ -242,6 +242,33 @@ Content-Type: application/json
 
 读写 Windows 注册表开机自启项（`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`）。
 
+### 配置备份（WebDAV）
+
+```
+GET  /admin/api/backup/webdav/config
+POST /admin/api/backup/webdav/config
+Content-Type: application/json
+
+{"enabled": true, "url": "...", "username": "...", "password": "...", "remote_subdir": "...", "keep_count": 10}
+
+POST /admin/api/backup/webdav/test
+GET  /admin/api/backup/status
+POST /admin/api/backup/run
+GET  /admin/api/backup/remote
+GET  /admin/api/backup/remote/download?name=<档案名>
+POST /admin/api/backup/restore
+Content-Type: application/json
+
+{"name": "115strmtool-backup-20261018-100000.zip"}
+```
+
+- 读写 WebDAV 备份配置，密码加密落盘、读写均脱敏；提交掩码值表示保留旧密码
+- `test`：建目录→写探针→删探针→列表 四步连通性检查，返回 `{"ok", "message"}`
+- `status`：返回 `{"enabled", "last"}`，`last` 为最近一次备份/恢复结果摘要
+- `run`：打包 config.json/config.key/签到状态 → 自检 → 上传 → 大小核对 → 按保留份数滚动清理；返回 `{ok, name, size, pruned}`，忙时 409
+- `remote`：返回 `{"archives": [{name, size, modified}]}`；`download` 以附件流返回指定档案
+- `restore`：档案名白名单与完整性校验通过后覆盖当前配置（保留前自动保存恢复前快照，失败自动回滚），成功后自动重建 p115/Emby 服务使配置即时生效
+
 ## 302 跳转服务
 
 基础路径：`http://<redirect_host>:3333`

@@ -54,6 +54,7 @@ MoviePilot-Windows/
 │   ├── database.py             # SQLite 持久化层
 │   ├── windows_tray.py         # Windows 系统托盘与原生窗口
 │   ├── checkin_scheduler.py    # 115 每日签到调度
+│   ├── webdav_backup.py        # 配置 WebDAV 远端备份与恢复
 │   ├── fast_scan.py            # 快速整树扫描（递归整树端点 + 逐目录回退）
 │   ├── app_metadata.py         # 应用版本号（CI 注入 _build_version，本地回退 dev）
 │   ├── exceptions.py           # 统一业务异常定义
@@ -110,6 +111,12 @@ MoviePilot-Windows/
 **依赖**: `p115_client_wrapper`, `config_manager`
 **被依赖**: 管理 API、系统托盘
 
+### WebDAV 配置备份
+**目的**: 将配置文件打包（含完整性自检）上传 WebDAV 远端，支持列表/下载/恢复；恢复前保留当前快照、失败自动回滚，成功后由路由层触发服务重建
+**位置**: `combined/webdav_backup.py`
+**依赖**: `config_manager`, `exceptions`, httpx（WebDAV PROPFIND/PUT/GET/DELETE）
+**被依赖**: 管理面板 API（`/admin/api/backup/*` 端点组）
+
 ### 持久化层
 **目的**: 存储 STRM 清单、同步历史
 **位置**: `combined/database.py` + `combined/config_manager.py`
@@ -141,6 +148,7 @@ flowchart LR
     subgraph Cloud
         P115["115 网盘 API"]
         CDN["115 CDN"]
+        WebDAV["WebDAV 备份服务器"]
     end
 
     Browser --> Proxy
@@ -150,6 +158,7 @@ flowchart LR
     Redirect --> P115
     Redirect --> CDN
     AdminAPI --> StrmGen
+    AdminAPI -->|"配置备份/恢复"| WebDAV
     StrmGen --> Redirect
     StrmGen --> DB
 ```
