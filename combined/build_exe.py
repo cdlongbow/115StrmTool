@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 
 def main():
@@ -8,7 +9,6 @@ def main():
         "api_routes",
         "app_metadata",
         "app_ver",
-        "_build_version",
         "checkin_scheduler",
         "config_manager",
         "database",
@@ -34,6 +34,8 @@ def main():
         "tkinter.filedialog",
         "urllib3_future",
     ]
+    if Path("_build_version.py").exists():
+        hidden.append("_build_version")
     args = [
         "pyinstaller",
         "--name", "115网盘STRM生成与302工具",
