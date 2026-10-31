@@ -69,3 +69,4 @@ p115_client_wrapper.py
 - 业务方法统一使用 `utils.capture_exceptions` 装饰器收口异常（记录日志并返回默认值），下载链路的 `IncompleteUploadError` / `DownloadApiUnavailableError` 属于控制流异常，在入口内部消化不上抛
 - 端点级冷却由 `DEFAULT_ENDPOINT_COOLDOWNS` 声明间隔，`_wait_cooling()` 惰性创建并复用 `RateLimiter`，同一端点并发调用按最小间隔排队
 - Cookie 更新通过单独的 `update_cookie()` 方法，保证线程安全
+- `p115client.const.ID_TO_DIRNODE_CACHE` 是 SDK 的进程级全局目录节点缓存，wrapper 不持有其引用；管理面板的 `POST /admin/api/p115/cache/clear` 遍历各账号桶原地清空，用于目录改名或移动后仍按旧节点解析的场合，缓存随后自动重建

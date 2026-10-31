@@ -219,6 +219,14 @@ GET /admin/api/p115/status
 返回 115 客户端就绪状态、统计信息、用户信息。
 
 ```
+POST /admin/api/p115/cache/clear
+```
+
+清空 p115client 进程内共享的 115 目录节点缓存（`ID_TO_DIRNODE_CACHE`），逐账号桶原地清空，运行中任务持有的缓存引用同步失效，后续访问时自动重建，无需重启程序。适用于网盘目录改名或移动后仍按旧节点解析导致 STRM 路径异常的场合。
+
+返回 `{"status": "ok", "message": "已清理 N 个账号共 M 条目录节点缓存", "buckets": N, "entries": M}`；缓存为空时 `message` 为「目录节点缓存已是空的」。`entries` 统计失败的桶按 0 计；有桶清理失败时返回 500 并在 `error` 中给出失败桶数；当前 p115client 缺少该符号时返回 400。
+
+```
 GET /admin/api/logs?lines=200
 ```
 
