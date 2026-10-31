@@ -290,9 +290,10 @@ function stopPolling(h) {
     <div id="p115_pathMappings"></div>
     <button class="btn btn-outline" onclick="addPathMapping()" style="margin-top:8px">+ 添加映射</button>
   </div>
-  <div class="card" style="display:flex;gap:8px;align-items:center">
+  <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <button class="btn btn-primary" onclick="saveP115Config()">保存配置</button>
     <button class="btn btn-outline" onclick="exportConfig()">导出配置</button>
+    <button class="btn btn-outline" onclick="clearP115NodeCache()" title="网盘目录改名或移动后路径异常时清理，后续访问自动重建">清理目录节点缓存</button>
     <span style="font-size:12px;color:#888">导出文件含加密 Cookie，请妥善保管</span>
   </div>
 </div>
@@ -725,6 +726,14 @@ async function saveP115Config() {
     showToast('P115 配置已保存', 'success');
     updateDashboard().catch(() => {});
   } catch(err) { showToast('保存失败: ' + err.message, 'error'); }
+}
+
+async function clearP115NodeCache() {
+  try {
+    const r = await apiFetch('/admin/api/p115/cache/clear', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    showToast(d.message || '目录节点缓存已清理', 'success');
+  } catch(err) { showToast('清理失败: ' + err.message, 'error'); }
 }
 
 async function saveAutostart() {

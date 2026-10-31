@@ -143,6 +143,52 @@ def get_p115_status() -> Dict[str, Any]:
     return result
 
 
+@router.post("/p115/cache/clear")
+def clear_p115_node_cache() -> Dict[str, Any]:
+    """
+    清理 p115client 进程级共享的 115 目录节点缓存
+
+    逐个账号缓存桶原地清空，原地清空让运行中任务已持有的缓存引用同步失效
+    用于网盘目录改名或移动后强制重新拉取节点信息，缓存会在后续访问时自动重建
+
+    :return Dict: 含清理桶数与节点条目数的结果，message 字段可直接展示给用户
+
+    :raises ServiceError: p115client 版本缺少目录节点缓存符号，或存在清理失败的缓存桶
+    """
+    try:
+        from p115client.const import ID_TO_DIRNODE_CACHE
+    except ImportError as e:
+        logger.error("加载 p115client 目录节点缓存失败: %s", e, exc_info=True)
+        raise ServiceError("当前 p115client 版本不支持目录节点缓存清理", status_code=400)
+
+    buckets = 0
+    entries = 0
+    failed = 0
+    # 先物化为元组，避免清理期间 defaultdict 被并发访问新增键导致迭代异常
+    for cache in tuple(ID_TO_DIRNODE_CACHE.values()):
+        buckets += 1
+        try:
+            entries += len(cache)
+        except Exception:
+            # 条目数仅用于提示文案，统计异常不影响清理动作
+            logger.warning("统计 115 目录节点缓存条目数失败，按 0 计", exc_info=True)
+        try:
+            cache.clear()
+        except Exception:
+            failed += 1
+            logger.error("清理 115 目录节点缓存桶失败", exc_info=True)
+
+    if failed:
+        raise ServiceError(f"目录节点缓存清理不完整（{failed}/{buckets} 个缓存桶失败）")
+
+    if entries == 0:
+        message = "目录节点缓存已是空的"
+    else:
+        message = f"已清理 {buckets} 个账号共 {entries} 条目录节点缓存"
+    logger.info("P115Client 目录节点缓存清理：%s", message)
+    return {"status": "ok", "message": message, "buckets": buckets, "entries": entries}
+
+
 @router.get("/status")
 def get_combined_status() -> Dict[str, Any]:
     """
