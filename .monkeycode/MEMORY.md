@@ -53,6 +53,7 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Instructions:
   - 每次代码改动提交前，必须先本地跑通：`ruff check .`（仓库根目录）和 `cd combined && python -m pytest -q`，两者全绿才允许提交推送
   - 日常 CI（.github/workflows/ci.yml，push/PR 触发）已承担同样门禁，但不以此替代本地验证
+  - 用例数在四处重复维护：README.md「运行单元测试（N 个用例）」、TODO.md 变异测试条目、.monkeycode/docs/INDEX.md 命令注释、.monkeycode/docs/DEVELOPER_GUIDE.md 工具表；新增或删除测试后用 `python -m pytest --collect-only -q` 取准确数并同步这四处
 
 ### 回复语言偏好
 - Date: 2026-10-03
@@ -80,6 +81,8 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 同日多次发布用序号 tag（`YYYYMMDD-2` 起，序号 1-99 且从 1 开始），校验只比对主日期；同日新改动追加进 CHANGELOG 同一日期节（Release 说明取顶部日期节全文，天然包含累计内容）
   - 发版或推送后应检查失败 job 日志定位根因，勿假定流水线必绿
   - 本地沙箱为 Python 3.11，p115client 系列依赖要求 setuptools>=77（需 3.12）装不上真实 SDK；测试涉及 p115client 时一律用 patch.dict / conftest 的 stub_modules 注入假模块，不得在沙箱 pip install 真实 SDK
+  - 新会话沙箱默认没有门禁工具链：`ruff`、`pytest`、`pytest-asyncio`、`httpx`、`fastapi`、`uvicorn`、`websockets`、`qrcode`、`Pillow` 都要先装（`pip install --break-system-packages`），否则 ruff 报 command not found、pytest 收集阶段直接 ModuleNotFoundError；local-only 依赖（p115client、p115cipher、p115pickcode、full_strm_sync）跳过不装
+  - 需要在不装真实 SDK 的前提下端到端验证 admin 端点时，可注入 p115client/p115cipher/p115pickcode/full_strm_sync 桩后直接 `create_admin_app()` 起 TestClient 或 uvicorn（`main()` 会写入 admin_token，走 create_admin_app 可保持令牌为空、跳过鉴权）
 
 ### 上游借鉴来源与跟踪重点
 - Date: 2026-10-14
