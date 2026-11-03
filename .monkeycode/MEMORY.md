@@ -120,3 +120,12 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - CPython 3.14 下，夹具按用例反复"装桩导入项目模块 → patch.dict 退出把 fastapi/starlette/opentelemetry 等传递模块一并从 sys.modules 删除"，旧模块对象仅剩悬空引用，后续某次导入触发 GC 时段错误（全量单进程跑可能不触发，standalone-per-file 先暴露，日志特征是进度点打满后 exit 139 无 traceback——faulthandler 需 `PYTHONFAULTHANDLER=1` 重跑才给栈，崩点在 GC/abc 注册处）
   - 修复模式：夹具内用模块级缓存只带桩导入一次、复用模块对象；桩（如 tkinter）由被测函数运行时再查 sys.modules，隔离语义不变。超时用例顺带保留 `threading.Event` 取代 sleep 并按线程名 join 的收口写法
   - 本地复现 3.14 行为的方法：`uv venv` 用 uv 托管的 3.14 运行时 + `uv pip install --python <venv的python>` 装 requirements（uv venv 不带 pip），本地装不上的平台 wheel 直接跳过；standalone 循环用 `timeout 90 <venv-python> -m pytest "$f" -q`，沙箱 3.11 门禁不能替代 3.14 验证
+
+[沙箱重建后的 Python 环境重建配方]
+- Date: 2026-11-03
+- Context: Discovered by Agent while discussing sandbox lifetime with the user
+- Category: Environment Configuration
+- Instructions:
+  - 沙箱重开不会自动装新版 Python：系统 `python3` 只读基础镜像且随重建漂移（已观察到 3.11 与 3.12 两种），会话内自装的 conda/uv 运行时、venv、`pip --break-system-packages` 包在重开后全部丢失，按下方步骤重装即可
+  - 快速就绪（对齐 CI 3.14，含真实 SDK 与门禁工具）：`pip install --break-system-packages -q uv` → `uv python install 3.14` → `uv venv <dir>` → `uv pip install --python <dir>/bin/python -r combined/requirements.txt pytest pytest-asyncio`；uv venv 不含 pip，uv 托管解释器拒绝被直接修改，一律走 `uv pip install --python`；`full_strm_sync` 无 3.14 wheel 属预期 SKIP，桩测试不依赖它
+  - 轻量就绪（仅跑门禁，容忍装不上真实 SDK 时）：照 2026-10-09 条目直接 pip 装 ruff/pytest 等纯 Python 工具即可
