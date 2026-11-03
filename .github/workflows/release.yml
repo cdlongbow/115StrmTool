@@ -48,10 +48,10 @@ jobs:
           print('OK: release ref ' + ref + ' matches CHANGELOG head ' + head + suffix)
           "
 
-      - name: Setup Python 3.12
+      - name: Setup Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Install p115 SDK and local-only wheels
         run: |
@@ -65,8 +65,17 @@ jobs:
               if any(s in f.name for s in skip_tags):
                   print(f'Skip: {f.name}')
                   continue
-              print(f'Install: {f.name}')
-              subprocess.run([sys.executable, '-m', 'pip', 'install', str(f)], check=True)
+              r = subprocess.run(
+                  [sys.executable, '-m', 'pip', 'install', str(f)],
+                  capture_output=True,
+                  text=True,
+              )
+              if r.returncode == 0:
+                  print(f'OK  : {f.name}')
+              else:
+                  print(f'SKIP: {f.name} (incompatible with current Python)')
+                  print(r.stdout)
+                  print(r.stderr)
           "
 
       - name: Install dependencies

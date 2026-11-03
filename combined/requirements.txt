@@ -2,7 +2,8 @@ fastapi>=0.110.0
 uvicorn>=0.27.0
 httpx[http2]>=0.27.0
 websockets>=12.0
-full_strm_sync==0.1.6
+# full_strm_sync 未发布到 PyPI，由 CI 从 combined/wheels/ 安装对应 CPython 版本的 wheel；
+# 装不上（如 CPython 版本无对应 wheel）时代码自动回退纯 Python 路径，无需在此声明
 qrcode>=7.4
 Pillow>=10.0
 p115cipher==0.0.5.4
