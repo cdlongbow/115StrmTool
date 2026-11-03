@@ -2,7 +2,7 @@
 目录选择接口测试：验证正常返回、卡死超时回退与 tkinter 异常回退
 """
 import sys
-import time
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -44,8 +44,10 @@ class TestSelectDirectory:
         root.destroy.assert_called_once()
 
     def test_timeout_returns_empty(self, api_routes):
+        unblock = threading.Event()
+
         def _hang(*a, **k):
-            time.sleep(2)
+            unblock.wait(5)
             return "不应返回"
 
         tk, _ = _fake_tkinter(askdirectory=_hang)
@@ -54,7 +56,13 @@ class TestSelectDirectory:
                 sys.modules, {"tkinter": tk, "tkinter.filedialog": tk.filedialog}
             ):
                 result = api_routes._select_directory_sync()
-        assert result == "", "卡死时应超时返回空串，触发前端手动输入兜底"
+                assert result == "", "卡死时应超时返回空串，触发前端手动输入兜底"
+                # 超时路径会遗留仍在运行的 daemon worker，须在桩模块还原前收口，
+                # 否则解释器 finalize 时撞上仍持有桩的线程（CPython 3.14 下会段错误）
+                unblock.set()
+                for t in threading.enumerate():
+                    if t.name == "select-directory":
+                        t.join(5)
 
     def test_tkinter_failure_returns_empty(self, api_routes):
         broken_tk = MagicMock()
