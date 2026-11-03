@@ -102,3 +102,20 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 2026-11-03 四巡：DDSRem 与 LitePan 均无新提交；zkmydgth 仅 `3ea551a2`/`500a8e75` SeedSpaceGuard v3.3.0（保种空间面，不借鉴）；115-station 基线后 31 条，命中收窄口径的实质内容有两条 115 端点行为知识——`9c381499` 分享失效不能看 `state`，过期/取消的分享 `/share/snap` 照样 `state=true` 且文件列得出来，要看 `shareinfo.share_state`（1 正常、4 取消、7 过期），取链 `POST proapi /app/share/downurl` 的错误码 4100008 访问码错、4100010 已取消、4100018 已过期、`data=[]`/`url=false` 表示文件不在分享里；`75af5c6b` 分享列举原 300 目录 / 4 层上限会让整库分享一律报「分享太大」，已改为不限目录数与层数，且遇风控整轮停下按退避重试、不能跳过继续列（半份清单会把没列到的误判为分享里没了）。本仓库无任何 115 分享功能面（grep 无 share_code/snap），两条仅作知识记录不落地
   - 四巡待用户决策项：由 zkmydgth `11638b17`（TgSignin v1.2.3 签到互斥）触发的自查——本仓库 `checkin_scheduler` 的定时 `_loop` 与 `manual_checkin` 共用 `run_p115_checkin_once` 但签到动作本身无互斥（`self._lock` 只保护状态文件读写），手动点击与自动触发同时发生会并发签到；上游做法是模块级非阻塞 `threading.Lock`，定时/手动/命令统一 `acquire(blocking=False)`，抢不到就跳过并记来源日志
   - 四巡决策结果：签到互斥已落地（checkin_scheduler 模块级 `_CHECKIN_LOCK`，`_tick` 与 `manual_checkin` 统一 `acquire(blocking=False)`，手动抢不到返回"签到正在执行，请稍后重试"、自动抢不到跳过并记日志且不动状态；5 个用例见 `test_checkin_mutex.py`）；该类测试须 monkeypatch `checkin_scheduler.CHECKIN_STATE_FILE` 到 tmp_path，否则会往 combined 目录写 checkin_state.json
+
+[CI 构建运行时升级到 Python 3.14]
+- Date: 2026-11-03
+- Context: Discovered by Agent while performing Python 3.14 build runtime upgrade
+- Category: Build Methods
+- Instructions:
+  - ci.yml 与 release.yml 的 python-version 已切 `3.14`（20261031 之后生效，下一版 exe 内嵌 CPython 3.14）；沙箱本地仍是 3.11，本地门禁不代表 3.14 行为，最终以 CI 为准
+  - `full_strm_sync` 是唯一不在 PyPI 的依赖，wheels 目录只有 cp312 ABI；已从 requirements.txt 移除该硬锁（否则 pip 解析 3.14 时找不到它直接失败），改由 CI 从 combined/wheels/ 容错安装——release.yml 的安装步已对齐 ci.yml 的 per-wheel OK/SKIP 模式（弃用 check=True）
+  - 3.14 下 Rust 加速缺位属预期降级（exe 走纯 Python 生成路径，与默认 `use_rust=False` 行为一致），恢复条件见 TODO「full_strm_sync 恢复 Rust 加速」
+
+[桩模块测试遗留 daemon 线程在 3.14 段错误]
+- Date: 2026-11-03
+- Context: Discovered by Agent while fixing CI failure after Python 3.14 upgrade
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - CPython 3.14 下，测试起 daemon 线程后不 join 就退出（sys.modules 桩已还原、模块对象被 GC），解释器 finalize 阶段会段错误；全量 `pytest -q` 可能不触发（进程存活时间长），CI 的 standalone-per-file 步骤先暴露——排查 standalone 失败先怀疑孤儿线程/终态竞态，日志特征是测试全部 passed 后进程崩
+  - 修复模式：测试内用 `threading.Event` 替代长 sleep 控制假阻塞，断言后在桩仍生效的 with 块内先 set 再按 `t.name` join 目标线程（如 select-directory），杜绝孤儿线程跨 fixture teardown
