@@ -19,7 +19,7 @@
 
 ### 前置条件
 
-- Python 3.12+
+- Python 3.12+（日常 CI 与发版流水线固定 3.14，本地环境建议对齐）
 - Git
 - （可选）PyInstaller — 构建单文件 exe
 
@@ -112,7 +112,7 @@ python build_exe.py
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
-测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止，且流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致，并在测试通过后、打包前把发布号写入 `combined/_build_version.py` 注入构建产物。测试的重量级依赖替身统一定义在 `combined/conftest.py`（`stub_modules` 生成 patch.dict 用的替身字典、`stub_missing` 按需注入未安装模块），配合 `patch.dict(sys.modules, ...)` 隔离，无需真实 Cookie 或网络即可运行，新增测试直接复用而不要再散建替身字典。每个测试文件必须能单独运行通过（`python -m pytest test_xxx.py -q`），不依赖其他文件先跑的模块导入泄漏，日常 CI 在跑完全量后会逐文件独立执行校验。SDK 相关依赖仅发布 Python 3.12 版本，本地开发环境需 3.12 才能完整安装。
+测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止，且流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致，并在测试通过后、打包前把发布号写入 `combined/_build_version.py` 注入构建产物。测试的重量级依赖替身统一定义在 `combined/conftest.py`（`stub_modules` 生成 patch.dict 用的替身字典、`stub_missing` 按需注入未安装模块），配合 `patch.dict(sys.modules, ...)` 隔离，无需真实 Cookie 或网络即可运行，新增测试直接复用而不要再散建替身字典。每个测试文件必须能单独运行通过（`python -m pytest test_xxx.py -q`），不依赖其他文件先跑的模块导入泄漏，日常 CI 在跑完全量后会逐文件独立执行校验。115 生态 SDK 均为纯 Python wheel 但要求 Python 3.12+（`requires-python >=3.12,<4.0`），低版本本地环境装不上。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，日常 CI 与发版在 Python 3.14 上安装步骤对其预期 SKIP，程序走纯 Python 生成路径（与默认配置行为一致），上游发布适配 wheel 后替换 `combined/wheels/` 即可恢复（跟进项见 TODO）。
 
 ### 分支策略
 

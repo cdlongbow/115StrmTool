@@ -84,7 +84,7 @@ GitHub Actions 自动构建：推送日期格式 tag（如 `20261003`；当日�
 
 ## 技术栈
 
-- Python 3.12 + FastAPI + Uvicorn + Pydantic
+- Python 3.14 + FastAPI + Uvicorn + Pydantic
 - httpx（异步 HTTP/2 客户端）
 - HTML + JavaScript 单页 Web UI
 - pystray + Pillow（系统托盘）
