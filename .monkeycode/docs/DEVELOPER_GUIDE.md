@@ -108,7 +108,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（216 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（220 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
@@ -174,6 +174,8 @@ Co-authored-by: <AI Name> <email>
 3. 若新列需要索引，加入 `_POST_MIGRATION_STATEMENTS`（在迁移完成后执行，兼容旧库补列场景）
 
 **注意**：迁移函数必须幂等（先查 `PRAGMA table_info` 再 `ALTER TABLE`），旧库上重复执行不能报错。
+
+约束类变更同样要写迁移，不能只改建表语句：SQLite 无法给已有表追加约束，需用 `CREATE UNIQUE INDEX` 补唯一性（唯一索引即可作为 UPSERT 的 `ON CONFLICT` 目标）。建索引前先清理历史重复行，否则索引创建会失败——参考 `_migration_2_ensure_pickcode_unique`。
 
 ## 编码规范
 

@@ -11,7 +11,7 @@ if getattr(sys, "frozen", False):
 else:
     _BASE_DIR = Path(__file__).parent
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _BASE_SCHEMA = """
     CREATE TABLE IF NOT EXISTS files (
@@ -70,8 +70,55 @@ def _migration_1_ensure_file_columns(conn: sqlite3.Connection):
             logger.info("数据库迁移: files 表补充列 %s", column)
 
 
+def _migration_2_ensure_pickcode_unique(conn: sqlite3.Connection):
+    """
+    确保 files.pickcode 具备唯一约束，供 UPSERT 的 ON CONFLICT 目标使用
+
+    早期版本的建表语句可能只声明 ``pickcode TEXT NOT NULL`` 而没有 UNIQUE，
+    迁移只补列不补约束时 UPSERT 会报 "ON CONFLICT clause does not match any
+    PRIMARY KEY or UNIQUE constraint"。这里先清理历史重复行再补唯一索引，
+    唯一索引即可作为冲突目标，无需重建表
+
+    :param conn (Connection): SQLite 连接
+    """
+    has_unique = False
+    for idx in conn.execute("PRAGMA index_list(files)").fetchall():
+        if not idx[2]:
+            continue
+        columns = [
+            row[2]
+            for row in conn.execute(f"PRAGMA index_info({idx[1]})").fetchall()
+        ]
+        if columns == ["pickcode"]:
+            has_unique = True
+            break
+    if has_unique:
+        return
+
+    duplicates = conn.execute(
+        "SELECT pickcode FROM files GROUP BY pickcode HAVING COUNT(*) > 1"
+    ).fetchall()
+    for (pickcode,) in duplicates:
+        rows = conn.execute(
+            "SELECT id, status FROM files WHERE pickcode=? ORDER BY id DESC",
+            (pickcode,),
+        ).fetchall()
+        active = [r[0] for r in rows if r[1] == "active"]
+        keep = active[0] if active else rows[0][0]
+        conn.execute(
+            "DELETE FROM files WHERE pickcode=? AND id<>?", (pickcode, keep)
+        )
+        logger.info("数据库迁移: 合并 pickcode 重复行 %s，保留 id=%s", pickcode, keep)
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_files_pickcode ON files(pickcode)"
+    )
+    logger.info("数据库迁移: 为 files.pickcode 补充唯一索引")
+
+
 _MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migration_1_ensure_file_columns),
+    (2, _migration_2_ensure_pickcode_unique),
 ]
 
 

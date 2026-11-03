@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-11-03]
+
+1. **修复老版本升级后同步报错**
+    早期版本创建的数据库文件里 `pickcode` 缺少唯一约束，升级后执行全量或增量同步时会在写入阶段报 `ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint` 并中断整次同步。现在启动时自动为 `pickcode` 补建唯一索引，历史重复记录按"优先保留有效记录"合并，已有数据库无需手动处理，直接升级即可恢复同步。
+
 ## [2026-10-31]
 
 1. **清理 115 目录节点缓存**
