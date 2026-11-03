@@ -21,6 +21,10 @@ CHECKIN_DEFAULT_WINDOW = "06:00-09:00"
 CHECKIN_MAX_RETRIES = 3
 CHECKIN_RETRY_DELAY = 3
 
+# 定时与手动签到共用的非阻塞互斥锁：两个入口都会调用 run_p115_checkin_once，
+# 手动点击恰好撞上自动触发时会并发签到，用同一把锁保证同一时刻只有一个在执行
+_CHECKIN_LOCK = Lock()
+
 
 def run_p115_checkin_once(client) -> Tuple[bool, str]:
     """
@@ -151,7 +155,13 @@ class CheckinScheduler:
             if now.timestamp() < next_ts:
                 return
 
-            ok, detail = run_p115_checkin_once(self._client)
+            if not _CHECKIN_LOCK.acquire(blocking=False):
+                logger.info("【115 签到】已有签到任务在执行，本次自动触发跳过")
+                return
+            try:
+                ok, detail = run_p115_checkin_once(self._client)
+            finally:
+                _CHECKIN_LOCK.release()
             if ok:
                 tomorrow_d = (now + timedelta(days=1)).date()
                 self._save_state_fields({
@@ -168,26 +178,34 @@ class CheckinScheduler:
         """
         手动执行一次签到，成功后回写调度状态避免同日重复自动签到
 
+        与定时触发共用互斥锁，抢不到锁说明已有签到在执行，本次直接返回提示
+
         :return Tuple: (是否成功, 结果描述)
         """
         if not self._client:
             return False, "客户端未初始化"
-        ok, detail = run_p115_checkin_once(self._client)
-        from datetime import datetime, timezone, timedelta
-        now = datetime.now(timezone(timedelta(hours=8)))
-        if ok:
-            tomorrow_d = (now + timedelta(days=1)).date()
-            from config_manager import config_manager
+        if not _CHECKIN_LOCK.acquire(blocking=False):
+            logger.info("【115 签到】已有签到任务在执行，本次手动触发跳过")
+            return False, "签到正在执行，请稍后重试"
+        try:
+            ok, detail = run_p115_checkin_once(self._client)
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone(timedelta(hours=8)))
+            if ok:
+                tomorrow_d = (now + timedelta(days=1)).date()
+                from config_manager import config_manager
 
-            cfg = config_manager.get().get("checkin", {})
-            self._save_state_fields({
-                "last_done_date": now.strftime("%Y-%m-%d"),
-                "last_detail": detail,
-                "next_run_ts": self._random_epoch(tomorrow_d, cfg),
-            })
-        else:
-            self._save_state_fields({"last_detail": detail})
-        return ok, detail
+                cfg = config_manager.get().get("checkin", {})
+                self._save_state_fields({
+                    "last_done_date": now.strftime("%Y-%m-%d"),
+                    "last_detail": detail,
+                    "next_run_ts": self._random_epoch(tomorrow_d, cfg),
+                })
+            else:
+                self._save_state_fields({"last_detail": detail})
+            return ok, detail
+        finally:
+            _CHECKIN_LOCK.release()
 
     def get_status(self) -> Dict:
         from config_manager import config_manager
