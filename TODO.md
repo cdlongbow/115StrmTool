@@ -22,6 +22,12 @@
 ## 依赖与升级类
 
 - [ ] p115 依赖升级路线：上游两个仓库已于 2026-10-09 完成 p115client 0.0.9.7.2 适配（DDSRem `7ddd3ec3` + zkmydgth v2.7.19 同步；配套升级 bundled wheels、pyo3 v0.29），iterdir 新 API 重构已被上游消化——迁移参考基准从"等上游"变为"对照这两笔适配 diff 核对本仓库 p115_client_wrapper 的符号用法"；完成后解除 `python-concurrenttools<0.1.9` 上限。当前 0.0.9.6.5.1 稳定无 forcing factor，待出现只有新版才修的问题时再启动
+  - 【预研完成 2026-11-03】逐符号 AST 比对 0.0.9.6.5.1 vs 0.0.9.7.2（结论：迁移成本远低于此前预估，唯一破坏性触点 1 处）：
+    - 零改动存活：`P115Client(cookies=)` 构造签名逐参数一致；wrapper 用到的 14 个实例方法（fs_dir_getid/fs_files/fs_files_app/fs_makedirs_app/fs_mkdir/fs_delete(_app)/fs_copy(_app)/download_url/user_info/fs_storage_info/user_points_sign(_post)）全在；`check_response`、`const.ID_TO_DIRNODE_CACHE`（缓存清理端点）、`client._app_version`（app_ver 热补丁）、`tool.fs_files.get_webapi_origin` 均存活
+    - 唯一迁移点：`tool.iterdir.iter_files_with_path` 已删（iterdir 模块 47 函数裁到 19），改法 `iter_files(client, cid, …, with_path=True)`，现用参数 type/cur/app/cooldown/escape 均保留；涉及 strm_generator.py 两处（import + 调用）。上游 7ddd3ec3 同款改法（skim 场景对应 `iter_files_skim(with_path=True)`，本仓库未用）；改后需实测确认新 `iter_files` 默认 normalize_attr 行为与旧 `iter_files_with_path` 一致（strm_generator 注释警示过二次解析 KeyError 坑）
+    - 兼容观察点：`tool.attr.normalize_attr` 删除 `dict_cls` 关键字参数，本仓库 api_routes 调用只传单参不受影响；test_browse_directory 的字段映射模拟无需改
+    - 依赖链连带：0.0.9.7.2 声明 `p115cipher>=0.0.6`（现钉 0.0.5.4 要升，PyPI 有 0.0.6）、`python-concurrenttools>=0.1.9`（<0.1.9 上限钉解除）、新增 `call_sleep`（PyPI 0.0.1）、iterdir→0.0.10.1、http_response→0.0.9.1，`orjson` 不再是硬依赖（本仓库不直接用）；`combined/wheels/` 需同步替换 p115client/p115cipher/python_concurrenttools(0.1.9)/iterdir/http_response 并新增 call_sleep
+    - 验证配方：uv 3.14 venv 装真实 SDK（按沙箱重建配方）跑全量 pytest + 快速扫描/STRM 生成路径冒烟；沙箱 3.11 门禁不覆盖真实 SDK 行为
 - [x] 【已完成 2026-10-09】发版同日序号版本：现版本一致性校验要求 tag 与 CHANGELOG 顶部日期相等，日内二次发布无路可走；115-station `6f9264b9` 采用"日期版本 + 同日 `-N` 序号当正式版"写法。候选方案：release.yml 校验放行 `YYYYMMDD-N` tag（归一后比对日期部分），配套 CHANGELOG 同日多节或节内追加约定
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
 - [ ] full_strm_sync 恢复 Rust 加速（2026-11-03 升级 Python 3.14 的后置项）：CI/release 已切 3.14，`combined/wheels/` 仅有 cp312 ABI 的 full_strm_sync wheel，安装步骤已容错为 SKIP，exe 走纯 Python 生成路径（默认配置 `use_rust=False` 行为一致）；待上游 DDSRem 发布 cp314 wheel 后替换入 wheels 目录并验证 Rust 路径
