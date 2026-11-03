@@ -3,19 +3,26 @@
 """
 import sys
 import threading
+from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from conftest import API_HEAVY_DEPS, stub_modules
 
+_api_routes_cache: List = []
+
 
 @pytest.fixture
 def api_routes():
-    # patch.dict 退出时自动还原 sys.modules，避免污染其他测试
-    with patch.dict(sys.modules, stub_modules(API_HEAVY_DEPS)):
-        import api_routes as mod
-        yield mod
+    # CPython 3.14 下每个用例反复重装 api_routes/fastapi 导入链会在 GC 阶段段
+    # 错误，首次带桩导入后缓存模块对象复用；tkinter 等仍由各用例运行时查
+    # sys.modules，桩隔离语义不变
+    if not _api_routes_cache:
+        with patch.dict(sys.modules, stub_modules(API_HEAVY_DEPS)):
+            import api_routes as mod
+        _api_routes_cache.append(mod)
+    yield _api_routes_cache[0]
 
 
 def _fake_tkinter(askdirectory=None, root=None):
