@@ -112,10 +112,11 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - `full_strm_sync` 是唯一不在 PyPI 的依赖，wheels 目录只有 cp312 ABI；已从 requirements.txt 移除该硬锁（否则 pip 解析 3.14 时找不到它直接失败），改由 CI 从 combined/wheels/ 容错安装——release.yml 的安装步已对齐 ci.yml 的 per-wheel OK/SKIP 模式（弃用 check=True）
   - 3.14 下 Rust 加速缺位属预期降级（exe 走纯 Python 生成路径，与默认 `use_rust=False` 行为一致），恢复条件见 TODO「full_strm_sync 恢复 Rust 加速」
 
-[桩模块测试遗留 daemon 线程在 3.14 段错误]
+[CPython 3.14 下反复重装导入链导致 GC 段错误]
 - Date: 2026-11-03
 - Context: Discovered by Agent while fixing CI failure after Python 3.14 upgrade
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - CPython 3.14 下，测试起 daemon 线程后不 join 就退出（sys.modules 桩已还原、模块对象被 GC），解释器 finalize 阶段会段错误；全量 `pytest -q` 可能不触发（进程存活时间长），CI 的 standalone-per-file 步骤先暴露——排查 standalone 失败先怀疑孤儿线程/终态竞态，日志特征是测试全部 passed 后进程崩
-  - 修复模式：测试内用 `threading.Event` 替代长 sleep 控制假阻塞，断言后在桩仍生效的 with 块内先 set 再按 `t.name` join 目标线程（如 select-directory），杜绝孤儿线程跨 fixture teardown
+  - CPython 3.14 下，夹具按用例反复"装桩导入项目模块 → patch.dict 退出把 fastapi/starlette/opentelemetry 等传递模块一并从 sys.modules 删除"，旧模块对象仅剩悬空引用，后续某次导入触发 GC 时段错误（全量单进程跑可能不触发，standalone-per-file 先暴露，日志特征是进度点打满后 exit 139 无 traceback——faulthandler 需 `PYTHONFAULTHANDLER=1` 重跑才给栈，崩点在 GC/abc 注册处）
+  - 修复模式：夹具内用模块级缓存只带桩导入一次、复用模块对象；桩（如 tkinter）由被测函数运行时再查 sys.modules，隔离语义不变。超时用例顺带保留 `threading.Event` 取代 sleep 并按线程名 join 的收口写法
+  - 本地复现 3.14 行为的方法：`uv venv` 用 uv 托管的 3.14 运行时 + `uv pip install --python <venv的python>` 装 requirements（uv venv 不带 pip），本地装不上的平台 wheel 直接跳过；standalone 循环用 `timeout 90 <venv-python> -m pytest "$f" -q`，沙箱 3.11 门禁不能替代 3.14 验证
