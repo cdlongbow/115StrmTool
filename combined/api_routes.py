@@ -92,14 +92,18 @@ _status_remote_cache: Dict[str, Any] = {"ts": 0.0, "user_info": None, "storage":
 _status_remote_lock = threading.Lock()
 
 
-def build_p115_status(client: Optional[P115ClientWrapper]) -> Dict[str, Any]:
+def build_p115_status(
+    client: Optional[P115ClientWrapper], include_remote: bool = False
+) -> Dict[str, Any]:
     """
     组装 115 状态快照
 
-    user/storage 远程结果进程内缓存 30 秒，避免前端持续轮询两个状态
-    端点时放大对 115 的远程调用频次
+    默认只读取本地统计并保留 user/storage 空字段，避免概览页常规刷新触达
+    115 远程接口；只有 include_remote 为 true 时才拉取用户/存储信息，
+    远程结果进程内缓存 30 秒
 
     :param client (P115ClientWrapper): 115 客户端实例，可能为 None
+    :param include_remote (bool): 是否请求 115 用户/存储远程接口
 
     :return Dict: 含 client_ready/stats/user_info/storage 的字典
     """
@@ -114,20 +118,25 @@ def build_p115_status(client: Optional[P115ClientWrapper]) -> Dict[str, Any]:
             stats = db.get_stats()
         except Exception as e:
             logger.warning("获取 P115 统计失败: %s", e, exc_info=True)
-        now = time.monotonic()
-        with _status_remote_lock:
-            if now - _status_remote_cache["ts"] < _STATUS_REMOTE_TTL:
-                user_info = _status_remote_cache["user_info"]
-                storage = _status_remote_cache["storage"]
-            else:
-                try:
-                    user_info = client.get_user_info()
-                    storage = client.get_storage_info()
-                    _status_remote_cache.update(
-                        {"ts": now, "user_info": user_info, "storage": storage}
-                    )
-                except Exception as e:
-                    logger.warning("获取 115 用户/存储信息失败: %s", e, exc_info=True)
+        if include_remote:
+            now = time.monotonic()
+            with _status_remote_lock:
+                if now - _status_remote_cache["ts"] < _STATUS_REMOTE_TTL:
+                    user_info = _status_remote_cache["user_info"]
+                    storage = _status_remote_cache["storage"]
+                else:
+                    try:
+                        fetched_user_info = client.get_user_info()
+                        fetched_storage = client.get_storage_info()
+                        user_info = fetched_user_info
+                        storage = fetched_storage
+                        _status_remote_cache.update(
+                            {"ts": now, "user_info": user_info, "storage": storage}
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "获取 115 用户/存储信息失败: %s", e, exc_info=True
+                        )
     return {
         "client_ready": client_ready,
         "stats": stats,
@@ -137,14 +146,19 @@ def build_p115_status(client: Optional[P115ClientWrapper]) -> Dict[str, Any]:
 
 
 @router.get("/status")
-def get_status() -> Dict[str, Any]:
+def get_status(include_remote: bool = False) -> Dict[str, Any]:
     """
     返回 115 状态快照与脱敏配置
+
+    默认只读取本地统计，远程用户/存储字段留空；需要查看 115 用户信息或
+    网盘容量时传 include_remote=true
+
+    :param include_remote (bool): 是否请求 115 用户/存储远程接口
 
     :return Dict: 含 client_ready/stats/user_info/storage/config 的状态字段
     """
     config = config_manager.get()
-    result = build_p115_status(_client)
+    result = build_p115_status(_client, include_remote=include_remote)
     result["config"] = mask_config(config)
     return result
 

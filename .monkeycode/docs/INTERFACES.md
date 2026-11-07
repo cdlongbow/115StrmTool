@@ -10,16 +10,17 @@
 GET /api/status
 ```
 
-返回服务运行状态、115 客户端就绪状态、用户/存储信息。
+返回 115 客户端就绪状态与本地统计。默认不请求 115 用户/存储远程接口，`user_info`、`storage` 固定为 `null`；需要查看用户信息或网盘容量时传 `include_remote=1`，远程结果进程内缓存 30 秒。
 
 **响应示例**：
 
 ```json
 {
-  "status": "running",
-  "p115_ready": true,
-  "user_info": {"user_name": "xxx", "user_id": "..."},
-  "storage_info": {"total_size": "...", "used_size": "..."}
+  "client_ready": true,
+  "stats": {"total_files": 123},
+  "user_info": null,
+  "storage": null,
+  "config": {"p115": {"cookie": ""}}
 }
 ```
 
@@ -216,7 +217,7 @@ GET /admin/api/status
 GET /admin/api/p115/status
 ```
 
-返回 115 客户端就绪状态、统计信息、用户信息。
+返回 115 客户端就绪状态、本地统计与本地缓存的 p115 服务运行状态。默认不请求 115 用户/存储远程接口，`user_info`、`storage` 固定为 `null`；传 `include_remote=1` 时请求并返回用户/存储信息，远程结果复用 30 秒进程内缓存。
 
 ```
 POST /admin/api/p115/cache/clear

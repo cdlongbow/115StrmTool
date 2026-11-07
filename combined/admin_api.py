@@ -130,15 +130,22 @@ def set_p115_status(running: bool):
 
 
 @router.get("/p115/status")
-def get_p115_status() -> Dict[str, Any]:
+def get_p115_status(include_remote: bool = False) -> Dict[str, Any]:
     """
     与 /api/status 共用状态构建器，额外返回 running 服务状态
+
+    默认只读取本地统计，远程用户/存储字段留空；传 include_remote=true 后
+    才请求 115 用户/存储接口，远程结果复用 30 秒进程内缓存
+
+    :param include_remote (bool): 是否请求 115 用户/存储远程接口
 
     :return Dict: 状态快照字段加 running
     """
     from api_routes import build_p115_status
 
-    result = build_p115_status(_p115_client_ref["instance"])
+    result = build_p115_status(
+        _p115_client_ref["instance"], include_remote=include_remote
+    )
     result["running"] = _p115_status["running"]
     return result
 

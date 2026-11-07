@@ -102,6 +102,10 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 2026-11-03 四巡：DDSRem 与 LitePan 均无新提交；zkmydgth 仅 `3ea551a2`/`500a8e75` SeedSpaceGuard v3.3.0（保种空间面，不借鉴）；115-station 基线后 31 条，命中收窄口径的实质内容有两条 115 端点行为知识——`9c381499` 分享失效不能看 `state`，过期/取消的分享 `/share/snap` 照样 `state=true` 且文件列得出来，要看 `shareinfo.share_state`（1 正常、4 取消、7 过期），取链 `POST proapi /app/share/downurl` 的错误码 4100008 访问码错、4100010 已取消、4100018 已过期、`data=[]`/`url=false` 表示文件不在分享里；`75af5c6b` 分享列举原 300 目录 / 4 层上限会让整库分享一律报「分享太大」，已改为不限目录数与层数，且遇风控整轮停下按退避重试、不能跳过继续列（半份清单会把没列到的误判为分享里没了）。本仓库无任何 115 分享功能面（grep 无 share_code/snap），两条仅作知识记录不落地
   - 四巡待用户决策项：由 zkmydgth `11638b17`（TgSignin v1.2.3 签到互斥）触发的自查——本仓库 `checkin_scheduler` 的定时 `_loop` 与 `manual_checkin` 共用 `run_p115_checkin_once` 但签到动作本身无互斥（`self._lock` 只保护状态文件读写），手动点击与自动触发同时发生会并发签到；上游做法是模块级非阻塞 `threading.Lock`，定时/手动/命令统一 `acquire(blocking=False)`，抢不到就跳过并记来源日志
   - 四巡决策结果：签到互斥已落地（checkin_scheduler 模块级 `_CHECKIN_LOCK`，`_tick` 与 `manual_checkin` 统一 `acquire(blocking=False)`，手动抢不到返回"签到正在执行，请稍后重试"、自动抢不到跳过并记日志且不动状态；5 个用例见 `test_checkin_mutex.py`）；该类测试须 monkeypatch `checkin_scheduler.CHECKIN_STATE_FILE` 到 tmp_path，否则会往 combined 目录写 checkin_state.json
+  - 2026-11-07 五巡：DDSRem 与 LitePan 无新提交；zkmydgth 基线后仅 SeedSpaceGuard v3.5.0/v3.6.0 与 ConfigBackup 相关更新（v3.4.0 增加超量自动暂停、用户确认与 24h 提醒，当前本仓库 WebDAV 手动备份无对应场景）；115-station 基线后 `e7627502`/`c5d308be`/`cf3d7e55` 无实质借鉴项，分别是离线配额展示、机器人磁力、订阅自建目录删除后的事件缓存备忘，本仓库走扫描式同步且无订阅/机器人功能面
+  - 五巡 Issue 知识：DDSRem #493 暴露 P115Disk 在 115 Cookie 失效让 `usage()` 返回 `None` 后直接解引用崩溃；本仓库 `get_user_info`/`get_storage_info` 已有 `capture_exceptions` 回 `None`，当前 status 调用方只取 `stats`/`client_ready`，暂不受影响；若未来展示网盘容量，失败应降级成明确提示并保留空值，避免把空对象继续当容量解析
+  - 五巡待用户决策项：`/admin/api/p115/status` 当前仍调用 `get_user_info`/`get_storage_info` 给状态快照预留字段，概览页只用 `client_ready` 与本地统计；是否后续改成按需获取或移除，需用户确认后再改代码
+  - 五巡决策结果：状态接口改为按需获取。`/api/status` 与 `/admin/api/p115/status` 默认 `include_remote=false`，只读本地统计并保留 `user_info`/`storage` 空字段；未来确需展示 115 用户或容量时才传 `include_remote=1` 触达远程接口
 
 [CI 构建运行时升级到 Python 3.14]
 - Date: 2026-11-03
