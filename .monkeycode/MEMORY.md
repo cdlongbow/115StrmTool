@@ -111,6 +111,7 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - ci.yml 与 release.yml 的 python-version 已切 `3.14`（20261031 之后生效，下一版 exe 内嵌 CPython 3.14）；沙箱本地仍是 3.11，本地门禁不代表 3.14 行为，最终以 CI 为准
   - `full_strm_sync` 是唯一不在 PyPI 的依赖，wheels 目录只有 cp312 ABI；已从 requirements.txt 移除该硬锁（否则 pip 解析 3.14 时找不到它直接失败），改由 CI 从 combined/wheels/ 容错安装——release.yml 的安装步已对齐 ci.yml 的 per-wheel OK/SKIP 模式（弃用 check=True）
   - 3.14 下 Rust 加速缺位属预期降级（exe 走纯 Python 生成路径，与默认 `use_rust=False` 行为一致），恢复条件见 TODO「full_strm_sync 恢复 Rust 加速」
+  - 2026-11-07：GitHub Actions storage 看 artifacts/Packages；public repo 的标准 runner 分钟免费，artifact 仍会吃账户 Actions 存储。发布 exe 已由 softprops/action-gh-release 作为 Release Assets 上传，release.yml 不再用 upload-artifact；未来若需要 workflow artifacts，优先短保留或只在调试分支开启
 
 [CPython 3.14 下反复重装导入链导致 GC 段错误]
 - Date: 2026-11-03

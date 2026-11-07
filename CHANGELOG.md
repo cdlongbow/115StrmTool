@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-11-07]
+
+1. **精简发布构建产物**
+    发版构建现在只把 exe 发布到 GitHub Release，不再额外保存为 workflow artifact；Release 下载入口保持，Actions 存储不再因每次发版重复累积临时构建制品。
+
 ## [2026-11-03]
 
 1. **修复老版本升级后同步报错**
