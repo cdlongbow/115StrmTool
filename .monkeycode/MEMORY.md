@@ -134,3 +134,4 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 沙箱重开不会自动装新版 Python：系统 `python3` 只读基础镜像且随重建漂移（已观察到 3.11 与 3.12 两种），会话内自装的 conda/uv 运行时、venv、`pip --break-system-packages` 包在重开后全部丢失，按下方步骤重装即可
   - 快速就绪（对齐 CI 3.14，含真实 SDK 与门禁工具）：`pip install --break-system-packages -q uv` → `uv python install 3.14` → `uv venv <dir>` → `uv pip install --python <dir>/bin/python -r combined/requirements.txt pytest pytest-asyncio`；uv venv 不含 pip，uv 托管解释器拒绝被直接修改，一律走 `uv pip install --python`；`full_strm_sync` 无 3.14 wheel 属预期 SKIP，桩测试不依赖它
   - 轻量就绪（仅跑门禁，容忍装不上真实 SDK 时）：照 2026-10-09 条目直接 pip 装 ruff/pytest 等纯 Python 工具即可
+  - 会话善后：用户准备重启 Agent 或清空上下文前，`unset GH_TOKEN` 等会话内临时凭据变量；凭据值只在命令管道中传递，回复、日志、提交与文档必须保持空值或占位符
