@@ -193,6 +193,27 @@ async def _read_request_body_safe(request: Request) -> bytes | None:
         return None
 
 
+def _range_starts_at_zero(range_header: str) -> bool:
+    """
+    判断 Range 请求头是否从文件起始字节开始
+
+    形如 bytes=0-/bytes=0-1023 的请求语义等价于整段内容，
+    上游返回 200 属于合法行为，不应触发换链重试
+
+    :param range_header (str): 原始 Range 请求头
+
+    :return bool: 起始字节为 0 时返回 True，否则返回 False
+    """
+    value = range_header.strip()
+    if not value.lower().startswith("bytes="):
+        return False
+    spec = value[len("bytes="):].split(",", 1)[0].strip()
+    if not spec:
+        return False
+    start = spec.split("-", 1)[0].strip()
+    return start == "0"
+
+
 def _strip_accept_encoding(headers: dict[str, str]) -> dict[str, str]:
     """
     去掉 Accept-Encoding，便于上游返回未压缩内容以便修改 body
@@ -985,11 +1006,19 @@ def create_app(
                 continue
 
             status = upstream.status_code
+            # 带 Range 得 200：可能是 CDN 返回整段内容（如回退到开头的 bytes=0-）
+            # 设计约定重试后仍 200 则原样转发，避免误判为不可用而返回 502
+            range_ignored = (
+                req_range is not None
+                and status == 200
+                and not _range_starts_at_zero(req_range)
+                and attempt < total_attempts
+            )
             retryable = (
                 status in (403, 404)
                 or status >= 500
                 or 300 <= status < 400
-                or (req_range is not None and status == 200)
+                or range_ignored
             )
             if retryable:
                 last_error = f"upstream status {status}"

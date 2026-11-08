@@ -177,6 +177,34 @@ class TestStreamProxySelfHealing:
         assert resp.status_code == 206
         assert resp.content == b"PART"
 
+    def test_range_from_zero_full_200_forwarded_without_retry(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (200, {"content-length": "4"}, b"FULL"),
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.status_code == 200
+        assert resp.content == b"FULL"
+        assert upstream.get_count == 1
+        assert upstream.head_count == 1
+
+    def test_ignored_range_persistent_200_forwarded_after_retries(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (200, {"content-length": "4"}, b"FULL"),
+                (200, {"content-length": "4"}, b"FULL"),
+                (200, {"content-length": "4"}, b"FULL"),
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=5-8"}, script=script
+            )
+        assert resp.status_code == 200
+        assert resp.content == b"FULL"
+        assert upstream.get_count == 3
+        assert upstream.head_count == 3
+
 
 class TestStreamProxyNetworkGate:
     def test_public_source_rejected(self):
