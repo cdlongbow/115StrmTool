@@ -135,3 +135,16 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 快速就绪（对齐 CI 3.14，含真实 SDK 与门禁工具）：`pip install --break-system-packages -q uv` → `uv python install 3.14` → `uv venv <dir>` → `uv pip install --python <dir>/bin/python -r combined/requirements.txt pytest pytest-asyncio`；uv venv 不含 pip，uv 托管解释器拒绝被直接修改，一律走 `uv pip install --python`；`full_strm_sync` 无 3.14 wheel 属预期 SKIP，桩测试不依赖它
   - 轻量就绪（仅跑门禁，容忍装不上真实 SDK 时）：照 2026-10-09 条目直接 pip 装 ruff/pytest 等纯 Python 工具即可
   - 会话善后：用户准备重启 Agent 或清空上下文前，`unset GH_TOKEN` 等会话内临时凭据变量；凭据值只在命令管道中传递，回复、日志、提交与文档必须保持空值或占位符
+
+[GitHub Actions 存储配额排障与凭据边界]
+- Date: 2026-11-08
+- Context: Discovered by Agent while diagnosing account Actions storage 100% alert
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 账户级去向排查：`/installation/repositories?per_page=100&page=N` 分页（可达数百仓库，本账户 191 个）；`/repos/{o}/{r}/actions/artifacts` 与 `/actions/runs?per_page=1` 取 total_count；按 artifacts 的 size_in_bytes 排序定位大户
+  - 本账户配额真实大头是**他人项目 fork**（javinizer-go/MovieClaw/amane 等），同步上游后其 CI 在本账户跑构建并堆产物；own 仓库已改 Release Assets 直传后为 0 产物。治理方案：删旧产物 + 关 fork 仓库 Actions（上游发布不受影响）
+  - git credential 提供的是 **GitHub App installation token**，只覆盖已装 App 的仓库与 repo 类权限；`/actions/permissions`、账单、`/user/repos` 一律 403 `Resource not accessible by integration`。验证「Actions 是否禁用」改用 runs 计数基线快照，能读 `actions/permissions` 的必须由用户 UI 操作
+  - 该 token 有效范围约 50-190 个仓库（分页可达），逐仓库 DELETE artifact（204 成功 / 410 已删可忽略）是唯一可行清理路径；批量循环用 `subprocess.run(["curl","-H",AUTH,...])` 传头，避免命令拼接泄漏 token
+  - 沙箱内 python `urllib` 走后台终端时 TLS 易断（`TLS connection has been closed`）、`asyncio` 嵌套易崩；批量 API 一律 foreground + `curl` 子进程，后台仅用于长跑循环
+  - 会话善后补强：临时 token 落盘只放 `/tmp/opencode/` 且 chmod 600，任务完成立刻 `shred -u` 或 `rm -f`；重启前逐项核验 `git status --short` 干净、令牌文件不存在、`env | grep -i token` 无输出
+
