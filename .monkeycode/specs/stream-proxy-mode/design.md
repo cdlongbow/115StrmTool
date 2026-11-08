@@ -58,7 +58,7 @@ graph TD
   1. `http_client_no_follow` GET（非跟随重定向；直链即最终地址，若上游又回 3xx 按失败链处理）转发 `_build_forward_headers(request)`（含播放端 UA——直链按 UA 绑定签发，UA 不一致 CDN 拒流）。
   2. 响应头白名单转发：`status_code`、`Content-Type`、`Content-Length`、`Content-Range`、`Accept-Ranges`；显式丢弃 `Content-Disposition`、`ETag`、`Last-Modified`、`Expires`、`Cache-Control`、`Set-Cookie`、传输编码相关头。
   3. 流式回传复用现有 `stream()` 模式（`aiter_bytes(chunk_size=65536)`，`finally: resp.aclose()`），客户端断开由 Starlette 取消任务触发 finally 关闭上游。
-  4. **重试状态机（仅响应头产出前）**：上游连接异常、HTTP 403/404、或"请求带 Range 而上游返回 200（Range 被忽略）"→ `sleep(退避 0.5s/1.5s)` 后以 `skip_final_url_cache=True` 重走 `_resolve_media_target` 再试；累计重解析 `≤ _STREAM_RETRY_MAX=2` 次、自请求进入起 `≤ _STREAM_RETRY_BUDGET_S=10` 秒；超限 → `JSONResponse 502` + `logger.error`（item_id、尝试次数、末次错误类型）。
+  4. **重试状态机（仅响应头产出前）**：上游连接异常、HTTP 403/404、或"请求带 Range 而上游返回 200（Range 被忽略）"→ `sleep(退避 0.5s/1.5s)` 后以 `skip_final_url_cache=True` 重走 `_resolve_media_target` 再试；累计重解析 `≤ STREAM_RETRY_MAX=2` 次、自请求进入起 `≤ STREAM_RETRY_BUDGET_SECONDS=10` 秒；超限 → `JSONResponse 502` + `logger.error`（item_id、尝试次数、末次错误类型）。
   5. 已产出响应头后的中断处理见"Error Handling：半身后断"。
 - **PlaybackInfo 处理器调整**：1110 行 `if redirect_mode:` 改为 `if playback_mode is PlaybackMode.REDIRECT:`（`stream_proxy` 下 MediaSources.Path 不预替换直链）。`_apply_force_direct_play_to_media_sources` 与 STRM 源缓存回填三态下均保持执行。
 - **网段校验 `_is_private_source(request) -> bool`**：复用既有 `_real_client_ip`（含 XFF/X-Real-IP）+ `ipaddress.ip_address(...).is_private`（RFC1918、环回、ULA 一并覆盖）。流代理模式下非私有来源 → `403` + 来源 IP 日志。
@@ -78,7 +78,7 @@ graph TD
 }
 ```
 
-模块常量：`_STREAM_RETRY_MAX = 2`、`_STREAM_RETRY_BUDGET_S = 10.0`、`_STREAM_RETRY_BACKOFF = (0.5, 1.5)`、`_UPSTREAM_STRIP_HEADERS`（转发丢弃头集合）、`_UPSTREAM_FORWARD_HEADERS`（转发保留头白名单）。
+模块常量：`STREAM_RETRY_MAX = 2`、`STREAM_RETRY_BUDGET_SECONDS = 10.0`、`STREAM_RETRY_BACKOFF_SECONDS = (0.5, 1.5)`、`UPSTREAM_FORWARD_RESPONSE_HEADERS`（响应头白名单，未列入的响应头一律不转发）。
 
 ## Correctness Properties
 

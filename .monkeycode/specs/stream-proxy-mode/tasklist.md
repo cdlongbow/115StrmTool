@@ -24,7 +24,7 @@
 - [x] 5. 流代理核心：解析复用、取流转发、换链重试
   - [x] 5.1 从 `_try_media_response`（719-822 行）抽出 `_resolve_media_target(item_id, api_key, request, *, skip_final_url_cache: bool) -> Optional[str]`：保持用户缓存→`playback_url_cache`（可为跳过级）→PlaybackInfo→STRM 源缓存→`_resolve_redirect` 的次序、缓存键与 TTL 语义、`key_lock` 防击穿不变（R4.AC1、R4.AC2、P5）
   - [x] 5.2 实现 `_proxy_stream(request, direct_url)`：`http_client_no_follow` GET/HEAD 转发 `_build_forward_headers(request)`（含 Range 与播放端 UA）；响应头白名单转发（`Content-Type`/`Content-Length`/`Content-Range`/`Accept-Ranges` + 状态码），丢弃 `Content-Disposition`/`ETag`/`Last-Modified`/`Expires`/`Cache-Control`/`Set-Cookie`/传输编码头；`aiter_bytes(65536)` + `finally: resp.aclose()` 流式回传（R2；P2、P3、P4）
-  - [x] 5.3 实现换链重试状态机（仅响应头产出前）：上游连接异常、403/404、带 Range 得 200 → 退避（0.5s/1.5s）→ `skip_final_url_cache=True` 重解析 → 重试；上限 `_STREAM_RETRY_MAX=2`、自请求进入起预算 10 秒；超限 `JSONResponse` 502 + `logger.error`（item_id、次数、末次错误）（R3；design「半身后断」边界按设计执行）
+  - [x] 5.3 实现换链重试状态机（仅响应头产出前）：上游连接异常、403/404、带 Range 得 200 → 退避（0.5s/1.5s）→ `skip_final_url_cache=True` 重解析 → 重试；上限 `STREAM_RETRY_MAX=2`、自请求进入起预算 10 秒；超限 `JSONResponse` 502 + `logger.error`（item_id、次数、末次错误）（R3；design「半身后断」边界按设计执行）
   - [x] 5.4 流代理单元测试 `combined/test_stream_proxy_mode.py`：三态路由快照回归（disabled/redirect 行为与实施前一致，P1）；`stream_proxy` 206/Range/白名单头/丢弃头断言（P2）；无 115 域名泄漏断言（P3）（standalone 单文件、复用 `conftest.py` 桩与 `test_redirect_method.py` 本地 mock server 模式）
   - [x] 5.5 自愈与并发单元测试：403→跳缓存重解析→第二次成功（断言解析调用 2 次）；403×3→502（打桩 `asyncio.sleep`）；HEAD 空头体；同 key 并发 5 路仅 1 次解析（对齐 `test_redirect_stampede.py`）；客户端断开后上游 closed（P4）
   - [x] 5.6 配置兼容测试：旧 `redirect_mode` JSON/请求体映射、非法值回落与 422（补 1.3/2.3 未尽项）
