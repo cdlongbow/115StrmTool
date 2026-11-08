@@ -1027,8 +1027,8 @@ def create_app(
             )
 
         logger.error(
-            "流代理重连耗尽: item_id=%s attempts=%s last=%s ip=%s",
-            item_id, total_attempts, last_error, _real_client_ip(request),
+            "流代理重连耗尽: item_id=%s method=%s attempts=%s last=%s ip=%s",
+            item_id, method, total_attempts, last_error, _real_client_ip(request),
         )
         return JSONResponse(
             status_code=502,

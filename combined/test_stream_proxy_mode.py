@@ -322,3 +322,73 @@ class TestAdminApiPlaybackModeCompat:
         sent = self._cm.update.call_args[0][0]
         assert sent["emby"]["playback_mode"] == "stream_proxy"
         assert self._restart_count == 1
+class TestStreamProxyReResolveGuard:
+    def test_resolve_raises_recovers(self, monkeypatch):
+        upstream = FakeUpstream(
+            cdn_script=[
+                (403, {}, b"expired"),
+                (206, {"content-length": "4"}, b"BODY"),
+            ]
+        )
+
+        hits = {"n": 0}
+
+        async def _run():
+            app = create_app(emby_host="http://emby.test", playback_mode="stream_proxy")
+            async with app.router.lifespan_context(app):
+                _seed_strm_cache(app)
+                client = _make_client(app, upstream)
+                real_get = app.state.strm_source_cache.get
+
+                def flaky_get(key):
+                    hits["n"] += 1
+                    if hits["n"] == 2:
+                        raise RuntimeError("boom")
+                    return real_get(key)
+
+                app.state.strm_source_cache.get = flaky_get
+                async with client:
+                    return await client.get(
+                        MEDIA_URL,
+                        headers={**LAN_HEADERS, "range": "bytes=0-3"},
+                    )
+
+        with patch("proxy_app.sleep", new=asyncio.sleep):
+            resp = asyncio.run(_run())
+
+        assert resp.status_code == 206
+        assert resp.content == b"BODY"
+        assert hits["n"] == 3
+
+    def test_budget_exceeded_after_resolve_still_502(self, monkeypatch):
+        upstream = FakeUpstream(
+            cdn_script=[
+                (403, {}, b"expired"),
+                (206, {"content-length": "4"}, b"BODY"),
+            ]
+        )
+
+        async def _run():
+            app = create_app(emby_host="http://emby.test", playback_mode="stream_proxy")
+            async with app.router.lifespan_context(app):
+                _seed_strm_cache(app)
+                client = _make_client(app, upstream)
+                async with client:
+                    return await client.get(
+                        MEDIA_URL,
+                        headers={**LAN_HEADERS, "range": "bytes=0-3"},
+                    )
+
+        ticks = iter([0.0, 0.1, 11.0, 11.0, 11.0, 11.0])
+
+        def fake_monotonic():
+            return next(ticks, 11.0)
+
+        monkeypatch.setattr("proxy_app.monotonic", fake_monotonic)
+
+        with patch("proxy_app.sleep", new=asyncio.sleep):
+            resp = asyncio.run(_run())
+
+        assert resp.status_code == 502
+        assert upstream.get_count == 1
+        assert upstream.head_count == 2
