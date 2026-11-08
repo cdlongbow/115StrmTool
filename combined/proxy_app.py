@@ -936,9 +936,26 @@ def create_app(
                     last_error = "retry budget exceeded"
                     break
                 await sleep(backoff)
-                new_url, cur_resolved = await _resolve_media_target(
-                    item_id, api_key, request, skip_final_url_cache=True
-                )
+                # 解析链异常不应拖垮整个请求
+                try:
+                    new_url, cur_resolved = await _resolve_media_target(
+                        item_id, api_key, request, skip_final_url_cache=True
+                    )
+                except Exception:
+                    last_error = "resolve raised"
+                    logger.warning(
+                        "stream proxy re-resolve failed: item_id=%s attempt=%s",
+                        item_id, attempt, exc_info=True
+                    )
+                    continue
+                # 换链解析耗时计入预算
+                if monotonic() - start >= STREAM_RETRY_BUDGET_SECONDS:
+                    if new_url is not None:
+                        cur_url = new_url
+                        last_error = "retry budget exceeded after resolve"
+                        break
+                    last_error = "retry budget exceeded"
+                    break
                 if new_url is None:
                     last_error = "resolve returned no target"
                     continue
