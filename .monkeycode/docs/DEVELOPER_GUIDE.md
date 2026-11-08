@@ -163,7 +163,7 @@ Co-authored-by: <AI Name> <email>
 - `_resolve_media_target()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链，302 与流代理两种模式共用；`skip_final_url_cache=True` 时跳过已解析缓存强制换新链（直链失效自愈场景）
 - `_resolve_redirect()` 返回 `(最终 URL, 是否成功解析)` 元组；解析失败时缓存仅保留 5 秒，避免坏 URL 长期驻留
 - `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
-- `_proxy_stream()` 向 115 CDN 带 Range 取流并以白名单响应头流式回传；上游 403/404/5xx/3xx/Range 被忽略时在响应头产出前换新链重试（次数与时长受 `STREAM_RETRY_*` 常量约束），耗尽返回 502
+- `_proxy_stream()` 向 115 CDN 带 Range 取流并以白名单响应头流式回传；上游 403/404/5xx/3xx 或非起始 Range（如 `bytes=5-`）被忽略返回 200 时，在响应头产出前换新链重试（次数与时长受 `STREAM_RETRY_*` 常量约束），耗尽返回 502；`bytes=0-` 这类起始 Range 的 200 属合法整段返回，直接转发不重试
 
 ### 新增数据库字段
 

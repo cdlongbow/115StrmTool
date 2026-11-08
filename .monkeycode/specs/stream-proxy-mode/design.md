@@ -58,7 +58,7 @@ graph TD
   1. `http_client_no_follow` GET（非跟随重定向；直链即最终地址，若上游又回 3xx 按失败链处理）转发 `_build_forward_headers(request)`（含播放端 UA——直链按 UA 绑定签发，UA 不一致 CDN 拒流）。
   2. 响应头白名单转发：`status_code`、`Content-Type`、`Content-Length`、`Content-Range`、`Accept-Ranges`；显式丢弃 `Content-Disposition`、`ETag`、`Last-Modified`、`Expires`、`Cache-Control`、`Set-Cookie`、传输编码相关头。
   3. 流式回传复用现有 `stream()` 模式（`aiter_bytes(chunk_size=65536)`，`finally: resp.aclose()`），客户端断开由 Starlette 取消任务触发 finally 关闭上游。
-  4. **重试状态机（仅响应头产出前）**：上游连接异常、HTTP 403/404、或"请求带 Range 而上游返回 200（Range 被忽略）"→ `sleep(退避 0.5s/1.5s)` 后以 `skip_final_url_cache=True` 重走 `_resolve_media_target` 再试；累计重解析 `≤ STREAM_RETRY_MAX=2` 次、自请求进入起 `≤ STREAM_RETRY_BUDGET_SECONDS=10` 秒；超限 → `JSONResponse 502` + `logger.error`（item_id、尝试次数、末次错误类型）。
+  4. **重试状态机（仅响应头产出前）**：上游连接异常、HTTP 403/404、或"非起始字节的 Range 请求被上游忽略返回 200"→ `sleep(退避 0.5s/1.5s)` 后以 `skip_final_url_cache=True` 重走 `_resolve_media_target` 再试；累计重解析 `≤ STREAM_RETRY_MAX=2` 次、自请求进入起 `≤ STREAM_RETRY_BUDGET_SECONDS=10` 秒；超限 → `JSONResponse 502` + `logger.error`（item_id、尝试次数、末次错误类型）。`bytes=0-` 这类从起始字节开始的 Range（播放器回退/倒回开头常见）语义等价于整段内容，上游返回 200 属合法，直接转发不重试。
   5. 已产出响应头后的中断处理见"Error Handling：半身后断"。
 - **PlaybackInfo 处理器调整**：1110 行 `if redirect_mode:` 改为 `if playback_mode is PlaybackMode.REDIRECT:`（`stream_proxy` 下 MediaSources.Path 不预替换直链）。`_apply_force_direct_play_to_media_sources` 与 STRM 源缓存回填三态下均保持执行。
 - **网段校验 `_is_private_source(request) -> bool`**：复用既有 `_real_client_ip`（含 XFF/X-Real-IP）+ `ipaddress.ip_address(...).is_private`（RFC1918、环回、ULA 一并覆盖）。流代理模式下非私有来源 → `403` + 来源 IP 日志。
@@ -97,7 +97,7 @@ graph TD
 | 解析链完整失败（http_path 取不到） | `_handle_media` 按既有语义回退 `_reverse_proxy`（与 `disabled` 同分支） |
 | 直链解析失败（HEAD 超时/非 2xx） | 消耗重试预算重解析；预算尽 → 502 + 日志 |
 | 上游 403/404（直链过期主场景） | 跳过 `playback_url_cache` 重解析 + 重试 ≤2 次，预算 10s；成功则 206/200 正常回传 |
-| Range 被上游忽略（带 Range 得 200） | 视为异常，按上行重试；重试仍 200 则原样转发 200（播放器按整文件自处理） |
+| Range 被上游忽略（带 Range 得 200） | 视为异常，按上行重试；`bytes=0-` 起始 Range 属合法整段返回，直接转发不重试；非起始 Range 重试仍 200 则原样转发 200（播放器按整文件自处理） |
 | 退避/重试总耗时越限 | 放弃重试，502 + 日志（item_id、尝试次数、末次错误） |
 | **半身后断**（响应头已提交、body 中断） | 无法在同一响应内自愈（状态码已不可改）；关闭上游并记 `logger.error`，预期播放端重新发起 Range 请求 → 新请求走完整重试状态机恢复。此为需求 R3"播放端无感"的实现边界，需求侧"暂停恢复"场景命中"头未出"路径不受影响 |
 | 播放端断开 | Starlette 取消 → `stream()` finally `resp.aclose()`，无僵尸连接 |
