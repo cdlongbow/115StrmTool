@@ -222,9 +222,14 @@ function stopPolling(h) {
       <label class="switch"><input type="checkbox" id="emby_external_player_url"><span class="slider"></span></label>
       <span class="switch-label">启用外部播放器</span>
     </div>
-    <div class="switch-group">
-      <label class="switch"><input type="checkbox" id="emby_redirect_mode"><span class="slider"></span></label>
-      <span class="switch-label">302 直链模式（客户端直连 115 CDN，关闭则回退到 Emby 原响应）</span>
+    <div class="form-group">
+      <label>播放模式</label>
+      <div style="display:flex;gap:16px;align-items:center;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="emby_playback_mode" id="emby_pb_disabled" value="disabled">关闭</label>
+        <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="emby_playback_mode" id="emby_pb_redirect" value="redirect">302 直链</label>
+        <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="emby_playback_mode" id="emby_pb_proxy" value="stream_proxy">流代理（局域网）</label>
+      </div>
+      <div style="font-size:12px;opacity:0.7;margin-top:4px">流代理：由本机向 115 取流转发给播放端，暂停续播与拖动不受直链时效影响；仅响应内网网段设备，115 地址不暴露给播放端</div>
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="btn btn-primary" onclick="saveEmbyConfig()">保存配置</button>
@@ -535,7 +540,10 @@ function loadEmbyConfig(c) {
   document.getElementById('emby_proxy_port').value = c.proxy_port || 8097;
   document.getElementById('emby_pin_rules').value = c.pin_rules || '';
   document.getElementById('emby_external_player_url').checked = c.external_player_url || false;
-  document.getElementById('emby_redirect_mode').checked = c.redirect_mode || false;
+  const pbEl = ['disabled','redirect','stream_proxy'].includes(c.playback_mode)
+    ? document.querySelector('input[name="emby_playback_mode"][value="' + c.playback_mode + '"]')
+    : document.getElementById('emby_pb_disabled');
+  if (pbEl) pbEl.checked = true;
 }
 
 async function saveEmbyConfig() {
@@ -546,7 +554,7 @@ async function saveEmbyConfig() {
     proxy_port: parseInt(document.getElementById('emby_proxy_port').value) || 8097,
     pin_rules: document.getElementById('emby_pin_rules').value,
     external_player_url: document.getElementById('emby_external_player_url').checked,
-    redirect_mode: document.getElementById('emby_redirect_mode').checked,
+    playback_mode: (document.querySelector('input[name="emby_playback_mode"]:checked') || {value:'disabled'}).value,
   };
   try {
     const r = await apiFetch('/admin/api/emby/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});

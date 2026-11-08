@@ -10,9 +10,9 @@ from fastapi.responses import Response
 from exceptions import ServiceError
 
 from logger import LOG_DIR
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from config_manager import config_manager, mask_config, COOKIE_MASK
+from config_manager import config_manager, mask_config, COOKIE_MASK, PLAYBACK_MODE_VALUES
 from logger import logger
 
 from app_metadata import APP_VERSION
@@ -93,7 +93,17 @@ class EmbyConfigRequest(BaseModel):
     pin_rules: Optional[str] = None
     external_player_url: Optional[bool] = None
     external_player_list: Optional[List[str]] = None
+    playback_mode: Optional[str] = None
+    # @deprecated: 兼容旧客户端布尔请求体的映射入口，映射规则 true->redirect / false->disabled；
+    # 前端已全部改用 playback_mode 后可于 playback 配置接口下个 minor 版本移除
     redirect_mode: Optional[bool] = None
+
+    @field_validator("playback_mode")
+    @classmethod
+    def _validate_playback_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in PLAYBACK_MODE_VALUES:
+            raise ValueError("playback_mode 必须是 disabled / redirect / stream_proxy 之一")
+        return v
 
 
 @router.get("/emby/config")
@@ -104,9 +114,15 @@ def get_emby_config() -> Dict[str, Any]:
 @router.post("/emby/config")
 def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
     updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    legacy_redirect = updates.pop("redirect_mode", None)
+    if legacy_redirect is not None and "playback_mode" not in updates:
+        updates["playback_mode"] = "redirect" if legacy_redirect else "disabled"
     if updates:
         config_manager.update({"emby": updates})
         logger.info("Emby 配置已更新: %s", updates)
+    if "playback_mode" in updates and _restart_emby_callback:
+        _restart_emby_callback()
+        logger.info("播放模式已更新，Emby 代理已按新配置重建")
     return config_manager.get().get("emby", {})
 
 

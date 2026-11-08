@@ -90,7 +90,7 @@ MoviePilot-Windows/
 **关键文件**: `proxy_app.py`（最大模块）
 **依赖**: `external_players`, `config_manager`, `redirect_service`
 **被依赖**: Emby 客户端（浏览器/桌面）
-**配置项**: `redirect_mode` — `true` 为 302 直链模式（客户端直连 CDN），`false`（默认）时媒体请求回退到通用反向代理转发 Emby 原响应
+**配置项**: `playback_mode` — 三态枚举：`disabled`（默认）媒体请求回退通用反向代理转发 Emby 原响应；`redirect` 为 302 直链模式（客户端直连 CDN）；`stream_proxy` 为局域网流代理模式（工具经 `_resolve_media_target` 解析 115 直链后由 `_proxy_stream` 取流回传播放端，直链过期自动换新链重试，仅响应私有网段来源）；旧 `redirect_mode` 布尔字段自动迁移
 
 ### 115 跳转服务（端口 3333）
 **目的**: 为 STRM 文件中的 pickcode 解析 115 CDN 下载地址，支持 UA 绑定的加密下载 API（优先）和 SDK 下载（降级兜底）；开启多端播放后，并发播放同一文件时自动复制网盘副本换取独立播放地址

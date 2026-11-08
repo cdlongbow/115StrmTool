@@ -152,7 +152,7 @@ def _start_emby():
         pin_rules=pin_rules,
         external_player_url=config.get("external_player_url", False),
         external_player_list=config.get("external_player_list", []),
-        redirect_mode=config.get("redirect_mode", False),
+        playback_mode=config.get("playback_mode", "disabled"),
     )
     try:
         if _port_in_use(config.get("proxy_host", "0.0.0.0"), int(config.get("proxy_port", 8097))):

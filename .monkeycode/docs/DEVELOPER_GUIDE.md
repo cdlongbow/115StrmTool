@@ -72,7 +72,7 @@ python build_exe.py
 | `admin_port` | 8100 | 管理 Web UI 端口 |
 | `emby.emby_host` | `http://192.168.2.100:8096` | Emby 服务器地址 |
 | `emby.proxy_port` | 8097 | Emby 反向代理端口 |
-| `emby.redirect_mode` | `false` | 是否开启 302 直链（关闭则回退 Emby 原响应） |
+| `emby.playback_mode` | `disabled` | 播放模式：`disabled` 回退 Emby 原响应 / `redirect` 302 直链 / `stream_proxy` 局域网流代理（取流转发、仅内网） |
 | `p115.redirect_port` | 3333 | 302 跳转服务端口 |
 | `p115.strm_url_prefix` | `http://192.168.2.100:3333` | STRM 文件中的跳转 URL 前缀 |
 | `p115.rmt_mediaext` | `mp4,mkv,ts,...` | STRM 生成的媒体扩展名 |
@@ -108,7 +108,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（229 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（249 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
@@ -156,13 +156,14 @@ Co-authored-by: <AI Name> <email>
 ### 修改媒体流重定向行为
 
 **需修改的文件**：
-1. `combined/proxy_app.py` — `_try_media_response()` 和 `_build_302_redirect()` 方法
+1. `combined/proxy_app.py` — `_handle_media()`、`_resolve_media_target()`、`_try_media_response()`、`_proxy_stream()` 和 `_build_302_redirect()` 方法
 
 **关键点**：
-- `_try_media_response()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链
+- `_handle_media()` 按 `playback_mode` 三态分发：`stream_proxy` 先过 `_is_private_source()` 网段门禁并走 `_proxy_stream()` 取流回传；`redirect` 走 302；`disabled` 回退通用反向代理
+- `_resolve_media_target()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链，302 与流代理两种模式共用；`skip_final_url_cache=True` 时跳过已解析缓存强制换新链（直链失效自愈场景）
 - `_resolve_redirect()` 返回 `(最终 URL, 是否成功解析)` 元组；解析失败时缓存仅保留 5 秒，避免坏 URL 长期驻留
 - `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
-- `redirect_mode=false` 时媒体路由回退到通用反向代理转发 Emby 响应，不再单独走 CDN 流式拉取
+- `_proxy_stream()` 向 115 CDN 带 Range 取流并以白名单响应头流式回传；上游 403/404/5xx/3xx/Range 被忽略时在响应头产出前换新链重试（次数与时长受 `STREAM_RETRY_*` 常量约束），耗尽返回 502
 
 ### 新增数据库字段
 

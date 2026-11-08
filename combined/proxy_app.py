@@ -2,11 +2,14 @@ from asyncio import (
     FIRST_COMPLETED,
     create_task,
     gather,
+    sleep,
     wait,
 )
 from contextlib import asynccontextmanager
 from hashlib import sha256
+from ipaddress import ip_address
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
+from time import monotonic
 from typing import Any, Iterable, List, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
@@ -33,6 +36,8 @@ from websockets import connect
 
 from logger import logger
 
+from config_manager import PLAYBACK_MODE_VALUES, PlaybackMode
+
 from external_players import (
     ALL_EXTERNAL_PLAYER_KEYS,
     EXTERNAL_PLAYERS,
@@ -50,6 +55,18 @@ PLAYBACK_USER_CACHE_TTL_SECONDS = 300
 PLAYBACK_URL_CACHE_MAX_SIZE = 500
 PLAYBACK_STRM_CACHE_TTL_SECONDS = 300
 REDIRECT_RESOLVE_TIMEOUTS = ((3.0, 10.0), (3.0, 15.0), (5.0, 20.0))
+
+STREAM_RETRY_MAX = 2
+STREAM_RETRY_BUDGET_SECONDS = 10.0
+STREAM_RETRY_BACKOFF_SECONDS = (0.5, 1.5)
+UPSTREAM_FORWARD_RESPONSE_HEADERS = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+    }
+)
 
 CACHE_KEY_HEADERS = (
     "authorization",
@@ -419,6 +436,26 @@ def _real_client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _is_private_source(request: Request) -> bool:
+    """
+    判断请求来源是否属于私有网段，用于流代理模式的局域网硬门禁
+
+    网段归属沿用 `_real_client_ip` 口径（X-Forwarded-For / X-Real-IP 优先），
+    `ipaddress.is_private` 覆盖 RFC 1918、环回、ULA 与运营商 NAT 网段；
+    无法解析的 IP 一律按非私有处理
+
+    :param request: 当前请求
+    :return: 来源属于私有网段返回 True，否则 False
+    """
+    ip = _real_client_ip(request)
+    if not ip:
+        return False
+    try:
+        return ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
 def _playback_user_key(request: Request, item_id: str) -> tuple[str, str, str]:
     """
     构造用于关联 PlaybackInfo → Stream 的复合 key
@@ -513,7 +550,7 @@ def create_app(
     pin_rules: List[Tuple[str, str]] | None = None,
     external_player_url: bool = False,
     external_player_list: List[str] | None = None,
-    redirect_mode: bool = False,
+    playback_mode: str = "disabled",
 ) -> FastAPI:
     """
     创建 Emby 反向代理 FastAPI 应用
@@ -522,11 +559,21 @@ def create_app(
     :param pin_rules (List): 顶置路径规则列表 (路径前缀, 目标URL)；命中时先替换再 302
     :param external_player_url (bool): 是否启用外部播放器链接注入
     :param external_player_list (List): 要注入的外部播放器 key 列表；为空时使用全部
+    :param playback_mode (str): 播放模式 disabled / redirect / stream_proxy，非法值回落 disabled
 
     :return FastAPI: 配置好的 FastAPI 应用实例
     """
     emby_host = emby_host.rstrip("/")
     pin_rules = pin_rules or []
+    mode_value = (playback_mode or "").strip().lower() if isinstance(playback_mode, str) else ""
+    if mode_value in PLAYBACK_MODE_VALUES:
+        playback_mode_enum = PlaybackMode(mode_value)
+    elif isinstance(playback_mode, bool):
+        playback_mode_enum = PlaybackMode.REDIRECT if playback_mode else PlaybackMode.DISABLED
+        logger.warning("playback_mode 收到布尔值，已映射为 %s", playback_mode_enum.value)
+    else:
+        playback_mode_enum = PlaybackMode.DISABLED
+        logger.warning("playback_mode 取值非法，回落 disabled: %r", playback_mode)
     if external_player_url:
         _player_keys = (
             [k for k in external_player_list if k in EXTERNAL_PLAYERS]
@@ -619,7 +666,8 @@ def create_app(
         request: Request, item_id: str, name: str = ""
     ) -> RedirectResponse | StreamingResponse | JSONResponse | Response:
         """
-        处理媒体路由：尝试 302 重定向（PlaybackInfo 或 STRM 缓存），失败则走通用反向代理
+        处理媒体路由：按播放模式分流——302 直链解析、流代理取流（仅私有网段）
+        或通用反向代理回退
 
         :param request: 当前请求
         :param item_id: 媒体项 ID
@@ -629,6 +677,23 @@ def create_app(
         if name.lower() in NON_MEDIA_NAMES:
             return await _reverse_proxy(request)
         api_key = extract_api_key(request)
+        if playback_mode_enum is PlaybackMode.STREAM_PROXY:
+            if not _is_private_source(request):
+                logger.warning(
+                    "流代理拒绝非私有网段来源: item_id=%s ip=%s",
+                    item_id, _real_client_ip(request),
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "Forbidden",
+                        "detail": "流代理模式仅服务私有网段设备",
+                    },
+                )
+            final_url, resolved = await _resolve_media_target(item_id, api_key, request)
+            if final_url is None:
+                return await _reverse_proxy(request)
+            return await _proxy_stream(request, item_id, final_url, resolved)
         resp = await _try_media_response(item_id, api_key, request)
         if resp:
             return resp
@@ -716,29 +781,32 @@ def create_app(
         encoded_url = quote(url, safe=":/?#@!$&'()*+,;=%")
         return RedirectResponse(url=encoded_url, status_code=302)
 
-    async def _try_media_response(
-        item_id: str, api_key: str | None, request: Request
-    ) -> Response | None:
+    async def _resolve_media_target(
+        item_id: str,
+        api_key: str | None,
+        request: Request,
+        *,
+        skip_final_url_cache: bool = False,
+    ) -> Tuple[str | None, bool]:
         """
-        尝试获取媒体文件真实地址并 302 重定向客户端到 CDN 直链
+        解析媒体项实际播放地址，302 直链与流代理两种模式共用
 
         三级缓存策略，优先级递减：
-          1. playback_url_cache（90s TTL）— 已解析的重定向最终 URL
+          1. playback_url_cache（90s TTL）— 已解析的重定向最终 URL；
+             skip_final_url_cache=True（直链失效换新链场景）时跳过本级
           2. PlaybackInfo API 实时查询 — 从 Emby 获取 MediaSource Path
           3. strm_source_cache（300s TTL）— STRM 文件的直链缓存
 
-        :param item_id: 媒体项 ID
-        :param api_key: Emby API Key，可为 None
-        :param request: 当前请求
+        :param item_id (str): 媒体项 ID
+        :param api_key (str): Emby API Key，可为 None
+        :param request (Request): 当前请求
+        :param skip_final_url_cache (bool): 跳过已解析 URL 缓存强制重新解析
 
-        :return Response: 302 重定向响应，或 None 表示回退到反向代理
+        :return Tuple: (最终 URL，是否已解析为 CDN 直链)；URL 为 None 表示媒体源无法解析
         """
-        if not redirect_mode:
-            return None
-
         media_source_id = request.query_params.get("MediaSourceId") or ""
 
-        # 第一级：用户缓存 — 从请求头提取用户 ID，用作后续缓存的 key 组成部分
+        # 第一级（用户关联）：从请求头提取用户 ID，用作后续缓存的 key 组成部分
         user_key = _playback_user_key(request, item_id)
         user_cache = request.app.state.playback_user_cache
         user_id: str | None = None
@@ -757,13 +825,16 @@ def create_app(
         # 缓存击穿防护：同一 item_id+MediaSourceId 并发解析只执行一次，
         # 其余请求在锁内二次检查缓存后直接复用结果
         async with key_lock.acquire(cache_key):
-            # 第二级：已解析 URL 缓存 — 命中则直接 302 跳转，跳过后续查询
-            cached_final_url = None
-            async with cache.lock:
-                cached_final_url = cache.get(cache_key)
-            if cached_final_url is not None:
-                logger.debug("302 直链: item_id=%s -> %s", item_id, cached_final_url)
-                return _build_302_redirect(cached_final_url)
+            # 第二级：已解析 URL 缓存 — 命中则直接返回，跳过后续查询
+            if not skip_final_url_cache:
+                cached_final_url = None
+                async with cache.lock:
+                    cached_final_url = cache.get(cache_key)
+                if cached_final_url is not None:
+                    logger.debug(
+                        "媒体地址缓存命中: item_id=%s -> %s", item_id, cached_final_url
+                    )
+                    return cached_final_url, True
 
             http_path = None
 
@@ -804,7 +875,7 @@ def create_app(
                         logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
 
             if not http_path:
-                return None
+                return None, False
 
             # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
             # 使用 follow_redirects=False 避免实际请求 CDN
@@ -814,12 +885,166 @@ def create_app(
                 client_no_follow, http_path, fwd_headers, user_id
             )
 
-            # 解析失败只做 5 秒短缓存，避免坏 URL 长期驻留导致反复 302 到坏链
+            # 解析成功回写默认 TTL；解析失败在常规路径只做 5 秒短缓存
+            # 避免坏 URL 长期驻留，换新链场景则不写回以免覆盖正常缓存
             async with cache.lock:
-                cache.put(cache_key, final_url, ttl=None if resolved else 5)
+                if resolved:
+                    cache.put(cache_key, final_url, ttl=None)
+                elif not skip_final_url_cache:
+                    cache.put(cache_key, final_url, ttl=5)
 
-            logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
-            return _build_302_redirect(final_url)
+            logger.debug("媒体地址已解析: item_id=%s -> %s", item_id, final_url)
+            return final_url, resolved
+
+    async def _proxy_stream(
+        request: Request,
+        item_id: str,
+        direct_url: str,
+        resolved: bool,
+    ) -> Response:
+        """
+        以流代理方式向 115 CDN 取媒体流并流式回传播放端
+
+        重试状态机（仅响应头产出前）：上游连接失败、403/404、5xx、3xx
+        或带 Range 得 200 时，以 skip_final_url_cache 重新解析换新链重试，
+        次数与总时长受 STREAM_RETRY_* 常量约束。响应头已产出后的半身后断
+        无法修改响应，关闭上游并记日志，依赖播放端重新发起 Range 请求自愈
+
+        :param request (Request): 当前请求
+        :param item_id (str): 媒体项 ID
+        :param direct_url (str): 本轮已解析的取流地址
+        :param resolved (bool): direct_url 是否已解析为 CDN 直链
+
+        :return Response: 流式回传响应（白名单响应头）；重连耗尽返回 502 JSON
+        """
+        start = monotonic()
+        fwd_headers = _strip_accept_encoding(_build_forward_headers(request))
+        req_range = request.headers.get("range")
+        method = request.method
+        client = request.app.state.http_client_no_follow
+        api_key = extract_api_key(request)
+        cur_url, cur_resolved = direct_url, resolved
+        last_error = "unknown"
+        total_attempts = 1 + STREAM_RETRY_MAX
+
+        for attempt in range(1, total_attempts + 1):
+            if attempt > 1:
+                backoff = STREAM_RETRY_BACKOFF_SECONDS[
+                    min(attempt - 2, len(STREAM_RETRY_BACKOFF_SECONDS) - 1)
+                ]
+                if monotonic() - start + backoff >= STREAM_RETRY_BUDGET_SECONDS:
+                    last_error = "retry budget exceeded"
+                    break
+                await sleep(backoff)
+                new_url, cur_resolved = await _resolve_media_target(
+                    item_id, api_key, request, skip_final_url_cache=True
+                )
+                if new_url is None:
+                    last_error = "resolve returned no target"
+                    continue
+                cur_url = new_url
+
+            if not cur_resolved:
+                last_error = "unresolved redirect target"
+                logger.info(
+                    "流代理目标未解析为直链，换新链: item_id=%s attempt=%s",
+                    item_id, attempt,
+                )
+                continue
+
+            try:
+                upstream = await client.send(
+                    client.build_request(
+                        method=method, url=cur_url, headers=fwd_headers
+                    ),
+                    stream=True,
+                )
+            except Exception:
+                last_error = "upstream connect error"
+                logger.warning(
+                    "流代理上游连接异常: item_id=%s attempt=%s",
+                    item_id, attempt, exc_info=True,
+                )
+                continue
+
+            status = upstream.status_code
+            retryable = (
+                status in (403, 404)
+                or status >= 500
+                or 300 <= status < 400
+                or (req_range is not None and status == 200)
+            )
+            if retryable:
+                last_error = f"upstream status {status}"
+                await upstream.aclose()
+                logger.info(
+                    "流代理上游不可用，准备换新链重试: item_id=%s attempt=%s status=%s",
+                    item_id, attempt, status,
+                )
+                continue
+
+            pairs = [
+                (k, v)
+                for k, v in upstream.headers.items()
+                if k.lower() in UPSTREAM_FORWARD_RESPONSE_HEADERS
+            ]
+            if method == "HEAD":
+                await upstream.aclose()
+                return _with_raw_headers(Response(status_code=status), pairs)
+
+            async def stream():
+                """
+                流式读取上游响应并逐块输出，完成后关闭上游；中断时留日志便于排查播放卡死
+                """
+                try:
+                    async for chunk in upstream.aiter_bytes(chunk_size=65536):
+                        yield chunk
+                except Exception:
+                    logger.error("流代理转发中断: item_id=%s", item_id, exc_info=True)
+                    raise
+                finally:
+                    await upstream.aclose()
+
+            return _with_raw_headers(
+                StreamingResponse(stream(), status_code=status), pairs
+            )
+
+        logger.error(
+            "流代理重连耗尽: item_id=%s attempts=%s last=%s ip=%s",
+            item_id, total_attempts, last_error, _real_client_ip(request),
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "Bad Gateway",
+                "detail": "媒体流获取失败：向 115 重连重试已耗尽",
+            },
+        )
+
+    async def _try_media_response(
+        item_id: str, api_key: str | None, request: Request
+    ) -> Response | None:
+        """
+        302 直链模式下解析媒体项并返回 302 重定向响应
+
+        解析行为（三级缓存、击穿防护、失败短缓存）全部由
+        _resolve_media_target 承担并回写缓存；非 redirect 模式直接返回 None
+
+        :param item_id: 媒体项 ID
+        :param api_key: Emby API Key，可为 None
+        :param request: 当前请求
+
+        :return Response: 302 重定向响应，或 None 表示回退到反向代理
+        """
+        if playback_mode_enum is not PlaybackMode.REDIRECT:
+            return None
+
+        final_url, _resolved = await _resolve_media_target(item_id, api_key, request)
+        if final_url is None:
+            return None
+
+        logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
+        return _build_302_redirect(final_url)
 
     for route in MEDIA_ROUTES:
         app.api_route(route, methods=["GET", "HEAD"], response_model=None)(
@@ -1107,7 +1332,7 @@ def create_app(
             async with strm_cache.lock:
                 strm_cache.put(item_id, strm_sources)
 
-        if redirect_mode:
+        if playback_mode_enum is PlaybackMode.REDIRECT:
             fwd_headers = _build_forward_headers(request)
             client_no_follow = request.app.state.http_client_no_follow
             for ms in data.get("MediaSources", []):

@@ -191,13 +191,14 @@ Content-Type: application/json
   "proxy_host": "0.0.0.0",
   "proxy_port": 8097,
   "pin_rules": "",
-  "redirect_mode": false,
+  "playback_mode": "disabled",
   "external_player_url": false,
   "external_player_list": []
 }
 ```
 
-- `redirect_mode`: `true` 为 302 直链模式（客户端直连 CDN），`false`（默认）为回退通用反向代理，转发 Emby 原响应
+- `playback_mode`: 播放模式三态枚举。`disabled`（默认）回退通用反向代理转发 Emby 原响应；`redirect` 为 302 直链模式（客户端直连 CDN）；`stream_proxy` 为局域网流代理模式（工具向 115 取流转发给播放端，仅响应私有网段来源，115 地址不暴露给播放端）
+- 旧配置兼容：历史 JSON/请求体中的 `redirect_mode` 布尔字段自动迁移（`true`→`redirect`，`false`→`disabled`）；更改 `playback_mode` 后 Emby 代理自动重建生效
 
 ```
 POST /admin/api/emby/restart
@@ -351,7 +352,7 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
     "pin_rules": "",
     "external_player_url": false,
     "external_player_list": [],
-    "redirect_mode": false
+    "playback_mode": "disabled"
   },
   "p115": {
     "enabled": false,

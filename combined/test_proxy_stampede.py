@@ -95,7 +95,7 @@ def test_proxy_302_stampede():
 
         app = create_app(
             emby_host=f"http://127.0.0.1:{emby_port}",
-            redirect_mode=True,
+            playback_mode="redirect",
         )
 
         async def _run():

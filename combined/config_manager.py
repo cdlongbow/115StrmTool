@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+from enum import Enum
 from pathlib import Path
 from threading import RLock
 from time import strftime, time
@@ -51,6 +52,28 @@ def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+class PlaybackMode(str, Enum):
+    """
+    播放模式：Emby 前置代理处理媒体路由的三态互斥枚举
+
+    Attributes:
+        DISABLED: 关闭，媒体请求透传 Emby 原响应（通用反向代理）
+        REDIRECT: 302 直链，下发 302 让播放端直连 115 CDN
+        STREAM_PROXY: 流代理，由工具向 115 CDN 取流回传播放端，仅响应私有网段来源
+    """
+
+    DISABLED = "disabled"
+    REDIRECT = "redirect"
+    STREAM_PROXY = "stream_proxy"
+
+
+PLAYBACK_MODE_VALUES = (
+    PlaybackMode.DISABLED.value,
+    PlaybackMode.REDIRECT.value,
+    PlaybackMode.STREAM_PROXY.value,
+)
+
+
 class EmbyConfig(BaseModel):
     enabled: bool = False
     emby_host: str = "http://192.168.2.100:8096"
@@ -59,7 +82,21 @@ class EmbyConfig(BaseModel):
     pin_rules: str = ""
     external_player_url: bool = False
     external_player_list: List[str] = Field(default_factory=list)
-    redirect_mode: bool = False
+    playback_mode: PlaybackMode = PlaybackMode.DISABLED
+
+    @field_validator("playback_mode", mode="before")
+    @classmethod
+    def _normalize_playback_mode(cls, v: Any) -> str:
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in PLAYBACK_MODE_VALUES:
+                return low
+            logger.warning("playback_mode 取值非法，回落 disabled: %s", v)
+            return PlaybackMode.DISABLED.value
+        if isinstance(v, bool):
+            return PlaybackMode.REDIRECT.value if v else PlaybackMode.DISABLED.value
+        logger.warning("playback_mode 类型非预期，回落 disabled: %r", v)
+        return PlaybackMode.DISABLED.value
 
 
 class PathMapping(BaseModel):
@@ -146,9 +183,34 @@ class RootConfig(BaseModel):
     webdav: WebdavBackupConfig = Field(default_factory=WebdavBackupConfig)
 
 
+def _migrate_legacy_emby_fields(raw: Dict[str, Any]) -> None:
+    """
+    就地迁移 Emby 段的旧 redirect_mode 布尔字段为 playback_mode 枚举值
+
+    旧键无论是否映射均从字典中移除，避免旧键在配置中持续残留
+
+    :param raw (Dict): 即将进入模型校验的原始配置字典，就地修改
+    """
+    emby = raw.get("emby")
+    if not isinstance(emby, dict) or "redirect_mode" not in emby:
+        return
+    legacy = emby.pop("redirect_mode")
+    if "playback_mode" not in emby:
+        emby["playback_mode"] = (
+            PlaybackMode.REDIRECT.value if legacy else PlaybackMode.DISABLED.value
+        )
+    logger.info("配置迁移: emby.redirect_mode(%r) -> emby.playback_mode=%s", legacy, emby["playback_mode"])
+
+
 def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """通过 Pydantic 模型校验并修复配置，保留未知字段防止数据丢失"""
+    """通过 Pydantic 模型校验并修复配置，保留未知字段防止数据丢失
+
+    :param raw (Dict): 原始配置字典
+
+    :return Dict: 校验并合并后的配置字典
+    """
     try:
+        _migrate_legacy_emby_fields(raw)
         validated = RootConfig(**raw)
         known = validated.model_dump(by_alias=True, exclude_unset=True)
         merged = _deep_merge(raw, known)
