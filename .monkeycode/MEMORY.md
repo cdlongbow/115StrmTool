@@ -81,6 +81,7 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 同日多次发布用序号 tag（`YYYYMMDD-2` 起，序号 1-99 且从 1 开始），校验只比对主日期；同日新改动追加进 CHANGELOG 同一日期节（Release 说明取顶部日期节全文，天然包含累计内容）
   - 发版或推送后应检查失败 job 日志定位根因，勿假定流水线必绿
   - 本地沙箱为 Python 3.11，p115client 系列依赖要求 setuptools>=77（需 3.12）装不上真实 SDK；测试涉及 p115client 时一律用 patch.dict / conftest 的 stub_modules 注入假模块，不得在沙箱 pip install 真实 SDK
+  - 沙箱内只有 `python3`，`python` 命令不存在（2026-11-09 复现 zsh: command not found）；门禁与测试命令一律写 `python3 -m pytest`
   - 新会话沙箱默认没有门禁工具链：`ruff`、`pytest`、`pytest-asyncio`、`httpx`、`fastapi`、`uvicorn`、`websockets`、`qrcode`、`Pillow` 都要先装（`pip install --break-system-packages`），否则 ruff 报 command not found、pytest 收集阶段直接 ModuleNotFoundError；local-only 依赖（p115client、p115cipher、p115pickcode、full_strm_sync）跳过不装
   - 需要在不装真实 SDK 的前提下端到端验证 admin 端点时，可注入 p115client/p115cipher/p115pickcode/full_strm_sync 桩后直接 `create_admin_app()` 起 TestClient 或 uvicorn（`main()` 会写入 admin_token，走 create_admin_app 可保持令牌为空、跳过鉴权）
 
