@@ -59,6 +59,19 @@ REDIRECT_RESOLVE_TIMEOUTS = ((3.0, 10.0), (3.0, 15.0), (5.0, 20.0))
 STREAM_RETRY_MAX = 2
 STREAM_RETRY_BUDGET_SECONDS = 10.0
 STREAM_RETRY_BACKOFF_SECONDS = (0.5, 1.5)
+STREAM_RESUME_MAX = 3
+STREAM_RESUME_TOTAL_MAX = 16
+STREAM_RESUME_BUDGET_SECONDS = 8.0
+STREAM_RESUME_BACKOFF_SECONDS = (0.3, 1.0, 2.0)
+RESUME_DROP_REQUEST_HEADERS = frozenset(
+    {
+        "if-range",
+        "if-match",
+        "if-unmodified-since",
+        "if-none-match",
+        "if-modified-since",
+    }
+)
 UPSTREAM_FORWARD_RESPONSE_HEADERS = frozenset(
     {
         "content-type",
@@ -212,6 +225,67 @@ def _range_starts_at_zero(range_header: str) -> bool:
         return False
     start = spec.split("-", 1)[0].strip()
     return start == "0"
+
+
+def _range_start_offset(range_header: str) -> int:
+    """
+    解析 Range 请求头的起始字节偏移
+
+    开放区间（bytes=100-）与闭合区间（bytes=100-199）均取起始值；
+    仅后缀区间（bytes=-500）与无法解析的 Range 返回 0，
+    此时真实起点以首个响应的 Content-Range 为准
+
+    :param range_header (str): 原始 Range 请求头
+
+    :return int: 起始字节偏移，无法确定时为 0
+    """
+    value = range_header.strip()
+    if not value.lower().startswith("bytes="):
+        return 0
+    spec = value[len("bytes="):].split(",", 1)[0].strip()
+    if not spec:
+        return 0
+    start = spec.split("-", 1)[0].strip()
+    if not start.isdigit():
+        return 0
+    return int(start)
+
+
+def _content_range_start(content_range: str) -> int | None:
+    """
+    从 Content-Range 响应头取出本段的起始字节
+
+    形如 `bytes 100-199/1000`，仅识别 bytes 单位且起始为数字的形态
+
+    :param content_range (str): Content-Range 响应头值
+
+    :return int: 本段起始字节，无法解析时返回 None
+    """
+    match = re_search(r"bytes\s+(\d+)-", content_range.strip(), IGNORECASE)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _build_resume_headers(headers: dict[str, str], start: int) -> dict[str, str]:
+    """
+    基于原转发头构建半身后断续传用的请求头
+
+    Range 改写为从断点偏移开放到底；条件类请求头描述的是已失效的旧链路条件，
+    保留会让 CDN 判成整段 200 或 412 从而中断续传，必须剥离
+
+    :param headers (Dict): 原始转发请求头
+    :param start (int): 续传起始字节偏移
+
+    :return Dict: 改写 Range 并剥离条件头后的请求头
+    """
+    resumed = {
+        k: v
+        for k, v in headers.items()
+        if k.lower() != "range" and k.lower() not in RESUME_DROP_REQUEST_HEADERS
+    }
+    resumed["range"] = f"bytes={start}-"
+    return resumed
 
 
 def _strip_accept_encoding(headers: dict[str, str]) -> dict[str, str]:
@@ -929,7 +1003,9 @@ def create_app(
         重试状态机（仅响应头产出前）：上游连接失败、403/404、5xx、3xx
         或带 Range 得 200 时，以 skip_final_url_cache 重新解析换新链重试，
         次数与总时长受 STREAM_RETRY_* 常量约束。响应头已产出后的半身后断
-        无法修改响应，关闭上游并记日志，依赖播放端重新发起 Range 请求自愈
+        （播放端暂停期间 CDN 空闲关链、直链时长到点等）由 stream() 在同一响应内
+        按已交付字节换新链续传，受 STREAM_RESUME_* 常量约束；续传未成功时
+        就此收尾响应体并记日志，由播放端按截断自行重新发起 Range 请求
 
         :param request (Request): 当前请求
         :param item_id (str): 媒体项 ID
@@ -1038,18 +1114,139 @@ def create_app(
                 await upstream.aclose()
                 return _with_raw_headers(Response(status_code=status), pairs)
 
+            # 断点偏移的绝对基准：Range 请求以首个响应的 Content-Range 为准
+            # （后缀区间 bytes=-N 无法从请求头取起点），无 Range 的整段请求从 0 计
+            first_start = _content_range_start(upstream.headers.get("content-range", ""))
+            if first_start is None:
+                first_start = _range_start_offset(req_range) if req_range else 0
+
+            async def resume_segment(next_offset: int) -> HttpxResponse | None:
+                """
+                半身后断后换新直链，按断点偏移重新取一段可续传的流
+
+                退避、换链与建连在 STREAM_RESUME_MAX 次与
+                STREAM_RESUME_BUDGET_SECONDS 预算内尝试；仅接受 206 且
+                Content-Range 起点恰为断点偏移的响应。403/404/5xx/3xx 等
+                按预算换新链再试；200 整段与偏移错位的 206 即刻放弃，
+                避免向播放端重复喂已交付过的字节
+
+                :param next_offset (int): 播放端期望的下一个绝对字节偏移
+
+                :return HttpxResponse: 可续传的流式响应，放弃时为 None
+                """
+                break_start = monotonic()
+                last_reason = "unknown"
+                for resume_attempt in range(1, STREAM_RESUME_MAX + 1):
+                    backoff = STREAM_RESUME_BACKOFF_SECONDS[
+                        min(resume_attempt - 1, len(STREAM_RESUME_BACKOFF_SECONDS) - 1)
+                    ]
+                    if (
+                        monotonic() - break_start + backoff
+                        >= STREAM_RESUME_BUDGET_SECONDS
+                    ):
+                        last_reason = "resume budget exceeded"
+                        break
+                    await sleep(backoff)
+                    try:
+                        resume_url, resume_resolved = await _resolve_media_target(
+                            item_id, api_key, request, skip_final_url_cache=True
+                        )
+                    except Exception:
+                        last_reason = "resolve raised"
+                        logger.warning(
+                            "流代理续传换链异常: item_id=%s attempt=%s",
+                            item_id, resume_attempt, exc_info=True,
+                        )
+                        continue
+                    if resume_url is None or not resume_resolved:
+                        last_reason = "resolve returned no target"
+                        logger.info(
+                            "流代理续传未取到直链，换新链: item_id=%s attempt=%s",
+                            item_id, resume_attempt,
+                        )
+                        continue
+                    try:
+                        seg = await client.send(
+                            client.build_request(
+                                method="GET",
+                                url=resume_url,
+                                headers=_build_resume_headers(fwd_headers, next_offset),
+                            ),
+                            stream=True,
+                        )
+                    except Exception:
+                        last_reason = "upstream connect error"
+                        logger.warning(
+                            "流代理续传上游连接异常: item_id=%s attempt=%s",
+                            item_id, resume_attempt, exc_info=True,
+                        )
+                        continue
+                    actual_start = _content_range_start(
+                        seg.headers.get("content-range", "")
+                    )
+                    if seg.status_code == 206 and actual_start == next_offset:
+                        logger.info(
+                            "流代理已换新链续传: item_id=%s next=%s attempt=%s",
+                            item_id, next_offset, resume_attempt,
+                        )
+                        return seg
+                    last_reason = f"resume status {seg.status_code} start {actual_start}"
+                    # 200 整段与偏移错位的 206 说明 CDN 给不出断点之后的字节，再试只会
+                    # 更早重复喂给播放端已交付过的内容；其余状态码（直链过期 403 等）
+                    # 属于新链可能修好的场景，按预算继续换新链
+                    give_up = seg.status_code in (200, 206)
+                    await seg.aclose()
+                    if give_up:
+                        break
+                logger.warning(
+                    "流代理续传放弃: item_id=%s next=%s reason=%s",
+                    item_id, next_offset, last_reason,
+                )
+                return None
+
             async def stream():
                 """
-                流式读取上游响应并逐块输出，完成后关闭上游；中断时留日志便于排查播放卡死
+                流式读取上游响应逐块输出，上游中断时在同一响应内换新链补传
+
+                响应头已产出，状态码与 Content-Length 无法再改，只能从断点偏移续传；
+                续传未成功则就此收尾响应体并记日志，由播放端按截断自行重新发起请求
+
+                :yields bytes: 上游媒体流字节块
                 """
-                try:
-                    async for chunk in upstream.aiter_bytes(chunk_size=65536):
-                        yield chunk
-                except Exception:
-                    logger.error("流代理转发中断: item_id=%s", item_id, exc_info=True)
-                    raise
-                finally:
-                    await upstream.aclose()
+                seg = upstream
+                seg_next = first_start
+                resumed = 0
+                while True:
+                    try:
+                        async for chunk in seg.aiter_bytes(chunk_size=65536):
+                            if chunk:
+                                seg_next += len(chunk)
+                            yield chunk
+                        return
+                    except Exception:
+                        logger.error(
+                            "流代理转发中断: item_id=%s next=%s",
+                            item_id, seg_next, exc_info=True,
+                        )
+                    finally:
+                        await seg.aclose()
+
+                    # 走到这里说明读流已抛异常（取消与客户端断开属 BaseException，
+                    # 经 finally 关闭上游后原样上抛），只能在同一响应内续传
+                    if resumed >= STREAM_RESUME_TOTAL_MAX:
+                        logger.error(
+                            "流代理续传总次数越限，中断回传: item_id=%s resumed=%s",
+                            item_id, resumed,
+                        )
+                        return
+                    seg = await resume_segment(seg_next)
+                    if seg is None:
+                        logger.error(
+                            "流代理续传未成功，中断回传: item_id=%s next=%s",
+                            item_id, seg_next,
+                        )
+                        return
+                    resumed += 1
 
             return _with_raw_headers(
                 StreamingResponse(stream(), status_code=status), pairs

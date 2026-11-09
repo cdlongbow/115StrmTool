@@ -2,7 +2,7 @@
 局域网流代理模式（stream-proxy-mode）测试
 
 覆盖播放模式三态分发、Range/响应头白名单转发、直链过期换新链自愈、
-私有网段硬门禁、并发解析击穿防护与配置/API 兼容迁移；
+半身后断的同一响应内续传、私有网段硬门禁、并发解析击穿防护与配置/API 兼容迁移；
 上游 Emby/115 全部经 httpx.MockTransport 模拟，无真实网络
 """
 import asyncio
@@ -21,6 +21,22 @@ MEDIA_URL = f"/videos/{ITEM_ID}/movie.mp4?MediaSourceId=ms1"
 LAN_HEADERS = {"x-forwarded-for": "192.168.1.50"}
 
 
+class FlakyStream(httpx.AsyncByteStream):
+    """先吐出给定字节再抛错的假上游流，用于模拟半身后断"""
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    async def aclose(self):
+        self.closed = True
+
+
 class FakeUpstream:
     """按脚本应答的假上游：entry HEAD 出 302，CDN GET/HEAD 按脚本序列返回"""
 
@@ -32,6 +48,8 @@ class FakeUpstream:
         self.head_count = 0
         self.get_count = 0
         self.last_range = None
+        self.ranges = []
+        self.last_headers = None
         self.passthrough_emby = passthrough_emby
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -49,7 +67,11 @@ class FakeUpstream:
             idx = min(self.get_count, len(self.cdn_script) - 1)
             self.get_count += 1
             self.last_range = request.headers.get("range")
+            self.ranges.append(self.last_range)
+            self.last_headers = dict(request.headers.multi_items())
             status, headers, body = self.cdn_script[idx]
+            if isinstance(body, httpx.AsyncByteStream):
+                return httpx.Response(status, headers=headers, stream=body)
             return httpx.Response(status, headers=headers, content=body)
         raise AssertionError(f"unexpected upstream request: {request.method} {url}")
 
@@ -206,7 +228,173 @@ class TestStreamProxySelfHealing:
         assert upstream.head_count == 3
 
 
+class TestStreamProxyMidStreamResume:
+    """响应头已产出后的半身后断：同一响应内换新链按已交付字节续传"""
+
+    # 转发按 64KB 成块交付，凑不满一块的尾字节不会到达播放端，
+    # 断点偏移以已交付计（多退少补，重取窗口最多一块）
+    CHUNK = b"A" * 65536
+    LOST = b"BCD"
+    TAIL = b"BCDE"
+    FILE_SIZE = 65536 + 4
+    FIRST_HEADERS = {
+        "content-range": f"bytes 0-{FILE_SIZE - 1}/{FILE_SIZE}",
+        "content-length": str(FILE_SIZE),
+    }
+    RESUME_RESPONSE = (
+        206,
+        {
+            "content-range": f"bytes 65536-{FILE_SIZE - 1}/{FILE_SIZE}",
+            "content-length": "4",
+        },
+        TAIL,
+    )
+
+    def _flaky(self):
+        return FlakyStream([self.CHUNK, self.LOST])
+
+    def test_break_resumes_from_delivered_offset(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [(206, self.FIRST_HEADERS, self._flaky()), self.RESUME_RESPONSE]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.status_code == 206
+        assert resp.content == self.CHUNK + self.TAIL
+        assert upstream.ranges == ["bytes=0-", "bytes=65536-"]
+        assert upstream.get_count == 2
+        assert upstream.head_count == 2
+
+    def test_resume_replaces_range_and_drops_conditionals(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [(206, self.FIRST_HEADERS, self._flaky()), self.RESUME_RESPONSE]
+            resp, upstream = _proxy_request(
+                headers={
+                    "range": "bytes=0-",
+                    "if-range": "etag-value",
+                    "if-none-match": 'W/"x"',
+                },
+                script=script,
+            )
+        assert resp.content == self.CHUNK + self.TAIL
+        lowered = {k.lower(): v for k, v in upstream.last_headers.items()}
+        assert lowered["range"] == "bytes=65536-"
+        assert [k for k in lowered if k.startswith("if-")] == []
+
+    def test_full_get_break_resumes_with_open_ended_range(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (200, {"content-length": str(self.FILE_SIZE)}, self._flaky()),
+                self.RESUME_RESPONSE,
+            ]
+            resp, upstream = _proxy_request(script=script)
+        assert resp.status_code == 200
+        assert resp.content == self.CHUNK + self.TAIL
+        assert upstream.ranges == [None, "bytes=65536-"]
+        assert upstream.get_count == 2
+        assert upstream.head_count == 2
+
+    def test_expired_resume_link_re_resolved_until_success(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (206, self.FIRST_HEADERS, self._flaky()),
+                (403, {}, b"expired"),
+                self.RESUME_RESPONSE,
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.content == self.CHUNK + self.TAIL
+        assert upstream.ranges == ["bytes=0-", "bytes=65536-", "bytes=65536-"]
+        assert upstream.get_count == 3
+        assert upstream.head_count == 3
+
+    def test_whole_file_200_on_resume_ends_body_without_replay(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (206, self.FIRST_HEADERS, self._flaky()),
+                (200, {"content-length": str(self.FILE_SIZE)}, b"FULL"),
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.content == self.CHUNK
+        assert upstream.ranges == ["bytes=0-", "bytes=65536-"]
+        assert upstream.get_count == 2
+        assert upstream.head_count == 2
+
+    def test_misaligned_206_on_resume_ends_body(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (206, self.FIRST_HEADERS, self._flaky()),
+                (206, self.FIRST_HEADERS, b"X" * 4),
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.content == self.CHUNK
+        assert upstream.get_count == 2
+        assert upstream.head_count == 2
+
+    def test_resume_attempts_exhausted_ends_body(self):
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [
+                (206, self.FIRST_HEADERS, self._flaky()),
+                (403, {}, b"expired"),
+            ]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script
+            )
+        assert resp.content == self.CHUNK
+        assert upstream.get_count == 4
+        assert upstream.head_count == 4
+
+    def test_resume_total_cap_stops_pathological_reconnects(self, monkeypatch):
+        monkeypatch.setattr("proxy_app.STREAM_RESUME_TOTAL_MAX", 2)
+        counts = {"head": 0, "get": 0}
+
+        class AlwaysFlaky:
+            """每次应答都在交付一块后断流的 CDN，用于触发续传总次数上限"""
+
+            def handler(self, request: httpx.Request) -> httpx.Response:
+                url = str(request.url)
+                if url.startswith(ENTRY_URL) and request.method == "HEAD":
+                    counts["head"] += 1
+                    return httpx.Response(
+                        302, headers={"location": f"{CDN_PREFIX}f{counts['head']}"}
+                    )
+                range_header = request.headers.get("range") or ""
+                start = (
+                    range_header[len("bytes="):].split("-", 1)[0]
+                    if range_header.startswith("bytes=") else "0"
+                )
+                counts["get"] += 1
+                return httpx.Response(
+                    206,
+                    headers={
+                        "content-range": f"bytes {start}-999999/1000000",
+                        "content-length": str(1000000 - int(start)),
+                    },
+                    stream=FlakyStream([b"A" * 65536]),
+                )
+
+        upstream = AlwaysFlaky()
+
+        async def _run():
+            client = await _with_lifespan("stream_proxy", upstream)
+            async with client:
+                return await client.get(
+                    MEDIA_URL, headers={**LAN_HEADERS, "range": "bytes=0-"}
+                )
+
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            resp = asyncio.run(_run())
+        assert counts["get"] == 3
+        assert resp.content == b"A" * (65536 * 3)
+
+
 class TestStreamProxyNetworkGate:
+
     def test_public_source_rejected(self):
         resp, upstream = _proxy_request(headers={"x-forwarded-for": "8.8.8.8"})
         assert resp.status_code == 403

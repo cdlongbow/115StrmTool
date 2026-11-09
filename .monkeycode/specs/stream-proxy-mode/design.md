@@ -1,7 +1,7 @@
 # Stream Proxy Mode（局域网流代理模式）
 
 Feature Name: stream-proxy-mode
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 ## Description
 
@@ -23,6 +23,7 @@ graph TD
     H --> I["_proxy_stream 带 Range 取上游"]
     I -->|"头未出前失败: 跳过直链缓存重解析 ≤2 次"| H
     I -->|"-206/200 + 过滤头"| J["StreamingResponse 逐块回传播放端"]
+    J -->|"半身后断: 按已交付字节换新链续传 每个断点 ≤3 次"| H
     E --> K["redirect_service / 115 CDN"]
     I --> K
 ```
@@ -59,7 +60,7 @@ graph TD
   2. 响应头白名单转发：`status_code`、`Content-Type`、`Content-Length`、`Content-Range`、`Accept-Ranges`；显式丢弃 `Content-Disposition`、`ETag`、`Last-Modified`、`Expires`、`Cache-Control`、`Set-Cookie`、传输编码相关头。
   3. 流式回传复用现有 `stream()` 模式（`aiter_bytes(chunk_size=65536)`，`finally: resp.aclose()`），客户端断开由 Starlette 取消任务触发 finally 关闭上游。
   4. **重试状态机（仅响应头产出前）**：上游连接异常、HTTP 403/404、或"非起始字节的 Range 请求被上游忽略返回 200"→ `sleep(退避 0.5s/1.5s)` 后以 `skip_final_url_cache=True` 重走 `_resolve_media_target` 再试；累计重解析 `≤ STREAM_RETRY_MAX=2` 次、自请求进入起 `≤ STREAM_RETRY_BUDGET_SECONDS=10` 秒；超限 → `JSONResponse 502` + `logger.error`（item_id、尝试次数、末次错误类型）。`bytes=0-` 这类从起始字节开始的 Range（播放器回退/倒回开头常见）语义等价于整段内容，上游返回 200 属合法，直接转发不重试。
-  5. 已产出响应头后的中断处理见"Error Handling：半身后断"。
+  5. **半身后断续传（响应头已产出后）**：断点偏移以**已交付播放端**的字节计——首个响应的 `Content-Range` 起点为基准（后缀区间 `bytes=-N` 无法从请求头取起点，无 `Range` 的整段请求从 0 计）；`aiter_bytes(chunk_size=65536)` 有整块缓冲，未凑满一块的尾字节不会交付播放端，断在该处会重取该窗口（最多一块），保证不漏字节。上游读流抛异常时在同一响应内退避 0.3/1.0/2.0 秒、以 `skip_final_url_cache=True` 换新直链并带 `Range: bytes=<偏移>-` 重取；仅接受 206 且 `Content-Range` 起点等于断点偏移的响应（200 整段与偏移错位的 206 立即放弃以免重复喂已交付字节，403/404/5xx/3xx 按预算换新链再试）。上限：单断点 `STREAM_RESUME_MAX=3` 次与 `STREAM_RESUME_BUDGET_SECONDS=8` 秒，整条流累计 `STREAM_RESUME_TOTAL_MAX=16` 段。续传请求剥离 `If-*` 条件头（旧链路条件会让 CDN 把断点请求判成整段 200 或 412）。播放端取消与断开属 `BaseException`，经 `finally` 关闭上游后原样上抛，不进入续传。行为边界见"Error Handling：半身后断"。
 - **PlaybackInfo 处理器调整**：1110 行 `if redirect_mode:` 改为 `if playback_mode is PlaybackMode.REDIRECT:`（`stream_proxy` 下 MediaSources.Path 不预替换直链）。`_apply_force_direct_play_to_media_sources` 与 STRM 源缓存回填三态下均保持执行。
 - **网段校验 `_is_private_source(request) -> bool`**：复用既有 `_real_client_ip`（含 XFF/X-Real-IP）+ `ipaddress.ip_address(...).is_private`（RFC1918、环回、ULA 一并覆盖）。流代理模式下非私有来源 → `403` + 来源 IP 日志。
 
@@ -78,7 +79,7 @@ graph TD
 }
 ```
 
-模块常量：`STREAM_RETRY_MAX = 2`、`STREAM_RETRY_BUDGET_SECONDS = 10.0`、`STREAM_RETRY_BACKOFF_SECONDS = (0.5, 1.5)`、`UPSTREAM_FORWARD_RESPONSE_HEADERS`（响应头白名单，未列入的响应头一律不转发）。
+模块常量：`STREAM_RETRY_MAX = 2`、`STREAM_RETRY_BUDGET_SECONDS = 10.0`、`STREAM_RETRY_BACKOFF_SECONDS = (0.5, 1.5)`、`STREAM_RESUME_MAX = 3`、`STREAM_RESUME_TOTAL_MAX = 16`、`STREAM_RESUME_BUDGET_SECONDS = 8.0`、`STREAM_RESUME_BACKOFF_SECONDS = (0.3, 1.0, 2.0)`、`RESUME_DROP_REQUEST_HEADERS`（续传时剥离的 `If-*` 条件头）、`UPSTREAM_FORWARD_RESPONSE_HEADERS`（响应头白名单，未列入的响应头一律不转发）。
 
 ## Correctness Properties
 
@@ -88,6 +89,7 @@ graph TD
 - P4：任一请求线程内，已建立的 httpx stream 响应对象在请求结束时处于 closed 状态（含失败/断开路径）。
 - P5：同一 cache_key 并发 N 路请求，单时间窗内对 redirect_url 端点的 HEAD 解析次数为 1（击穿防护保持）。
 - P6：私有网段限制在配置与 API 两条路径均无关闭字段。
+- P7：半身后断续传后，播放端收到的字节序列是首个响应 `Content-Range` 所指区间的连续无重复补全；续传成功补满时累计字节等于首个响应的 `Content-Length`。
 
 ## Error Handling
 
@@ -99,7 +101,7 @@ graph TD
 | 上游 403/404（直链过期主场景） | 跳过 `playback_url_cache` 重解析 + 重试 ≤2 次，预算 10s；成功则 206/200 正常回传 |
 | Range 被上游忽略（带 Range 得 200） | 视为异常，按上行重试；`bytes=0-` 起始 Range 属合法整段返回，直接转发不重试；非起始 Range 重试仍 200 则原样转发 200（播放器按整文件自处理） |
 | 退避/重试总耗时越限 | 放弃重试，502 + 日志（item_id、尝试次数、末次错误） |
-| **半身后断**（响应头已提交、body 中断） | 无法在同一响应内自愈（状态码已不可改）；关闭上游并记 `logger.error`，预期播放端重新发起 Range 请求 → 新请求走完整重试状态机恢复。此为需求 R3"播放端无感"的实现边界，需求侧"暂停恢复"场景命中"头未出"路径不受影响 |
+| **半身后断**（响应头已提交、body 中断；典型触发是播放端暂停期间 CDN 空闲关链、或直链时长到点） | 在同一响应内按已交付字节换新链续传（`Range: bytes=<偏移>-`，仅接受起点吻合的 206）：单断点 ≤3 次且 ≤8 秒，整条流累计 ≤16 段；200 整段与偏移错位的 206 立即放弃，403 等按预算换新链再试。续传仍未成功则结束响应体并记 `logger.error`，由播放端按截断重新发起 Range 请求、走完整重试状态机恢复 |
 | 播放端断开 | Starlette 取消 → `stream()` finally `resp.aclose()`，无僵尸连接 |
 
 ## Test Strategy
@@ -115,6 +117,7 @@ graph TD
   8. 客户端断开 → 上游响应 closed（用 `TestClient`/`httpx.ASGITransport` 断流断言）。
   9. 并发 5 路同 key → 解析仅 1 次（对齐 `test_redirect_stampede.py` 写法）。
   10. 配置迁移：旧 JSON `redirect_mode=true/false` 加载映射、API 旧字段读写兼容（对齐 `test_admin_config.py`）。
+  11. （2026-11-09 补充）半身后断续传 8 例（`TestStreamProxyMidStreamResume`）：交付满一块后断流按已交付偏移续传（验证 64KB 块缓冲下"未交付即重取"的补窗语义）、续传改 `Range` 且剥离 `If-*`、无 `Range` 整段请求改用开放区间续传、续传首链 403 换链重试至成功、200 整段与偏移错位立即放弃且不重复喂字节、单断点尝试耗尽、续传总次数上限（`monkeypatch` 调低 `STREAM_RESUME_TOTAL_MAX`）。断流由 `FlakyStream(httpx.AsyncByteStream)` 在吐完给定字节后抛 `RemoteProtocolError` 模拟。
 - 预计新增约 12 例，合入后以 `python -m pytest --collect-only -q` 实测数同步四处文档（README.md:67、TODO.md:37、.monkeycode/docs/INDEX.md:78、.monkeycode/docs/DEVELOPER_GUIDE.md:111，基线 229）。
 - 3.14 行为验证按既有门禁：本地 3.11 跑 ruff+pytest，最终以 CI 为准；涉及真实 115 行为的部分只能实机验收（电视端暂停 5 分钟续播冒烟）。
 
