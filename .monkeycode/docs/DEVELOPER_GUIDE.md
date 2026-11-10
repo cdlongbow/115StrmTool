@@ -87,13 +87,15 @@ python build_exe.py
 
 ### 管理访问令牌
 
-首次启动时程序自动生成随机管理令牌并打印在控制台日志：
+首次启动时程序自动生成随机管理令牌；日志只显示前 4 位，完整值见 `config.json`：
 
 ```
-管理界面访问令牌: xxxxxxxxxxxxxxxx
+管理界面访问令牌已就绪（前 4 位 MS4h...），完整值见 config.json
 ```
 
-- 所有 `/api` 与 `/admin/api` 接口都要求请求头 `X-Admin-Token` 与令牌一致，否则返回 401。
+- 所有 `/api` 与 `/admin/api` 接口都要求请求头 `X-Admin-Token` 与令牌一致，否则返回 401；比较使用 `hmac.compare_digest`（恒定时间）。
+- 令牌为空时仅允许本机回环访问接口，局域网/公网请求一律 401；自动接口文档（`/docs`、`/redoc`、`/openapi.json`）默认关闭。
+- `/admin/api/config/export` 导出时剔除 `admin_token`，导入方首次启动会重新生成令牌。
 - 管理页面首次访问会弹窗要求粘贴一次令牌，之后浏览器 localStorage 自动携带。
 - 托盘"打开管理界面"会以 `/?token=...` 形式自动注入，无需手动输入。
 - 令牌存放在 `config.json` 的 `admin_token` 字段（管理界面回显中掩码显示）。测试或脚本里需要带令牌调用接口时，用 `curl -H "X-Admin-Token: $(python3 -c "import json;print(json.load(open('combined/config.json'))['admin_token'])")" ...` 读取。
@@ -108,7 +110,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（261 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（278 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
@@ -153,6 +155,10 @@ Co-authored-by: <AI Name> <email>
 2. 在 `_build_player_target_url` 中添加对应平台的 URL 构建逻辑
 3. 在 `build_external_player_script` 中添加 JS 按钮模板
 
+### 播放问题诊断
+
+播放相关诊断日志写入 `logs/combined.log`（INFO 级别，管理面板 `/admin/api/logs` 可读）。直链经 `utils.describe_media_url()` 只输出域名、路径与 `t_left` 剩余秒数，请求头经 `utils.describe_headers()` 只输出 `名字(长度)`，两者都不写值。常用关键字：`签发诊断`（新签发/缓存命中/取链失败）、`302 直链下发诊断`、`流代理外发请求头诊断`（含 `sensitive=` 分组）、`流代理拒绝诊断`（含上游响应体前 200 字）、`流代理续传拒绝诊断`。完整字段说明与排查顺序见[播放模式与诊断](./专有概念/播放模式与诊断.md)。
+
 ### 修改媒体流重定向行为
 
 **需修改的文件**：
@@ -160,7 +166,7 @@ Co-authored-by: <AI Name> <email>
 
 **关键点**：
 - `_handle_media()` 按 `playback_mode` 三态分发：`stream_proxy` 先过 `_is_private_source()` 网段门禁并走 `_proxy_stream()` 取流回传；`redirect` 走 302；`disabled` 回退通用反向代理
-- `_resolve_media_target()` 通过三级缓存（已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存）解析 STRM 跳转链，最终解析为 CDN 直链，302 与流代理两种模式共用；`skip_final_url_cache=True` 时跳过已解析缓存强制换新链（直链失效自愈场景）
+- `_resolve_media_target()` 通过已解析 URL 缓存 / PlaybackInfo API / STRM 源缓存 / 本请求保存的源地址（`request.state.strm_source_url`，供续传在缓存过期后仍可解析）解析 STRM 跳转链，返回 `(最终 URL, 是否解析成功)`，302 与流代理共用；`skip_final_url_cache=True` 时跳过已解析缓存、给跳转地址追加 `refresh=1` 强制 302 服务重新签发（直链失效自愈场景）
 - `_resolve_redirect()` 返回 `(最终 URL, 是否成功解析)` 元组；解析失败时缓存仅保留 5 秒，避免坏 URL 长期驻留
 - `_build_302_redirect()` 构建 302 响应，设置 `Location` 头指向 CDN URL，自动对非 ASCII 字符做百分号编码
 - `_proxy_stream()` 向 115 CDN 带 Range 取流并以白名单响应头流式回传；上游 403/404/5xx/3xx 或非起始 Range（如 `bytes=5-`）被忽略返回 200 时，在响应头产出前换新链重试（次数与时长受 `STREAM_RETRY_*` 常量约束），耗尽返回 502；`bytes=0-` 这类起始 Range 的 200 属合法整段返回，直接转发不重试

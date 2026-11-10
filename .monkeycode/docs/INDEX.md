@@ -24,8 +24,8 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 模块 | 描述 | 位置 |
 |------|------|------|
 | 应用入口与编排 | 服务启动/停止、生命周期管理 | `combined/main.py` |
-| Emby 反向代理 | 302 直链重定向、PlaybackInfo 拦截、JS 修补 | `combined/proxy_app.py` |
-| 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存 | `combined/redirect_service.py` |
+| Emby 反向代理 | 三态播放模式、PlaybackInfo 拦截、流代理断点续传、诊断日志、JS 修补 | `combined/proxy_app.py` |
+| 115 跳转服务 | pickcode 解析、UA 绑定下载、URL 缓存、`refresh=1` 强制重新签发 | `combined/redirect_service.py` |
 | STRM 文件生成器 | 目录遍历、STRM 写入、附属元数据下载 | `combined/strm_generator.py` |
 | 快速整树扫描 | 递归整树端点一次取整棵子树、端点不可用自动回退 | `combined/fast_scan.py` |
 | 版本号显示 | 发布号由 CI 按 tag 注入，概览页/启动日志/托盘悬停显示，本地回退 dev | `combined/app_metadata.py` |
@@ -33,12 +33,13 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | 管理 API | STRM 同步、二维码登录、签到 | `combined/api_routes.py` |
 | 管理面板 API | 配置读写、服务控制、日志查看、目录节点缓存清理、WebDAV 远端备份恢复 | `combined/admin_api.py` |
 | 配置管理 | JSON 配置读写、顶置规则解析、秘密字段加密、WebDAV 备份配置 | `combined/config_manager.py` |
-| WebDAV 配置备份 | 配置打包自检、远端上传滚动清理、下载与恢复回滚 | `combined/webdav_backup.py` |
+| WebDAV 配置备份 | 配置打包自检（密钥不入档）、远端上传滚动清理、下载与恢复回滚 | `combined/webdav_backup.py` |
 | 外部播放器注入 | 14 个播放器的协议 URL 构建与 UI 注入 | `combined/external_players.py` |
 | 数据持久化 | SQLite 数据库、文件清单、同步历史 | `combined/database.py` |
 | Windows 桌面集成 | 系统托盘 | `combined/windows_tray.py` |
 | 签到调度 | 115 每日签到定时与手动触发 | `combined/checkin_scheduler.py` |
 | 日志设置 | RotatingFileHandler + 控制台输出 | `combined/logger.py` |
+| 通用工具 | 异步缓存/互斥锁/限频、直链与请求头脱敏摘要 | `combined/utils.py` |
 
 ---
 
@@ -49,8 +50,11 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 | [STRM 文件](./专有概念/STRM文件.md) | Emby 媒体库的占位文件，包含一行跳转 URL |
 | [302 跳转服务](./专有概念/302跳转服务.md) | 将 pickcode 解析为 115 CDN 下载地址的服务 |
 | [外部播放器注入](./专有概念/外部播放器注入.md) | 在 Emby Web UI 中添加外部播放器按钮的机制 |
+| [播放模式与诊断](./专有概念/播放模式与诊断.md) | 三种播放模式的链路差异、续传机制、诊断日志字段与已知 403 观察项 |
 
 ---
+
+> `.monkeycode/specs/` 为各特性实施时的设计快照，仅记录当时决策；现行实现以本目录文档与 `CHANGELOG.md` 为准。
 
 ## 入门指南
 
@@ -75,8 +79,10 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（261 个用例）
+# 运行单元测试（278 个用例）
 cd combined && python -m pytest -q
+
+# 排查播放问题：在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
 
 # 静态检查（规则集见根目录 ruff.toml）
 ruff check .

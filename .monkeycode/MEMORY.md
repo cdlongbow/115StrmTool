@@ -118,6 +118,16 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 3.14 下 Rust 加速缺位属预期降级（exe 走纯 Python 生成路径，与默认 `use_rust=False` 行为一致），恢复条件见 TODO「full_strm_sync 恢复 Rust 加速」
   - 2026-11-07：GitHub Actions storage 看 artifacts/Packages；public repo 的标准 runner 分钟免费，artifact 仍会吃账户 Actions 存储。发布 exe 已由 softprops/action-gh-release 作为 Release Assets 上传，release.yml 不再用 upload-artifact；未来若需要 workflow artifacts，优先短保留或只在调试分支开启
 
+[2026-11-10 决策与文档同步]
+- Date: 2026-11-10
+- Context: 代码审查后的安全加固、流代理续传修复、诊断日志与真机排障
+- Category: Decisions / Documentation
+- Instructions:
+  - **推翻三巡「WebDAV 备份密钥分离不改」决策**：`config.key` 与本地 `config_backups/` 快照已不再进入远端档案，`_REQUIRED_MEMBERS` 改为 `config.json` + `manifest.json`；旧档案兼容（仅本机缺密钥时采用档内 key）。原因是 `config.json` 含加密 Cookie 与明文 `admin_token`，与解密密钥同包时远端一旦被获取即可解出全部凭据。
+  - 用例数四处维护（README.md、TODO.md、INDEX.md、DEVELOPER_GUIDE.md）已由 261 同步为 278；后续增删测试仍用 `python -m pytest --collect-only -q` 取数。
+  - 播放诊断日志只记录直链域名/路径/`t_left` 与请求头名+长度，签名参数与头的值不落盘；关键字与排查顺序见 `.monkeycode/docs/专有概念/播放模式与诊断.md`。
+  - 已知观察项：流代理高密度取流时 115 CDN 返回 `403 / 115 pmt 3-2`，与直链有效期、UA、请求头无关，与请求密度强相关；用户决定按观察处理，暂不改播放逻辑。302 模式对照时段工具侧 0 错误，但播放器直连 CDN 的响应不可观测，暂不能据此判定模式差异。
+
 [CPython 3.14 下反复重装导入链导致 GC 段错误]
 - Date: 2026-11-03
 - Context: Discovered by Agent while fixing CI failure after Python 3.14 upgrade

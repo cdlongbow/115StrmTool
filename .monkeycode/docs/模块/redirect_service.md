@@ -27,11 +27,11 @@ redirect_service.py
 ### _do_redirect(pickcode, request)
 
 1. 验证 pickcode 格式（17 位字母数字）
-2. 检查缓存（key = `pickcode:sha256(ua)[:16]`，同一 key 并发回源只执行一次）
+2. 检查缓存（key = `pickcode:sha256(ua)[:16]`，同一 key 并发回源只执行一次）；请求带 `refresh=1` 时跳过缓存、强制重新签发（流代理换链/续传专用）
 3. 缓存命中 → 直接返回 302 跳转
 4. 多端播放开启且该 pickcode 已有其他 UA 的回源缓存（`count_prefix("pickcode:") > 0`）→ 复制副本，以副本 pickcode 取址；复制失败静默回退原文件
 5. 调用 `get_download_url_with_ua` 获取新 URL；走过副本路径时无论成败均调度延迟删除副本
-6. 写入缓存（TTL = expires_time - 300，max 90s）
+6. 写入缓存（TTL = min(90, expires_time - 300)；直链缺 `t` 参数或有效期无效时回退默认 90 秒，避免算出巨大负 TTL 导致永不缓存）
 7. 返回 302 重定向响应
 
 **重试策略**：`redirect_service` 本身不包含重试逻辑。下载 URL 获取的重试由 `p115_client_wrapper.get_download_url_with_ua()` 内部完成（加密 API 优先 + 4 次阶梯重试 + 405 时直跳 SDK 降级）；副本复制/删除走 `p115_client_wrapper` 的 405 → App API 自动降级，保持跳转服务简洁。
@@ -40,7 +40,7 @@ redirect_service.py
 
 | 路径 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/plugin/P115StrmHelper/redirect_url?pickcode=XXX` | GET/HEAD/POST | 主端点 |
+| `/api/v1/plugin/P115StrmHelper/redirect_url?pickcode=XXX[&refresh=1]` | GET/HEAD/POST | 主端点；`refresh=1` 跳过缓存强制重新签发 |
 | `/api/v1/plugin/P115StrmHelper/redirect_url/{file_id}` | GET/HEAD/POST | 兼容 file_id 参数 |
 | `/redirect_url?pickcode=XXX` | GET/HEAD/POST | 短路径端点 |
 | `/{path}` | GET/HEAD | 兜底路由，从路径段提取 pickcode |
@@ -48,8 +48,9 @@ redirect_service.py
 ## 缓存机制
 
 - 缓存 key 包含 UA 哈希（前 16 位），不同 UA 独立缓存
-- TTL = CDN URL 过期时间 - 300 秒（留安全余量），上限 90 秒
-- 计算出的 TTL 小于等于 0 时记录告警日志（含 115 返回的剩余有效期），便于排查播放中途失败
+- TTL = CDN URL 过期时间 - 300 秒（留安全余量），上限 90 秒；直链无 `t` 参数时按默认 90 秒缓存
+- 计算出的 TTL 小于等于 0 或有效期无效时记录告警日志（含 115 返回的剩余有效期），便于排查播放中途失败
+- 新签发、缓存命中与取链失败均写「签发诊断」日志（直链摘要、ttl、UA 前缀、force_refresh），便于对照 403 排查
 - 最多 1000 个条目，超出时按 LRU 淘汰
 - 每次写缓存前清理已过期的条目
 - **缓存击穿防护**：对同一 `pickcode:UA_HASH` 的并发请求，仅第一个执行回源获取下载地址（`AsyncKeyLock` 按 key 互斥），其余请求在锁内二次检查缓存后直接复用结果；锁在无使用者时自动清理

@@ -1,6 +1,6 @@
 # proxy_app
 
-Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，302 重定向模式下让客户端直连 CDN，注入 crossOrigin 拦截脚本和外部播放器按钮。
+Emby 反向代理核心模块。代理所有 Emby 客户端请求，拦截 PlaybackInfo 强制 DirectPlay，按三态播放模式分发（`disabled` / `redirect` / `stream_proxy`）；流代理模式下由工具取流转发，并在半身后断时换链续传。注入 crossOrigin 拦截脚本、外部播放器按钮与播放诊断日志。
 
 ## 结构
 
@@ -35,10 +35,11 @@ proxy_app.py（最大模块）
 Client → /videos/{id}/stream
   ↓
 _handle_media()
-  ├─ _try_media_response()      # 三级缓存查询 → 解析 STRM 跳转链
-  │   ├─ redirect_mode=true     → _build_302_redirect()  # 302 重定向到 CDN 直链
-  │   └─ redirect_mode=false    → return None（回退反向代理转发 Emby 响应）
-  └─ _reverse_proxy()            # 回退到 Emby 服务器
+  ├─ disabled      → _reverse_proxy()                  # 通用转发 Emby 原响应
+  ├─ redirect      → _try_media_response()            # 解析直链 → 302 让客户端直连 CDN
+  └─ stream_proxy  → _is_private_source() 网段门禁
+                     → _resolve_media_target()
+                     → _proxy_stream()                # 工具取流 + 半身后断续传
 ```
 
 ### PlaybackInfo 拦截
@@ -56,12 +57,15 @@ _playback_info_strm_direct_play()
   7. 返回修改后的 PlaybackInfo
 ```
 
-## 重定向模式与回退
+## 播放模式与回退
 
-通过 `redirect_mode` 配置项切换两种播放路径（默认 `false`）：
+通过 `emby.playback_mode` 三态配置分发（旧 `redirect_mode` 布尔字段自动迁移，默认 `disabled`）：
 
-- **302 重定向模式**（`redirect_mode=true`）：`_try_media_response` 调用 `_build_302_redirect` 返回 302 响应，客户端直连 115 CDN。媒体流量不经过代理服务器。
-- **关闭重定向**（`redirect_mode=false`）：`_try_media_response` 直接返回 None，媒体路由回退到 `_reverse_proxy` 通用转发，由 Emby 服务器按原响应处理。
+- **`redirect`**：`_try_media_response` 解析直链后返回 302，客户端直连 115 CDN，媒体流量不经过工具。
+- **`disabled`**：媒体路由回退 `_reverse_proxy` 通用转发，由 Emby 按原响应处理。
+- **`stream_proxy`**：先过 `_is_private_source()` 网段门禁（只认连接层 IP），再由 `_proxy_stream()` 向 CDN 取流转发；仅内网来源可用。
+
+三种模式的链路差异见 `.monkeycode/docs/专有概念/播放模式与诊断.md`。
 
 ## 手动解析 Location 头
 
@@ -93,8 +97,8 @@ _playback_info_strm_direct_play()
 
 | 缓存 | 作用域 | TTL | 用途 |
 |------|--------|-----|------|
-| playback_url_cache | 全局 | 90s（解析失败 5s） | 媒体 URL 缓存 |
-| strm_source_cache | 全局 | 300s | STRM 源 URL 缓存 |
+| playback_url_cache | 全局 | 90s（解析失败 5s） | 缓存 `(url, resolved)` 元组，保留解析成功标志 |
+| strm_source_cache | 全局 | 6h | STRM 源 URL 缓存（覆盖整次播放会话，供续传重新解析） |
 | playback_user_cache | 全局 | 300s | 用户关联缓存 |
 
 `playback_url_cache` 的写入由 `playback_url_key_lock`（按 `item_id + MediaSourceId + 用户 + 请求头` 隔离的互斥锁）保护，同一媒体源并发播放时仅第一个请求执行 PlaybackInfo 回源与重定向链解析，其余请求复用缓存结果。缓存底层为 `AsyncTtlCache`（OrderedDict 实现的 TTL + LRU 淘汰）。
@@ -102,6 +106,13 @@ _playback_info_strm_direct_play()
 ## WebSocket 代理
 
 `_ws_proxy` 双向转发客户端与 Emby 后端的 WebSocket（`/embywebsocket`）。客户端→后端方向用 `receive()` 统一处理文本与二进制帧；两个转发任务用 `FIRST_COMPLETED` 等待，任一方向断开即取消另一方向并关闭连接，避免协程悬挂在已断开的对端。
+
+## 断点续传与诊断
+
+- 半身后断时 `stream()` 以已交付绝对字节 `seg_next` 为基准，换链后只接受 206 且 `Content-Range` 起点精确匹配的响应。
+- 首次解析把 STRM 源地址记入 `request.state.strm_source_url`，续传时即使各级缓存过期也能重新解析；换链给跳转地址加 `refresh=1`，强制 302 服务重新签发。
+- 诊断日志覆盖签发、302 下发、上游拒绝（含响应体摘要）与外发请求头名列表；直链签名参数与请求头的值经 `utils.describe_media_url()` / `describe_headers()` 脱敏，不落盘。
+- 已知观察项：高密度取流时上游可能返回 `403 / 115 pmt 3-2`，与请求密度强相关，当前按观察处理，详见[播放模式与诊断](../专有概念/播放模式与诊断.md)。
 
 ## 依赖
 

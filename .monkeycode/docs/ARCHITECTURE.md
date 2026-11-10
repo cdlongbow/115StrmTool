@@ -59,6 +59,7 @@ MoviePilot-Windows/
 │   ├── app_metadata.py         # 应用版本号（CI 注入 _build_version，本地回退 dev）
 │   ├── exceptions.py           # 统一业务异常定义
 │   ├── logger.py               # 日志设置
+│   ├── utils.py                # 缓存/锁/限频 + 直链与请求头脱敏摘要
 │   ├── build_exe.py            # PyInstaller 构建脚本
 │   ├── web/
 │   │   └── index.html          # 管理控制面板 SPA
@@ -81,7 +82,7 @@ MoviePilot-Windows/
 **位置**: `combined/api_routes.py` + `combined/admin_api.py`
 **关键文件**: `main.py`（通过 `create_admin_app()` 组装路由）
 **依赖**: `config_manager`, `p115_client_wrapper`, `strm_generator`, `database`
-**安全**: 全局中间件校验 `X-Admin-Token`
+**安全**: 全局中间件校验 `X-Admin-Token`（恒定时间比较；令牌为空时仅回环放行；docs/openapi 关闭；日志与导出不含完整令牌）
 **被依赖**: 用户浏览器访问管理 UI
 
 ### Emby 反向代理（端口 8097）
@@ -112,7 +113,7 @@ MoviePilot-Windows/
 **被依赖**: 管理 API、系统托盘
 
 ### WebDAV 配置备份
-**目的**: 将配置文件打包（含完整性自检）上传 WebDAV 远端，支持列表/下载/恢复；恢复前保留当前快照、失败自动回滚，成功后由路由层触发服务重建
+**目的**: 将 `config.json` 与签到状态打包（含完整性自检）上传 WebDAV 远端，解密密钥 `config.key` 与本地快照不随包上传（旧档案仍可恢复），支持列表/下载/恢复；恢复前保留当前快照、失败自动回滚，成功后由路由层触发服务重建
 **位置**: `combined/webdav_backup.py`
 **依赖**: `config_manager`, `exceptions`, httpx（WebDAV PROPFIND/PUT/GET/DELETE）
 **被依赖**: 管理面板 API（`/admin/api/backup/*` 端点组）
@@ -175,13 +176,17 @@ sequenceDiagram
     Client->>Proxy: GET /videos/{id}/stream
     Proxy->>EmbySrv: POST /Items/{id}/PlaybackInfo
     EmbySrv-->>Proxy: MediaSources[].Path = STRM URL
-    Proxy->>Proxy: 检测 STRM / 三级缓存查询
-    alt redirect_mode = true
+    Proxy->>Proxy: 检测 STRM / 多级缓存查询
+    alt playback_mode = redirect
         Proxy->>Proxy: 手动解析 Location 头（不请求 CDN）
         Proxy-->>Client: 302 Location: CDN URL
         Client-->>CDN: GET CDN URL（带 Range/UA）
         CDN-->>Client: 媒体数据
-    else redirect_mode = false
+    else playback_mode = stream_proxy
+        Proxy->>CDN: GET 直链（带 Range/UA）
+        CDN-->>Proxy: 媒体数据
+        Proxy-->>Client: 流式回传（断链时换链续传）
+    else playback_mode = disabled
         Proxy->>EmbySrv: 回退通用反向代理转发
         EmbySrv-->>Client: 按原响应返回
     end
@@ -213,7 +218,7 @@ sequenceDiagram
 ## 设计决策
 
 ### 302 重定向 + crossOrigin 拦截
-`_try_media_response` 解析 STRM URL 后，根据 `redirect_mode` 配置决定返回 302 重定向或回退到通用反向代理。302 模式下客户端直连 115 CDN，媒体流量不经过代理服务器。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截，通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。
+`_try_media_response` 解析 STRM URL 后，按 `playback_mode` 三态分发：`redirect` 返回 302 让客户端直连 115 CDN（媒体流量不经过工具），`stream_proxy` 由工具取流转发并支持断链续传，`disabled` 回退通用反向代理。Web 浏览器跟随跳转直接访问 CDN 可能触发 CORS 拦截，通过注入 `CROSS_ORIGIN_INTERCEPT_SCRIPT` 脚本覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null，并配合 `basehtmlplayer.js` 和 `plugin.js` 的 crossOrigin 赋值修补来消除跨域问题。
 
 ### 手动解析 Location 头（302 模式）
 `_resolve_redirect` 使用 `follow_redirects=False` 发起 HEAD 请求，手动解析响应 `Location` 头获取 CDN URL，避免实际请求 CDN。这是为了防止 CDN 拒绝 HEAD 请求（405 Method Not Allowed）或返回方法绑定的签名 URL，导致客户端后续 GET Range 请求失败。解析结果带成功标志：失败时（超时、缺 Location）只缓存 5 秒，防止坏 URL 长期驻留缓存。
@@ -234,3 +239,12 @@ Emby 默认可能对远程媒体源启用转码（HLS），导致 302 直链失�
 代理注入两个脚本到 Emby Web UI：
 1. `crossOrigin` 拦截器——覆盖 `HTMLMediaElement.prototype.crossOrigin` 为 null
 2. 修补 `basehtmlplayer.js` 和 `plugin.js`——移除 crossOrigin 赋值语句
+
+### 流代理断点续传
+半身后断后在同一响应内按已交付绝对字节偏移换链补传。为避免长时间播放后各级缓存过期导致「找不到源地址」，首次解析时把 STRM 源地址记在 `request.state.strm_source_url`，并把 STRM 源缓存延长到 6 小时；换链时给跳转地址加 `refresh=1`，强制 302 服务跳过旧直链缓存重新签发。
+
+### 诊断日志与脱敏
+`utils.describe_media_url()` / `utils.describe_headers()` 保证直链签名参数与请求头的值不落盘；日志覆盖签发、302 下发、上游拒绝与外发请求头名列表，字段含义与排查顺序见 `.monkeycode/docs/专有概念/播放模式与诊断.md`。
+
+### 鉴权失败关闭
+管理令牌缺失或配置损坏回落默认值时，不允许局域网请求绕过鉴权：空令牌仅放行本机回环，其余一律 401；同时关闭无需令牌即可访问的自动接口文档，避免接口结构与令牌从日志/导出文件外泄。

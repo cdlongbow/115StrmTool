@@ -1,6 +1,6 @@
 # webdav_backup
 
-配置远端备份模块。将 `config.json`、`config.key` 与签到状态打包为带清单的 zip 档案上传到 WebDAV 服务器，支持列表、下载与一键恢复；打包后先做完整性自检再上传，恢复前保留当前配置快照、失败自动回滚。当前为手动触发（面板"备份"页），不做周期自动备份。
+配置远端备份模块。将 `config.json` 与签到状态打包为带清单的 zip 档案上传到 WebDAV 服务器（解密密钥 `config.key` 与本地 `config_backups/` 快照不随包上传；旧档案仍可恢复，仅本机缺密钥时采用档内 key），支持列表、下载与一键恢复；打包后先做完整性自检再上传，恢复前保留当前配置快照、失败自动回滚。当前为手动触发（面板"备份"页），不做周期自动备份。
 
 ## 结构
 
@@ -30,6 +30,7 @@ webdav_backup.py
 
 ## 关键设计
 
+- **密钥不入档**：`_REQUIRED_MEMBERS` 仅含 `config.json` 与 `manifest.json`；`config.json` 里有加密 Cookie 与明文 `admin_token`，与解密密钥同包等于把锁和钥匙一起交给远端。换机恢复需单独提供本机 `config.key`
 - **档案命名**：`115strmtool-backup-<YYYYmmdd-HHMMSS>[-N].zip`，字典序即时间序，排序不依赖服务器 modified
 - **完整性**：档案内含 `manifest.json`（app_version/created_at/members 的 size+sha256）；上传后 GET 回读核对大小，不一致则本轮不做清理；恢复前再次全量自检
 - **恢复安全**：guard 快照命名 `restore-guard-<timestamp>.json/.key`（避开 `config-*.json` 快照 glob），覆盖写全程持有 `config_manager._lock`，任何一步失败整体回滚到写入前状态；成功后热重载路由层触发 p115/Emby 重建

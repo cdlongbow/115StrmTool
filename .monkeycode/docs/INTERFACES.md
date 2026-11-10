@@ -4,6 +4,10 @@
 
 基础路径：`http://<admin_host>:8100/api`
 
+### 鉴权
+
+所有 `/api/*` 与 `/admin/api/*` 请求需携带 `X-Admin-Token`，与 `config.json` 的 `admin_token` 一致（恒定时间比较），否则返回 401。令牌为空时仅允许来自 `127.0.0.1` / `::1` 的请求，其余一律 401。自动接口文档 `/docs`、`/redoc`、`/openapi.json` 默认关闭；管理页面 SPA 与静态资源不走该中间件。
+
 ### 服务状态
 
 ```
@@ -176,7 +180,7 @@ Content-Type: application/json
 GET /admin/api/config/export
 ```
 
-导出磁盘当前配置原文（attachment 下载，文件名含时间戳）。Cookie 保持文件中的加密形态而非明文；每次配置写盘另有自动滚动快照（程序目录 `config_backups/`，保留 10 份、一小时内去重）。
+导出当前配置（attachment 下载，文件名含时间戳）。Cookie 保持文件中的加密形态而非明文，`admin_token` 字段会被剔除；每次配置写盘另有自动滚动快照（程序目录 `config_backups/`，保留 10 份、一小时内去重）。
 
 ### Emby 配置
 
@@ -275,9 +279,9 @@ Content-Type: application/json
 - 读写 WebDAV 备份配置，密码加密落盘、读写均脱敏；提交掩码值表示保留旧密码
 - `test`：建目录→写探针→删探针→列表 四步连通性检查，返回 `{"ok", "message"}`
 - `status`：返回 `{"enabled", "last"}`，`last` 为最近一次备份/恢复结果摘要
-- `run`：打包 config.json/config.key/签到状态 → 自检 → 上传 → 大小核对 → 按保留份数滚动清理；返回 `{ok, name, size, pruned}`，忙时 409
+- `run`：打包 config.json + 签到状态（**不含** `config.key` 与本地 `config_backups/` 快照）→ 自检 → 上传 → 大小核对 → 按保留份数滚动清理；返回 `{ok, name, size, pruned}`，忙时 409
 - `remote`：返回 `{"archives": [{name, size, modified}]}`；`download` 以附件流返回指定档案
-- `restore`：档案名白名单与完整性校验通过后覆盖当前配置（保留前自动保存恢复前快照，失败自动回滚），成功后自动重建 p115/Emby 服务使配置即时生效
+- `restore`：档案名白名单与完整性校验通过后覆盖当前配置（保留前自动保存恢复前快照，失败自动回滚），成功后自动重建 p115/Emby 服务使配置即时生效；旧档案若含 `config.key`，仅在本机缺密钥时采用，否则保留本机密钥
 
 ## 302 跳转服务
 
@@ -286,8 +290,10 @@ Content-Type: application/json
 ### 获取下载重定向
 
 ```
-GET|POST /api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<17位字母数字>
+GET|POST /api/v1/plugin/P115StrmHelper/redirect_url?pickcode=<17位字母数字>[&refresh=1]
 ```
+
+`refresh=1` 为流代理换链/续传专用：跳过缓存直接向 115 重新签发直链，并用新链覆盖缓存；普通请求仍走 `pickcode:UA` 缓存。
 
 返回：
 
