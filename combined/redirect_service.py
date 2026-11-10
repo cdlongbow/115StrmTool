@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from config_manager import config_manager
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
-from utils import AsyncKeyLock, AsyncTtlCache, describe_media_url
+from utils import AsyncKeyLock, AsyncTtlCache, describe_media_url, media_diag_enabled
 
 CACHE_TTL_DEFAULT = 90
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
@@ -188,10 +188,11 @@ class RedirectService:
                     "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
                     pickcode, cached_fname, client_ip,
                 )
-                logger.info(
-                    "【302跳转服务】签发诊断: 缓存命中 pickcode=%s url=%s ua=%s",
-                    pickcode, describe_media_url(cached_url), user_agent[:60],
-                )
+                if media_diag_enabled():
+                    logger.info(
+                        "【302跳转服务】签发诊断: 缓存命中 pickcode=%s url=%s ua=%s",
+                        pickcode, describe_media_url(cached_url), user_agent[:60],
+                    )
                 return self._build_302(cached_url, pickcode, cached_fname)
 
             post_pickcode = pickcode
@@ -254,11 +255,12 @@ class RedirectService:
                 "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
                 pickcode, file_name, ttl, client_ip,
             )
-            logger.info(
-                "【302跳转服务】签发诊断: 新签发 pickcode=%s url=%s ttl=%ss ua=%s refresh=%s",
-                pickcode, describe_media_url(download_url), ttl,
-                user_agent[:60], force_refresh,
-            )
+            if media_diag_enabled():
+                logger.info(
+                    "【302跳转服务】签发诊断: 新签发 pickcode=%s url=%s ttl=%ss ua=%s refresh=%s",
+                    pickcode, describe_media_url(download_url), ttl,
+                    user_agent[:60], force_refresh,
+                )
             return self._build_302(download_url, pickcode, file_name)
 
     def _build_302(self, url: str, pickcode: str, file_name: str = "") -> Response:

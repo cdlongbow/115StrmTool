@@ -13,7 +13,13 @@ from time import monotonic
 from typing import Any, Iterable, List, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
-from utils import AsyncKeyLock, AsyncTtlCache, describe_headers, describe_media_url
+from utils import (
+    AsyncKeyLock,
+    AsyncTtlCache,
+    describe_headers,
+    describe_media_url,
+    media_diag_enabled,
+)
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -1105,11 +1111,12 @@ def create_app(
                 )
                 continue
 
-            logger.info(
-                "流代理外发请求头诊断: item_id=%s attempt=%s url=%s headers=%s",
-                item_id, attempt, describe_media_url(cur_url),
-                describe_headers(fwd_headers),
-            )
+            if media_diag_enabled():
+                logger.info(
+                    "流代理外发请求头诊断: item_id=%s attempt=%s url=%s headers=%s",
+                    item_id, attempt, describe_media_url(cur_url),
+                    describe_headers(fwd_headers),
+                )
             try:
                 upstream = await client.send(
                     client.build_request(
@@ -1143,18 +1150,19 @@ def create_app(
             if retryable:
                 last_error = f"upstream status {status}"
                 if status in (403, 404) or status >= 500:
-                    try:
-                        body_hint = (await upstream.aread())[:200].decode(
-                            "utf-8", "replace"
-                        ).replace("\r", " ").replace("\n", " ")
-                    except Exception:
-                        body_hint = "(unreadable)"
-                    logger.warning(
-                        "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
-                        item_id, attempt, status, describe_media_url(cur_url),
-                        (fwd_headers.get("user-agent") or "")[:80],
-                        "refresh=" in cur_url, body_hint,
-                    )
+                    if media_diag_enabled():
+                        try:
+                            body_hint = (await upstream.aread())[:200].decode(
+                                "utf-8", "replace"
+                            ).replace("\r", " ").replace("\n", " ")
+                        except Exception:
+                            body_hint = "(unreadable)"
+                        logger.warning(
+                            "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
+                            item_id, attempt, status, describe_media_url(cur_url),
+                            (fwd_headers.get("user-agent") or "")[:80],
+                            "refresh=" in cur_url, body_hint,
+                        )
                 await upstream.aclose()
                 logger.info(
                     "流代理上游不可用，准备换新链重试: item_id=%s attempt=%s status=%s",
@@ -1223,11 +1231,12 @@ def create_app(
                         )
                         continue
                     resume_headers = _build_resume_headers(fwd_headers, next_offset)
-                    logger.info(
-                        "流代理续传外发请求头诊断: item_id=%s attempt=%s next=%s headers=%s",
-                        item_id, resume_attempt, next_offset,
-                        describe_headers(resume_headers),
-                    )
+                    if media_diag_enabled():
+                        logger.info(
+                            "流代理续传外发请求头诊断: item_id=%s attempt=%s next=%s headers=%s",
+                            item_id, resume_attempt, next_offset,
+                            describe_headers(resume_headers),
+                        )
                     try:
                         seg = await client.send(
                             client.build_request(
@@ -1255,13 +1264,14 @@ def create_app(
                         return seg
                     last_reason = f"resume status {seg.status_code} start {actual_start}"
                     if seg.status_code in (403, 404) or seg.status_code >= 500:
-                        logger.warning(
-                            "流代理续传拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s next=%s",
-                            item_id, resume_attempt, seg.status_code,
-                            describe_media_url(resume_url),
-                            (fwd_headers.get("user-agent") or "")[:80],
-                            "refresh=" in resume_url, next_offset,
-                        )
+                        if media_diag_enabled():
+                            logger.warning(
+                                "流代理续传拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s next=%s",
+                                item_id, resume_attempt, seg.status_code,
+                                describe_media_url(resume_url),
+                                (fwd_headers.get("user-agent") or "")[:80],
+                                "refresh=" in resume_url, next_offset,
+                            )
                     # 200 整段与偏移错位的 206 说明 CDN 给不出断点之后的字节，再试只会
                     # 更早重复喂给播放端已交付过的内容；其余状态码（直链过期 403 等）
                     # 属于新链可能修好的场景，按预算继续换新链
@@ -1660,18 +1670,20 @@ def create_app(
                     )
                     if resolved_ok:
                         ms["Path"] = final_url
-                        logger.info(
-                            "302 直链下发诊断: item_id=%s url=%s ua=%s headers=%s",
-                            item_id, describe_media_url(final_url),
-                            (fwd_headers.get("user-agent") or "")[:80],
-                            describe_headers(fwd_headers),
-                        )
+                        if media_diag_enabled():
+                            logger.info(
+                                "302 直链下发诊断: item_id=%s url=%s ua=%s headers=%s",
+                                item_id, describe_media_url(final_url),
+                                (fwd_headers.get("user-agent") or "")[:80],
+                                describe_headers(fwd_headers),
+                            )
                     else:
-                        logger.info(
-                            "302 直链解析失败诊断: item_id=%s url=%s ua=%s",
-                            item_id, describe_media_url(ms_path),
-                            (fwd_headers.get("user-agent") or "")[:80],
-                        )
+                        if media_diag_enabled():
+                            logger.info(
+                                "302 直链解析失败诊断: item_id=%s url=%s ua=%s",
+                                item_id, describe_media_url(ms_path),
+                                (fwd_headers.get("user-agent") or "")[:80],
+                            )
 
         uid = request.query_params.get("UserId")
         if uid:

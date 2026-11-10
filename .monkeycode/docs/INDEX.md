@@ -79,10 +79,10 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（278 个用例）
+# 运行单元测试（282 个用例）
 cd combined && python -m pytest -q
 
-# 排查播放问题：在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
+# 排查播放问题：先设 STRM_MEDIA_DIAG=1 重启开启诊断日志，再在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
 
 # 静态检查（规则集见根目录 ruff.toml）
 ruff check .

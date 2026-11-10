@@ -110,7 +110,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（278 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（282 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
@@ -157,7 +157,7 @@ Co-authored-by: <AI Name> <email>
 
 ### 播放问题诊断
 
-播放相关诊断日志写入 `logs/combined.log`（INFO 级别，管理面板 `/admin/api/logs` 可读）。直链经 `utils.describe_media_url()` 只输出域名、路径与 `t_left` 剩余秒数，请求头经 `utils.describe_headers()` 只输出 `名字(长度)`，两者都不写值。常用关键字：`签发诊断`（新签发/缓存命中/取链失败）、`302 直链下发诊断`、`流代理外发请求头诊断`（含 `sensitive=` 分组）、`流代理拒绝诊断`（含上游响应体前 200 字）、`流代理续传拒绝诊断`。完整字段说明与排查顺序见[播放模式与诊断](./专有概念/播放模式与诊断.md)。
+播放相关诊断日志**默认关闭**：设置环境变量 `STRM_MEDIA_DIAG=1` 并重启程序开启，正式发版保持静默。开启后写入 `logs/combined.log`（INFO 级别，管理面板 `/admin/api/logs` 可读）。直链经 `utils.describe_media_url()` 只输出域名、路径与 `t_left` 剩余秒数，请求头经 `utils.describe_headers()` 只输出 `名字(长度)`，两者都不写值。常用关键字：`签发诊断`（新签发/缓存命中/取链失败）、`302 直链下发诊断`、`流代理外发请求头诊断`（含 `sensitive=` 分组）、`流代理拒绝诊断`（含上游响应体前 200 字）、`流代理续传拒绝诊断`。完整字段说明与排查顺序见[播放模式与诊断](./专有概念/播放模式与诊断.md)。
 
 ### 修改媒体流重定向行为
 

@@ -111,7 +111,7 @@ _playback_info_strm_direct_play()
 
 - 半身后断时 `stream()` 以已交付绝对字节 `seg_next` 为基准，换链后只接受 206 且 `Content-Range` 起点精确匹配的响应。
 - 首次解析把 STRM 源地址记入 `request.state.strm_source_url`，续传时即使各级缓存过期也能重新解析；换链给跳转地址加 `refresh=1`，强制 302 服务重新签发。
-- 诊断日志覆盖签发、302 下发、上游拒绝（含响应体摘要）与外发请求头名列表；直链签名参数与请求头的值经 `utils.describe_media_url()` / `describe_headers()` 脱敏，不落盘。
+- 诊断日志（默认关闭，设 `STRM_MEDIA_DIAG=1` 重启开启）覆盖签发、302 下发、上游拒绝（含响应体摘要）与外发请求头名列表；直链签名参数与请求头的值经 `utils.describe_media_url()` / `describe_headers()` 脱敏，不落盘。
 - 已知观察项：高密度取流时上游可能返回 `403 / 115 pmt 3-2`，与请求密度强相关，当前按观察处理，详见[播放模式与诊断](../专有概念/播放模式与诊断.md)。
 
 ## 依赖

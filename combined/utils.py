@@ -1,6 +1,7 @@
 """
 通用工具模块：异步 TTL 缓存、按 key 互斥锁、速率控制、异常捕获装饰器
 """
+import os
 from asyncio import Lock, shield
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -297,3 +298,17 @@ def describe_headers(headers) -> str:
         )
     except Exception:
         return "(unparsable)"
+
+
+MEDIA_DIAG_ENV_VAR = "STRM_MEDIA_DIAG"
+
+
+def media_diag_enabled() -> bool:
+    """媒体链路诊断日志默认关闭；设置环境变量后重启程序可开启。
+
+    诊断日志仅用于排查 403 / 直链异常。平时关闭可避免日志膨胀，也避免把
+    播放端信息持续写进管理面板可读的日志。1/true/yes/on 均视为开启。
+    """
+    return os.environ.get(MEDIA_DIAG_ENV_VAR, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
