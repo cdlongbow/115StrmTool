@@ -40,7 +40,7 @@ _PROPFIND_BODY = (
     "</d:prop></d:propfind>"
 ).encode("utf-8")
 _MANIFEST_NAME = "manifest.json"
-_REQUIRED_MEMBERS = ("config.json", "config.key", _MANIFEST_NAME)
+_REQUIRED_MEMBERS = ("config.json", _MANIFEST_NAME)
 
 
 def _friendly_http_error(resp: httpx.Response, action: str) -> str:
@@ -362,26 +362,25 @@ class BackupService:
 
     def _create_archive(self, staging_dir: Path) -> Path:
         """
-        把配置四件套与本地快照打包成含清单的 zip 档案
+        把配置与签到状态打包成含清单的 zip 档案
+
+        解密密钥 config.key 与本地配置快照绝不进入远端档案：前者可解开
+        Cookie 与 WebDAV 口令，后者含明文管理令牌，随包上传等于把锁和钥匙
+        一起交出去。换机恢复时请单独提供本机 config.key。
 
         :param staging_dir (Path): 暂存目录
 
         :return Path: 生成的档案路径
 
-        :raises ServiceError: 必备成员（config.key）缺失
+        :raises ServiceError: 配置文件缺失
         """
-        if not (_BASE_DIR / "config.key").exists():
-            raise ServiceError("config.key 不存在，无法生成可恢复的档案")
+        if not CONFIG_FILE.exists():
+            raise ServiceError("config.json 不存在，无法生成档案")
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         archive_path = staging_dir / f"{BACKUP_NAME_PREFIX}{ts}{BACKUP_NAME_SUFFIX}"
-        members: Dict[str, Path] = {
-            "config.json": CONFIG_FILE,
-            "config.key": _BASE_DIR / "config.key",
-        }
+        members: Dict[str, Path] = {"config.json": CONFIG_FILE}
         if CHECKIN_STATE_FILE.exists():
             members["checkin_state.json"] = CHECKIN_STATE_FILE
-        for snap in sorted(CONFIG_BACKUP_DIR.glob("config-*.json")):
-            members[f"backups/{snap.name}"] = snap
         manifest = {
             "app_version": APP_VERSION,
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -639,7 +638,8 @@ class BackupService:
             with zipfile.ZipFile(tmp_archive) as zf:
                 names = zf.namelist()
                 new_config = zf.read("config.json")
-                new_key = zf.read("config.key")
+                # 兼容旧档案：只有本机缺少密钥时才采用档案内附带的 config.key
+                new_key = zf.read("config.key") if "config.key" in names else None
                 new_state = zf.read("checkin_state.json") if "checkin_state.json" in names else None
             # 与 ConfigManager._write 持同一把锁：防止恢复覆盖与面板保存并发交叉，
             # 也保证随后的 load 读到的就是本轮恢复内容（RLock 同线程可重入）
@@ -654,7 +654,8 @@ class BackupService:
                     (CONFIG_BACKUP_DIR / f"{guard_base}.key").write_bytes(pre_key)
                 try:
                     self._atomic_write_bytes(CONFIG_FILE, new_config)
-                    self._atomic_write_bytes(key_file, new_key)
+                    if new_key is not None and not key_file.exists():
+                        self._atomic_write_bytes(key_file, new_key)
                     if new_state is not None:
                         self._atomic_write_bytes(CHECKIN_STATE_FILE, new_state)
                 except OSError as exc:

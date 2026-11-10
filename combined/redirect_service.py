@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from config_manager import config_manager
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
-from utils import AsyncKeyLock, AsyncTtlCache
+from utils import AsyncKeyLock, AsyncTtlCache, describe_media_url
 
 CACHE_TTL_DEFAULT = 90
 DOWNLOAD_API_PATH = "/api/v1/plugin/P115StrmHelper/redirect_url"
@@ -173,16 +173,24 @@ class RedirectService:
             )
 
         ckey = self._cache_key(pickcode, user_agent)
+        # 流代理换链/续传带 refresh=1：直链过期时不能继续复用缓存里的旧地址
+        force_refresh = request.query_params.get("refresh") in ("1", "true", "yes")
+        if force_refresh:
+            logger.debug("【302跳转服务】强制刷新直链: pickcode=%s", pickcode)
         # 缓存击穿防护：同一 pickcode+UA 并发回源只执行一次，
         # 其余请求在锁内二次检查缓存后直接复用结果
         async with self._key_lock.acquire(ckey):
             async with self._cache.lock:
-                cached = self._cache.get(ckey)
+                cached = None if force_refresh else self._cache.get(ckey)
             if cached:
                 cached_url, cached_fname = cached
                 logger.debug(
                     "【302跳转服务】缓存命中: pickcode=%s file_name=%s ip=%s",
                     pickcode, cached_fname, client_ip,
+                )
+                logger.info(
+                    "【302跳转服务】签发诊断: 缓存命中 pickcode=%s url=%s ua=%s",
+                    pickcode, describe_media_url(cached_url), user_agent[:60],
                 )
                 return self._build_302(cached_url, pickcode, cached_fname)
 
@@ -214,8 +222,8 @@ class RedirectService:
                     self._schedule_copy_cleanup(post_pickcode)
             if not result:
                 logger.error(
-                    "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s",
-                    pickcode, client_ip,
+                    "【302跳转服务】获取 115 下载地址失败: pickcode=%s ip=%s ua=%s refresh=%s",
+                    pickcode, client_ip, user_agent[:60], force_refresh,
                 )
                 return JSONResponse(
                     status_code=502,
@@ -225,7 +233,14 @@ class RedirectService:
             download_url, file_name, expires_time = result
             # expires_time 已预留 300 秒过期余量；缓存时间不超过剩余有效期，
             # 也不超过默认上限，避免把即将/已经过期的 URL 继续分发给客户端
-            ttl = min(CACHE_TTL_DEFAULT, expires_time - int(time()))
+            # expires_time 无效（如直链缺少 t 参数时 SDK 回退为 -300）时按默认 TTL 缓存，
+            # 否则会算出巨大负值导致每次播放都回源 115，容易撞限频
+            remaining = (
+                expires_time - int(time())
+                if expires_time and expires_time > 0
+                else CACHE_TTL_DEFAULT
+            )
+            ttl = min(CACHE_TTL_DEFAULT, remaining)
             if ttl > 0:
                 async with self._cache.lock:
                     self._cache.put(ckey, (download_url, file_name), ttl=ttl)
@@ -233,11 +248,16 @@ class RedirectService:
                 logger.warning(
                     "【302跳转服务】下载地址剩余有效期过短（可能已过期），仍按原样返回且不缓存: "
                     "pickcode=%s expires_in=%ss",
-                    pickcode, expires_time - int(time()),
+                    pickcode, remaining,
                 )
             logger.debug(
                 "【302跳转服务】获取 115 下载地址成功: pickcode=%s file_name=%s ttl=%ss ip=%s",
                 pickcode, file_name, ttl, client_ip,
+            )
+            logger.info(
+                "【302跳转服务】签发诊断: 新签发 pickcode=%s url=%s ttl=%ss ua=%s refresh=%s",
+                pickcode, describe_media_url(download_url), ttl,
+                user_agent[:60], force_refresh,
             )
             return self._build_302(download_url, pickcode, file_name)
 

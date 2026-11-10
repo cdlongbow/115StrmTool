@@ -300,17 +300,20 @@ class TestArchiveSelfCheck:
         declared = [m["path"] for m in manifest["members"]]
         assert declared == sorted(declared)
         assert "checkin_state.json" in declared
-        assert any(one.startswith("backups/") for one in declared)
+        # 解密密钥与本地配置快照不得随档案上传
+        assert "config.key" not in declared
+        assert not any(one.startswith("backups/") for one in declared)
         assert manifest["app_version"]
 
-    def test_create_requires_config_key(self, dav_env):
+    def test_create_without_config_key_still_works(self, dav_env):
+        """密钥只留本机，缺少密钥文件不应阻断备份"""
         wb, conf, backup_dir, tmp = dav_env
-        from exceptions import ServiceError
         (tmp / "config.key").unlink()
         staging = tmp / "staging"
         staging.mkdir()
-        with pytest.raises(ServiceError):
-            wb.backup_service._create_archive(staging)
+        archive = wb.backup_service._create_archive(staging)
+        with zipfile.ZipFile(archive) as zf:
+            assert "config.key" not in zf.namelist()
 
     def test_create_skips_missing_checkin(self, dav_env):
         wb, conf, backup_dir, tmp = dav_env
@@ -351,8 +354,9 @@ class TestArchiveSelfCheck:
     def test_verify_detects_missing_required(self, tmp_path):
         import webdav_backup as wb_mod
         members, declared = _good_members()
-        del members["config.key"]
-        declared = [declared[0]]
+        # config.key 已不再是必备成员；config.json 缺失才应拒绝
+        del members["config.json"]
+        declared = [declared[1]]
         path = tmp_path / "115strmtool-backup-20261018-000003.zip"
         path.write_bytes(_build_zip(members, declared))
         ok, reason = wb_mod.backup_service._verify_archive(path)
@@ -548,7 +552,8 @@ class TestBackupRestoreFlow:
 
         def flaky_write(path, data):
             counters["n"] += 1
-            if counters["n"] == 2:
+            # 新档案不再写入 config.key，首次写 config.json 即触发失败
+            if counters["n"] == 1:
                 raise OSError("simulated disk failure")
             original(path, data)
 

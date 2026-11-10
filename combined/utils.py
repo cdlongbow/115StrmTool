@@ -222,3 +222,78 @@ def capture_exceptions(default: Any = None, log_message: str = "操作失败"):
         return sync_wrapper
 
     return decorator
+
+
+def describe_media_url(url: str) -> str:
+    """把带签名的 115 直链摘要成可排障、又不泄漏签名的字符串。
+
+    形如 ``cdn.115.com/path/movie.mkv t_left=1234s``；只保留域名与路径，
+    query 里的签名/密钥参数一律不写进日志（日志可由管理面板读取）。
+
+    :param url: 媒体直链或跳转地址
+    :return: 脱敏摘要
+    """
+    from re import search as _search
+    from time import time as _epoch
+    from urllib.parse import urlsplit as _urlsplit
+
+    if not url:
+        return "(empty)"
+    try:
+        parts = _urlsplit(url)
+        match = _search(r"[?&]t=(\d+)", url)
+        if match:
+            expiry = f"t_left={int(match.group(1)) - int(_epoch())}s"
+        else:
+            expiry = "t=none"
+        return f"{parts.netloc}{parts.path} {expiry}"
+    except Exception:
+        return "(unparsable)"
+
+
+SENSITIVE_REQUEST_HEADERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "x-emby-token",
+        "x-emby-authorization",
+        "x-admin-token",
+        "referer",
+        "origin",
+        "if-range",
+        "if-match",
+        "if-none-match",
+        "if-modified-since",
+        "if-unmodified-since",
+        "proxy-authorization",
+    }
+)
+
+
+def describe_headers(headers) -> str:
+    """把外发请求头摘要成 ``名字(长度)`` 列表，值一律不写进日志。
+
+    形如 ``all=accept(3),range(8) | sensitive=cookie(14),x-emby-token(12)``，
+    便于判断请求里是否夹带了不该发给 CDN 的认证头或条件请求头。
+
+    :param headers: 请求头映射
+    :return: 脱敏摘要
+    """
+    try:
+        all_items = []
+        sensitive = []
+        for key, value in headers.items():
+            name = str(key).lower()
+            size = len(str(value)) if value is not None else 0
+            item = f"{name}({size})"
+            all_items.append(item)
+            if name in SENSITIVE_REQUEST_HEADERS:
+                sensitive.append(item)
+        all_items.sort()
+        sensitive.sort()
+        return (
+            f"all={','.join(all_items) or '-'}"
+            f" | sensitive={','.join(sensitive) or '-'}"
+        )
+    except Exception:
+        return "(unparsable)"

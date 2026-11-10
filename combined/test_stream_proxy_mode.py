@@ -76,12 +76,15 @@ class FakeUpstream:
         raise AssertionError(f"unexpected upstream request: {request.method} {url}")
 
 
-def _make_client(app: object, upstream: FakeUpstream) -> httpx.AsyncClient:
+def _make_client(
+    app: object, upstream: FakeUpstream, client_ip: str = "127.0.0.1"
+) -> httpx.AsyncClient:
     app.state.http_client_no_follow = httpx.AsyncClient(
         transport=httpx.MockTransport(upstream.handler)
     )
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://internal.test"
+        transport=httpx.ASGITransport(app=app, client=(client_ip, 12345)),
+        base_url="http://internal.test",
     )
 
 
@@ -89,21 +92,30 @@ def _seed_strm_cache(app: object) -> None:
     app.state.strm_source_cache.put(ITEM_ID, {"ms1": ENTRY_URL})
 
 
-async def _with_lifespan(mode: str, upstream: FakeUpstream) -> httpx.AsyncClient:
+async def _with_lifespan(
+    mode: str, upstream: FakeUpstream, client_ip: str = "127.0.0.1",
+    mutate_app=None,
+) -> httpx.AsyncClient:
     app = create_app(emby_host="http://emby.test", playback_mode=mode)
     await app.router.lifespan_context(app).__aenter__()
     _seed_strm_cache(app)
-    return _make_client(app, upstream)
+    if mutate_app is not None:
+        mutate_app(app)
+    return _make_client(app, upstream, client_ip)
 
 
-def _proxy_request(headers=None, script=None, method="get"):
+def _proxy_request(
+    headers=None, script=None, method="get", client_ip="127.0.0.1", mutate_app=None
+):
     upstream = FakeUpstream(cdn_script=script)
     hdrs = dict(LAN_HEADERS)
     if headers:
         hdrs.update(headers)
 
     async def _run():
-        client = await _with_lifespan("stream_proxy", upstream)
+        client = await _with_lifespan(
+            "stream_proxy", upstream, client_ip, mutate_app
+        )
         async with client:
             resp = await getattr(client, method)(MEDIA_URL, headers=hdrs)
             return resp, upstream
@@ -309,6 +321,28 @@ class TestStreamProxyMidStreamResume:
         assert upstream.get_count == 3
         assert upstream.head_count == 3
 
+    def test_resume_survives_expired_source_cache(self, monkeypatch):
+        """暂停/长片后各级缓存过期：同一请求内仍能用已记录的源地址续传"""
+        def expire_source_cache(app):
+            real_get = app.state.strm_source_cache.get
+            calls = {"n": 0}
+
+            def fake_get(key):
+                calls["n"] += 1
+                # 首次解析命中；续传解析时缓存已过期
+                return None if calls["n"] >= 2 else real_get(key)
+
+            monkeypatch.setattr(app.state.strm_source_cache, "get", fake_get)
+
+        with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
+            script = [(206, self.FIRST_HEADERS, self._flaky()), self.RESUME_RESPONSE]
+            resp, upstream = _proxy_request(
+                headers={"range": "bytes=0-"}, script=script,
+                mutate_app=expire_source_cache,
+            )
+        assert resp.content == self.CHUNK + self.TAIL
+        assert upstream.get_count == 2
+
     def test_whole_file_200_on_resume_ends_body_without_replay(self):
         with patch("proxy_app.sleep", new=lambda *_a, **_k: asyncio.sleep(0)):
             script = [
@@ -396,13 +430,16 @@ class TestStreamProxyMidStreamResume:
 class TestStreamProxyNetworkGate:
 
     def test_public_source_rejected(self):
-        resp, upstream = _proxy_request(headers={"x-forwarded-for": "8.8.8.8"})
+        # 门禁只认连接层 IP；伪造 XFF 不再能冒充内网
+        resp, upstream = _proxy_request(
+            headers={"x-forwarded-for": "192.168.1.50"}, client_ip="8.8.8.8"
+        )
         assert resp.status_code == 403
         assert upstream.head_count == 0 and upstream.get_count == 0
 
-    def test_private_xff_first_hop_allowed(self):
+    def test_forged_public_xff_does_not_block_private_peer(self):
         resp, upstream = _proxy_request(
-            headers={"x-forwarded-for": "192.168.1.50, 8.8.8.8"}
+            headers={"x-forwarded-for": "8.8.8.8"}, client_ip="192.168.2.50"
         )
         assert resp.status_code == 206
         assert upstream.get_count == 1

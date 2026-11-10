@@ -334,13 +334,20 @@ class ConfigManager:
 
     def export_disk_text(self) -> Optional[str]:
         """
-        读取磁盘当前配置原文用于导出（Cookie 保持密文形态）
+        读取磁盘当前配置用于导出（Cookie 保持密文形态，管理令牌剔除）
+
+        导出的文件常被另存或分享，明文 admin_token 不能随之外带；
+        导入方首次启动会自动生成新令牌，无需保留旧值。
 
         :return str: 配置文件内容，文件不存在或读取失败返回 None
         """
         try:
-            return CONFIG_FILE.read_text(encoding="utf-8")
-        except OSError:
+            content = CONFIG_FILE.read_text(encoding="utf-8")
+            data = json.loads(content)
+            if isinstance(data, dict) and data.pop("admin_token", None) is not None:
+                return json.dumps(data, ensure_ascii=False, indent=2)
+            return content
+        except (OSError, ValueError):
             return None
 
     def _write(self) -> bool:

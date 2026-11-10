@@ -5,6 +5,7 @@ import socket
 import sys
 import threading
 import time
+from hmac import compare_digest
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -237,7 +238,13 @@ def _restart_p115():
 
 
 def create_admin_app() -> FastAPI:
-    app = FastAPI(title="115网盘STRM生成与302工具")
+    # 自动接口文档不在令牌中间件保护范围内，直接关闭避免接口结构外泄
+    app = FastAPI(
+        title="115网盘STRM生成与302工具",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     from fastapi.responses import JSONResponse
     from exceptions import ServiceError
@@ -264,8 +271,17 @@ def create_admin_app() -> FastAPI:
             return await call_next(request)
         token = config_manager.get().get("admin_token") or ""
         if not token:
+            # 令牌未初始化时只允许本机回环访问，避免局域网/公网直接裸奔；
+            # 启动流程会自动生成令牌，本机仍能进入管理界面完成初始化
+            peer = request.client.host if request.client else ""
+            if peer not in ("127.0.0.1", "::1", "localhost"):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "管理令牌未初始化，仅本机可访问"},
+                )
             return await call_next(request)
-        if request.headers.get("x-admin-token") != token:
+        supplied = request.headers.get("x-admin-token") or ""
+        if not compare_digest(supplied, token):
             return JSONResponse(
                 status_code=401,
                 content={"error": "缺少或错误的访问令牌（X-Admin-Token）"},
@@ -334,7 +350,12 @@ def main():
 
         admin_token = token_urlsafe(24)
         config_manager.update({"admin_token": admin_token})
-    logger.info("管理界面访问令牌: %s", admin_token)
+    # 日志可通过管理接口读取，完整令牌不得落盘
+    logger.info(
+        "管理界面访问令牌已就绪（前 4 位 %s...），完整值见 config.json；"
+        "托盘「打开管理界面」会自动注入",
+        admin_token[:4] if admin_token else "(空)",
+    )
     set_emby_restart_callback(_restart_emby)
     set_p115_restart_callback(_restart_p115)
 

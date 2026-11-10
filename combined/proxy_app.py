@@ -13,7 +13,7 @@ from time import monotonic
 from typing import Any, Iterable, List, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
-from utils import AsyncKeyLock, AsyncTtlCache
+from utils import AsyncKeyLock, AsyncTtlCache, describe_headers, describe_media_url
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +53,9 @@ from external_players import (
 PLAYBACK_URL_CACHE_TTL_SECONDS = 90
 PLAYBACK_USER_CACHE_TTL_SECONDS = 300
 PLAYBACK_URL_CACHE_MAX_SIZE = 500
-PLAYBACK_STRM_CACHE_TTL_SECONDS = 300
+# STRM 源地址必须在整次播放会话内可用：暂停或长片中途上游断链时
+# 续传会重新解析直链，缓存一过期就再也找不到源地址（表现为网络读取失败）
+PLAYBACK_STRM_CACHE_TTL_SECONDS = 21600
 REDIRECT_RESOLVE_TIMEOUTS = ((3.0, 10.0), (3.0, 15.0), (5.0, 20.0))
 
 STREAM_RETRY_MAX = 2
@@ -519,6 +521,9 @@ def _real_client_ip(request: Request) -> str:
     `request.client.host` 会是上游代理的 IP，导致局域网内所有用户看起来
     都来自同一 IP。优先读取 `X-Forwarded-For` / `X-Real-IP` 恢复真实 IP
 
+    注意：结果仅供日志与缓存 key 使用，不得用于安全判定（见 `_is_private_source`），
+    因为这两个请求头可由客户端任意伪造
+
     :param request: 当前请求
     :return: 客户端 IP 字符串，取不到时返回空串
     """
@@ -535,14 +540,15 @@ def _is_private_source(request: Request) -> bool:
     """
     判断请求来源是否属于私有网段，用于流代理模式的局域网硬门禁
 
-    网段归属沿用 `_real_client_ip` 口径（X-Forwarded-For / X-Real-IP 优先），
+    安全判定一律以连接层 IP（request.client.host）为准，不读取
+    X-Forwarded-For / X-Real-IP，避免伪造请求头绕过门禁。
     `ipaddress.is_private` 覆盖 RFC 1918、环回、ULA 与运营商 NAT 网段；
     无法解析的 IP 一律按非私有处理
 
     :param request: 当前请求
     :return: 来源属于私有网段返回 True，否则 False
     """
-    ip = _real_client_ip(request)
+    ip = request.client.host if request.client else ""
     if not ip:
         return False
     try:
@@ -863,6 +869,12 @@ def create_app(
                 return url, False
         return url, False
 
+    def _with_refresh_marker(url: str) -> str:
+        """给跳转地址加刷新标记，让 302 服务跳过旧直链缓存重新签发"""
+        if "refresh=" in url or "pickcode=" not in url:
+            return url
+        return f"{url}{'&' if '?' in url else '?'}refresh=1"
+
     def _build_302_redirect(url: str) -> RedirectResponse:
         """
         构建 302 重定向响应，让客户端直连 CDN
@@ -922,20 +934,29 @@ def create_app(
         async with key_lock.acquire(cache_key):
             # 第二级：已解析 URL 缓存 — 命中则直接返回，跳过后续查询
             if not skip_final_url_cache:
-                cached_final_url = None
+                cached_entry = None
                 async with cache.lock:
-                    cached_final_url = cache.get(cache_key)
-                if cached_final_url is not None:
+                    cached_entry = cache.get(cache_key)
+                if cached_entry is not None:
+                    # 缓存与返回值同为 (url, resolved)，保留解析失败标志
+                    if isinstance(cached_entry, tuple) and len(cached_entry) == 2:
+                        cached_url, cached_resolved = cached_entry
+                    else:
+                        cached_url, cached_resolved = cached_entry, True
                     logger.debug(
-                        "媒体地址缓存命中: item_id=%s -> %s", item_id, cached_final_url
+                        "媒体地址缓存命中: item_id=%s -> %s (resolved=%s)",
+                        item_id, cached_url, cached_resolved,
                     )
-                    return cached_final_url, True
+                    return cached_url, cached_resolved
 
             http_path = None
 
             # 第三级：PlaybackInfo API 实时查询 — 从 Emby 解析媒体源路径
             if api_key:
-                url = f"{emby_host}/Items/{item_id}/PlaybackInfo?X-Emby-Token={api_key}"
+                url = (
+                    f"{emby_host}/Items/{item_id}/PlaybackInfo"
+                    f"?X-Emby-Token={quote(api_key, safe='')}"
+                )
                 client_follow = request.app.state.http_client_follow
                 try:
                     resp = await client_follow.post(url, timeout=10)
@@ -969,24 +990,42 @@ def create_app(
                     if http_path:
                         logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
 
+            # 第五级：同一播放请求内此前解析出的源地址。半身后断续传发生在
+            # 同一个 request 里，此时 PlaybackInfo 已不可查、各级缓存也可能过期，
+            # 用它保证续传永远能重新解析，而不是「resolve returned no target」
+            if not http_path:
+                http_path = getattr(request.state, "strm_source_url", None)
+                if http_path:
+                    logger.debug("使用本次请求的 STRM 源地址: item_id=%s", item_id)
+
             if not http_path:
                 return None, False
+
+            # 记录源地址供本次请求后续续传使用（仅内存态，不跨请求）
+            request.state.strm_source_url = http_path
 
             # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
             # 使用 follow_redirects=False 避免实际请求 CDN
             client_no_follow = request.app.state.http_client_no_follow
             fwd_headers = _build_forward_headers(request)
+            # 换链/续传场景强制重新签发：否则 302 服务仍返回缓存里的旧地址，
+            # 表现为连续 403「换新链」却始终换不到新链
+            resolve_url = (
+                _with_refresh_marker(http_path)
+                if skip_final_url_cache
+                else http_path
+            )
             final_url, resolved = await _resolve_redirect(
-                client_no_follow, http_path, fwd_headers, user_id
+                client_no_follow, resolve_url, fwd_headers, user_id
             )
 
             # 解析成功回写默认 TTL；解析失败在常规路径只做 5 秒短缓存
             # 避免坏 URL 长期驻留，换新链场景则不写回以免覆盖正常缓存
             async with cache.lock:
                 if resolved:
-                    cache.put(cache_key, final_url, ttl=None)
+                    cache.put(cache_key, (final_url, True), ttl=None)
                 elif not skip_final_url_cache:
-                    cache.put(cache_key, final_url, ttl=5)
+                    cache.put(cache_key, (final_url, False), ttl=5)
 
             logger.debug("媒体地址已解析: item_id=%s -> %s", item_id, final_url)
             return final_url, resolved
@@ -1066,6 +1105,11 @@ def create_app(
                 )
                 continue
 
+            logger.info(
+                "流代理外发请求头诊断: item_id=%s attempt=%s url=%s headers=%s",
+                item_id, attempt, describe_media_url(cur_url),
+                describe_headers(fwd_headers),
+            )
             try:
                 upstream = await client.send(
                     client.build_request(
@@ -1098,6 +1142,19 @@ def create_app(
             )
             if retryable:
                 last_error = f"upstream status {status}"
+                if status in (403, 404) or status >= 500:
+                    try:
+                        body_hint = (await upstream.aread())[:200].decode(
+                            "utf-8", "replace"
+                        ).replace("\r", " ").replace("\n", " ")
+                    except Exception:
+                        body_hint = "(unreadable)"
+                    logger.warning(
+                        "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
+                        item_id, attempt, status, describe_media_url(cur_url),
+                        (fwd_headers.get("user-agent") or "")[:80],
+                        "refresh=" in cur_url, body_hint,
+                    )
                 await upstream.aclose()
                 logger.info(
                     "流代理上游不可用，准备换新链重试: item_id=%s attempt=%s status=%s",
@@ -1165,12 +1222,18 @@ def create_app(
                             item_id, resume_attempt,
                         )
                         continue
+                    resume_headers = _build_resume_headers(fwd_headers, next_offset)
+                    logger.info(
+                        "流代理续传外发请求头诊断: item_id=%s attempt=%s next=%s headers=%s",
+                        item_id, resume_attempt, next_offset,
+                        describe_headers(resume_headers),
+                    )
                     try:
                         seg = await client.send(
                             client.build_request(
                                 method="GET",
                                 url=resume_url,
-                                headers=_build_resume_headers(fwd_headers, next_offset),
+                                headers=resume_headers,
                             ),
                             stream=True,
                         )
@@ -1191,6 +1254,14 @@ def create_app(
                         )
                         return seg
                     last_reason = f"resume status {seg.status_code} start {actual_start}"
+                    if seg.status_code in (403, 404) or seg.status_code >= 500:
+                        logger.warning(
+                            "流代理续传拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s next=%s",
+                            item_id, resume_attempt, seg.status_code,
+                            describe_media_url(resume_url),
+                            (fwd_headers.get("user-agent") or "")[:80],
+                            "refresh=" in resume_url, next_offset,
+                        )
                     # 200 整段与偏移错位的 206 说明 CDN 给不出断点之后的字节，再试只会
                     # 更早重复喂给播放端已交付过的内容；其余状态码（直链过期 403 等）
                     # 属于新链可能修好的场景，按预算继续换新链
@@ -1282,8 +1353,9 @@ def create_app(
         if playback_mode_enum is not PlaybackMode.REDIRECT:
             return None
 
-        final_url, _resolved = await _resolve_media_target(item_id, api_key, request)
-        if final_url is None:
+        final_url, resolved = await _resolve_media_target(item_id, api_key, request)
+        # 解析失败时不能把未解析的跳转地址当作 115 直链下发给客户端
+        if final_url is None or not resolved:
             return None
 
         logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
@@ -1453,7 +1525,7 @@ def create_app(
                         )
         pairs = _filter_response_headers(
             resp,
-            drop=("content-length", "content-encoding") | RESPONSE_VALIDATOR_HEADERS,
+            drop=frozenset(("content-length", "content-encoding")) | RESPONSE_VALIDATOR_HEADERS,
         )
         return _with_raw_headers(
             JSONResponse(status_code=200, content=body), pairs
@@ -1588,6 +1660,18 @@ def create_app(
                     )
                     if resolved_ok:
                         ms["Path"] = final_url
+                        logger.info(
+                            "302 直链下发诊断: item_id=%s url=%s ua=%s headers=%s",
+                            item_id, describe_media_url(final_url),
+                            (fwd_headers.get("user-agent") or "")[:80],
+                            describe_headers(fwd_headers),
+                        )
+                    else:
+                        logger.info(
+                            "302 直链解析失败诊断: item_id=%s url=%s ua=%s",
+                            item_id, describe_media_url(ms_path),
+                            (fwd_headers.get("user-agent") or "")[:80],
+                        )
 
         uid = request.query_params.get("UserId")
         if uid:

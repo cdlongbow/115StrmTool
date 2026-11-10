@@ -60,6 +60,25 @@ def test_valid_url_cached():
     )
 
 
+def test_refresh_forces_new_download_link():
+    """流代理换链带 refresh=1 时必须跳过缓存重新向 115 签发"""
+    svc = _build_service(int(time.time()) + 3600)
+    wrapper = svc._client
+    wrapper.get_download_url_with_ua.reset_mock()
+
+    async def _run():
+        async with _async_client(svc) as client:
+            r1 = await client.get(API_PATH, params={"pickcode": PICKCODE})
+            r2 = await client.get(
+                API_PATH, params={"pickcode": PICKCODE, "refresh": "1"}
+            )
+            return r1, r2
+
+    r1, r2 = asyncio.run(_run())
+    assert r1.status_code == 302 and r2.status_code == 302
+    assert wrapper.get_download_url_with_ua.call_count == 2
+
+
 def test_expired_url_not_cached():
     svc = _build_service(int(time.time()) - 5)
     wrapper = svc._client
