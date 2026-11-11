@@ -231,6 +231,11 @@ function stopPolling(h) {
       </div>
       <div style="font-size:12px;opacity:0.7;margin-top:4px">流代理：由本机向 115 取流转发给播放端，暂停续播与拖动不受直链时效影响；仅响应内网网段设备，115 地址不暴露给播放端</div>
     </div>
+    <div class="switch-group" style="margin-top:12px">
+      <label class="switch"><input type="checkbox" id="media_diag" onchange="saveMediaDiag()"><span class="slider"></span></label>
+      <span class="switch-label">播放诊断日志</span>
+    </div>
+    <div style="font-size:12px;opacity:0.7;margin-top:4px">默认关闭。排查播放失败时开启，日志记录直链签发、上游拒绝原因与外发请求头名列表；直链签名与请求头的值不落盘。保存后立即生效，无需重启。</div>
     <div style="display:flex;gap:8px;margin-top:12px">
       <button class="btn btn-primary" onclick="saveEmbyConfig()">保存配置</button>
       <button class="btn btn-success" onclick="restartEmby()">重启 Emby 代理</button>
@@ -504,6 +509,7 @@ document.querySelectorAll('.nav a').forEach(a => {
 function loadConfig() {
   apiFetch('/admin/api/config').then(r => r.json()).then(config => {
     currentConfig = config;
+    document.getElementById('media_diag').checked = config.media_diag === true;
     loadEmbyConfig(config.emby || {});
     loadP115Config(config.p115 || {});
     loadCheckinConfig(config.checkin || {});
@@ -750,6 +756,17 @@ async function saveAutostart() {
     await apiFetch('/admin/api/autostart', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
     showToast(enabled ? '已开启开机自启' : '已关闭开机自启', 'success');
   } catch(err) { showToast('设置失败: ' + err.message, 'error'); }
+}
+
+async function saveMediaDiag() {
+  const enabled = document.getElementById('media_diag').checked;
+  try {
+    await apiFetch('/admin/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({media_diag: enabled})});
+    showToast(enabled ? '诊断日志已开启（立即生效）' : '诊断日志已关闭', 'success');
+  } catch(err) {
+    document.getElementById('media_diag').checked = !enabled;
+    showToast('设置失败: ' + err.message, 'error');
+  }
 }
 
 // ── 扫码登录 ──

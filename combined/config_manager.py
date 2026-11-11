@@ -181,6 +181,10 @@ class RootConfig(BaseModel):
     p115: P115Config = Field(default_factory=P115Config)
     checkin: CheckinConfig = Field(default_factory=CheckinConfig)
     webdav: WebdavBackupConfig = Field(default_factory=WebdavBackupConfig)
+    media_diag: bool = Field(
+        default=False,
+        description="播放诊断日志开关（管理面板可切换，默认关闭；保存后立即生效）",
+    )
 
 
 def _migrate_legacy_emby_fields(raw: Dict[str, Any]) -> None:
@@ -327,6 +331,19 @@ class ConfigManager:
             self._config = _deep_merge(self._config, new_config)
             self._config = _validate_config(self._config)
         return self._write()
+
+    def get_flag(self, key: str, default: bool = False) -> bool:
+        """读取顶层布尔开关；热路径上避免复制整份配置。
+
+        诊断日志等高频判断直接读进程内配置单例，管理面板保存后无需
+        重启或重建服务即可生效；各服务运行在同一进程的线程中。
+
+        :param key (str): 顶层配置键
+        :param default (bool): 缺失时的返回值
+        :return bool: 开关状态
+        """
+        with self._lock:
+            return bool(self._config.get(key, default))
 
     def get(self) -> Dict[str, Any]:
         with self._lock:

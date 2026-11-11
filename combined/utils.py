@@ -301,14 +301,26 @@ def describe_headers(headers) -> str:
 
 
 MEDIA_DIAG_ENV_VAR = "STRM_MEDIA_DIAG"
+_MEDIA_DIAG_ON = frozenset({"1", "true", "yes", "on"})
+_MEDIA_DIAG_OFF = frozenset({"0", "false", "no", "off"})
 
 
 def media_diag_enabled() -> bool:
-    """媒体链路诊断日志默认关闭；设置环境变量后重启程序可开启。
+    """诊断日志开关：以管理面板配置为准，环境变量可作紧急覆盖。
 
-    诊断日志仅用于排查 403 / 直链异常。平时关闭可避免日志膨胀，也避免把
-    播放端信息持续写进管理面板可读的日志。1/true/yes/on 均视为开启。
+    优先级：显式环境变量 > 配置单例的 ``media_diag`` > 关闭。
+    每次调用都读取进程内配置单例，因此管理面板保存后立即生效，无需重启；
+    管理面板 / Emby 代理 / 302 服务同进程共享该单例。配置模块不可用或
+    返回值异常时一律按关闭处理，避免日志判断影响播放。
     """
-    return os.environ.get(MEDIA_DIAG_ENV_VAR, "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    env = os.environ.get(MEDIA_DIAG_ENV_VAR, "").strip().lower()
+    if env in _MEDIA_DIAG_ON:
+        return True
+    if env in _MEDIA_DIAG_OFF:
+        return False
+    try:
+        from config_manager import config_manager
+
+        return config_manager.get_flag("media_diag", False) is True
+    except Exception:
+        return False

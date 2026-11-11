@@ -1,11 +1,20 @@
-"""诊断日志开关：正式发版默认静默，需要排查时显式开启。"""
+"""诊断日志开关：默认关闭，管理面板配置或环境变量显式开启。"""
 from pathlib import Path
 
+import pytest
+
+from config_manager import config_manager
 from utils import MEDIA_DIAG_ENV_VAR, media_diag_enabled
 
 
-def test_diag_disabled_by_default(monkeypatch):
+@pytest.fixture(autouse=True)
+def _isolated_config(monkeypatch):
+    """隔离测试环境：不依赖本机 config.json，也不受其它用例污染。"""
     monkeypatch.delenv(MEDIA_DIAG_ENV_VAR, raising=False)
+    monkeypatch.setattr(config_manager, "get_flag", lambda key, default=False: False)
+
+
+def test_diag_disabled_by_default():
     assert media_diag_enabled() is False
 
 

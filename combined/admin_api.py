@@ -23,6 +23,7 @@ router = APIRouter(prefix="/admin/api")
 class ConfigUpdateRequest(BaseModel):
     emby: Optional[Dict[str, Any]] = None
     p115: Optional[Dict[str, Any]] = None
+    media_diag: Optional[bool] = None
 
 
 _restart_emby_callback: Callable = None
@@ -62,6 +63,8 @@ def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
             p115_updates.pop("cookie")
         if p115_updates:
             updates["p115"] = p115_updates
+    if req.media_diag is not None:
+        updates["media_diag"] = req.media_diag
     if updates:
         config_manager.update(updates)
         logger.info("配置已更新: %s", mask_config(updates))
