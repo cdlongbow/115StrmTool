@@ -34,6 +34,17 @@
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
 - [ ] full_strm_sync 恢复 Rust 加速（2026-11-03 升级 Python 3.14 的后置项）：CI/release 已切 3.14，`combined/wheels/` 仅有 cp312 ABI 的 full_strm_sync wheel，安装步骤已容错为 SKIP，exe 走纯 Python 生成路径（默认配置 `use_rust=False` 行为一致）；待上游 DDSRem 发布 cp314 wheel 后替换入 wheels 目录并验证 Rust 路径
 
+## 部署与分发类
+
+- [ ] Docker 化（观察项，待有用户提出 NAS/容器部署需求时再立项落地）：把三个 uvicorn 服务（管理 UI 8100 / Emby 反代 8097 / 302 跳转 3333）容器化。2026-11-16 预研结论如下
+  - 现成基础：`main.py --no-tray` 已是前台阻塞 + SIGINT/SIGTERM 优雅退出的标准容器主进程；pystray/Tkinter 均为可选或仅托盘场景；`full_strm_sync` 装不上自动回退纯 Python；STRM 文件内容是 302 跳转 URL（`strm_generator.py` `_write_strm`），不写本地路径，容器路径映射不污染内容
+  - 核心前置改动：`_BASE_DIR` 环境变量化（如 `APP_DATA_DIR`）——config_manager.py、database.py、logger.py、checkin_scheduler.py 四处同模式重复定义（frozen exe 用 exe 目录，否则用源码目录），config.json/config.key/data/strm.db/logs/checkin_state.json/config_backups 全落于此；收敛为一处并支持环境变量覆盖，容器内数据卷挂 `/app/data`；webdav_backup.py 经 `CONFIG_FILE.parent` 引用会自动跟随
+  - 镜像方案：基底 `python:3.14-slim`，pip 安装 requirements.txt（p115client 系有 Linux x86_64 wheel），`full_strm_sync` 沿用 CI 的 per-wheel 容错 SKIP 模式；`CMD ["python", "main.py", "--no-tray"]`；不把 config.key/数据文件打进镜像层
+  - 编排要点：暴露 8100/8097/3333 三端口（302 模式下播放客户端须能直连容器 IP）；STRM 输出目录与 Emby 同源挂载（工具写、Emby 读）；`TZ=Asia/Shanghai`（签到按指定时段时间窗随机触发，容器默认 UTC 会错档）；管理界面目录浏览/路径填写接口确认指向容器内挂载路径
+  - GUI 功能降级：托盘、注册表开机自启、外部播放器一键调用在容器内无意义，README 的 Docker 章节需注明
+  - 发布渠道：**无 Docker Hub 账号，镜像发布走 GitHub Container Registry**（`ghcr.io/cdlongbow/115strmtool`），在 release workflow 里用 `GITHUB_TOKEN` 推送，与现有日期 tag 发版流程串联；镜像 tag 与版本 tag 对应
+  - 风险评估：业务逻辑零改动，改动集中在 `_BASE_DIR` 收敛 + Dockerfile/compose + README，风险低；与 Windows exe 定位互补（exe 保桌面托盘体验，Docker 补 NAS/服务器场景）
+
 ## 测试类
 
 - [ ] 变异测试套件（可选低优先）：参考上游 mutation 脚本"跳过即失败"收口模式；289 用例规模下性价比一般，用例规模明显增长后再评估
