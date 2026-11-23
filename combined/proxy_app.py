@@ -1,3 +1,7 @@
+"""
+Emby 反向代理与 302/流媒体转发
+"""
+import json
 from asyncio import (
     FIRST_COMPLETED,
     create_task,
@@ -10,7 +14,7 @@ from hashlib import sha256
 from ipaddress import ip_address
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
 from time import monotonic
-from typing import Any, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
 from utils import (
@@ -62,6 +66,9 @@ PLAYBACK_URL_CACHE_MAX_SIZE = 500
 # STRM 源地址必须在整次播放会话内可用：暂停或长片中途上游断链时
 # 续传会重新解析直链，缓存一过期就再也找不到源地址（表现为网络读取失败）
 PLAYBACK_STRM_CACHE_TTL_SECONDS = 21600
+# 播放会话级源地址缓存：同一 (item_id, MediaSourceId, 用户) 的播放会话内
+# 复用已解析直链，避免每次 Range/续传请求都重新查 Emby PlaybackInfo 与 115 重定向
+PLAYBACK_SESSION_CACHE_TTL_SECONDS = 1800
 REDIRECT_RESOLVE_TIMEOUTS = ((3.0, 10.0), (3.0, 15.0), (5.0, 20.0))
 
 STREAM_RETRY_MAX = 2
@@ -115,6 +122,12 @@ HOP_BY_HOP_HEADERS = frozenset(
         "upgrade",
     }
 )
+
+# 115 限频响应码：见 115-station 103f6925 实践，兼容 error 为空仅给编号、
+# errno/errNo/error_code 大小写变体的兜底
+RATE_LIMIT_CODES = frozenset({"190044"})
+# 限频触发后的退避序列（秒），远长于普通 STREAM_RETRY_BACKOFF_SECONDS，避免自激放大
+RATE_LIMIT_BACKOFF_SECONDS = (5.0, 10.0, 20.0, 30.0)
 
 MEDIA_ROUTES = [
     "/audio/{item_id}/{name}",
@@ -327,6 +340,55 @@ def _strip_response_validators(headers: dict[str, str]) -> dict[str, str]:
 
 
 RESPONSE_VALIDATOR_HEADERS = frozenset({"content-md5", "etag", "last-modified"})
+
+
+def _extract_rate_limit_code_from_dict(body: Dict[str, Any]) -> Optional[str]:
+    """
+    从已解析的 115 响应字典中提取限频错误码
+
+    兼容 error 为空只给编号、errno/errNo/error_code 大小写变体的兜底
+
+    :param body: 已 json 解析的响应体字典
+    :return: 限频码字符串，或 None
+    """
+    if not isinstance(body, dict):
+        return None
+    for key in ("code", "errno", "errNo", "error_code"):
+        val = body.get(key)
+        if isinstance(val, (int, str)) and str(val) in RATE_LIMIT_CODES:
+            return str(val)
+    err = body.get("error")
+    if err is None:
+        # 某些 115 接口限频时 error 为空，顶层扁平扫描数字型值
+        for v in body.values():
+            if isinstance(v, (int, str)) and str(v) in RATE_LIMIT_CODES:
+                return str(v)
+        return None
+    if isinstance(err, str) and err.strip() in RATE_LIMIT_CODES:
+        return err.strip()
+    if isinstance(err, dict):
+        for key in ("code", "errno", "errNo", "error_code"):
+            val = err.get(key)
+            if isinstance(val, (int, str)) and str(val) in RATE_LIMIT_CODES:
+                return str(val)
+    return None
+
+
+def _extract_rate_limit_code(resp: HttpxResponse) -> Optional[str]:
+    """
+    从上游 115 响应中提取限频错误码
+
+    兼容 error 为空只给编号、errno/errNo/error_code 大小写变体的兜底；
+    非 JSON 或无可识别码时返回 None
+
+    :param resp: 上游 httpx 响应
+    :return: 限频码字符串，或 None
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        return None
+    return _extract_rate_limit_code_from_dict(body)
 
 
 def _filter_response_headers(
@@ -729,6 +791,9 @@ def create_app(
         app.state.playback_url_cache = AsyncTtlCache(ttl=PLAYBACK_URL_CACHE_TTL_SECONDS, max_size=PLAYBACK_URL_CACHE_MAX_SIZE)
         app.state.strm_source_cache = AsyncTtlCache(ttl=PLAYBACK_STRM_CACHE_TTL_SECONDS, max_size=500)
         app.state.playback_user_cache = AsyncTtlCache(ttl=PLAYBACK_USER_CACHE_TTL_SECONDS, max_size=500)
+        app.state.playback_session_cache = AsyncTtlCache(
+            ttl=PLAYBACK_SESSION_CACHE_TTL_SECONDS, max_size=500
+        )
         app.state.playback_url_key_lock = AsyncKeyLock()
         yield
         await app.state.http_client_follow.aclose()
@@ -926,6 +991,23 @@ def create_app(
         async with user_cache.lock:
             user_id = user_cache.get(user_key)
 
+        # 第零级：播放会话级源地址缓存 — 同一播放会话内复用已解析直链，
+        # 避免每次 Range/续传请求都重新查 Emby PlaybackInfo 与 115 重定向
+        session_key = (item_id, media_source_id, user_id or "")
+        session_cache = request.app.state.playback_session_cache
+        async with session_cache.lock:
+            session_entry = session_cache.get(session_key)
+        if session_entry is not None and not skip_final_url_cache:
+            if isinstance(session_entry, tuple) and len(session_entry) == 2:
+                session_url, session_resolved = session_entry
+            else:
+                session_url, session_resolved = session_entry, True
+            logger.debug(
+                "播放会话缓存命中: item_id=%s -> %s (resolved=%s)",
+                item_id, session_url, session_resolved,
+            )
+            return session_url, session_resolved
+
         cache_key = (
             item_id,
             media_source_id,
@@ -1034,6 +1116,10 @@ def create_app(
                     cache.put(cache_key, (final_url, False), ttl=5)
 
             logger.debug("媒体地址已解析: item_id=%s -> %s", item_id, final_url)
+            # 回写播放会话缓存，供同一会话内后续 Range/续传请求复用
+            if resolved:
+                async with session_cache.lock:
+                    session_cache.put(session_key, (final_url, True), ttl=None)
             return final_url, resolved
 
     async def _proxy_stream(
@@ -1068,12 +1154,20 @@ def create_app(
         cur_url, cur_resolved = direct_url, resolved
         last_error = "unknown"
         total_attempts = 1 + STREAM_RETRY_MAX
+        rate_limited = False
+        rate_limit_attempt = 0
 
         for attempt in range(1, total_attempts + 1):
             if attempt > 1:
-                backoff = STREAM_RETRY_BACKOFF_SECONDS[
-                    min(attempt - 2, len(STREAM_RETRY_BACKOFF_SECONDS) - 1)
-                ]
+                if rate_limited:
+                    backoff = RATE_LIMIT_BACKOFF_SECONDS[
+                        min(rate_limit_attempt, len(RATE_LIMIT_BACKOFF_SECONDS) - 1)
+                    ]
+                    rate_limit_attempt += 1
+                else:
+                    backoff = STREAM_RETRY_BACKOFF_SECONDS[
+                        min(attempt - 2, len(STREAM_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
                 if monotonic() - start + backoff >= STREAM_RETRY_BUDGET_SECONDS:
                     last_error = "retry budget exceeded"
                     break
@@ -1149,19 +1243,39 @@ def create_app(
             )
             if retryable:
                 last_error = f"upstream status {status}"
+                # 响应体只能 read 一次：先取限频码，再供诊断日志使用
+                body_bytes = b""
+                try:
+                    body_bytes = await upstream.aread()
+                except Exception:
+                    body_bytes = b""
+                body_text = (
+                    body_bytes.decode("utf-8", "replace")[:200]
+                    .replace("\r", " ")
+                    .replace("\n", " ")
+                )
+                rate_code = None
+                if body_bytes:
+                    try:
+                        rate_code = _extract_rate_limit_code_from_dict(
+                            json.loads(body_bytes)
+                        )
+                    except Exception:
+                        rate_code = None
+                if rate_code:
+                    rate_limited = True
+                    logger.warning(
+                        "流代理命中 115 限频码: item_id=%s attempt=%s status=%s code=%s url=%s",
+                        item_id, attempt, status, rate_code,
+                        describe_media_url(cur_url),
+                    )
                 if status in (403, 404) or status >= 500:
                     if media_diag_enabled():
-                        try:
-                            body_hint = (await upstream.aread())[:200].decode(
-                                "utf-8", "replace"
-                            ).replace("\r", " ").replace("\n", " ")
-                        except Exception:
-                            body_hint = "(unreadable)"
                         logger.warning(
                             "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
                             item_id, attempt, status, describe_media_url(cur_url),
                             (fwd_headers.get("user-agent") or "")[:80],
-                            "refresh=" in cur_url, body_hint,
+                            "refresh=" in cur_url, body_text,
                         )
                 await upstream.aclose()
                 logger.info(

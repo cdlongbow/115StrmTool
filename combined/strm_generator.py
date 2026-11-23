@@ -1,12 +1,17 @@
+import queue
 import threading
 from os import name as os_name
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from logger import logger
 from p115_client_wrapper import P115ClientWrapper
 from database import db
 from fast_scan import FastScanUnavailable, iter_files_fast
+
+# 115 目录遍历单次无活动超时（秒）：若 SDK 遍历在该时长内无新文件产出，
+# 判定被阻塞并停止遍历，避免拖垮整个同步任务
+SYNC_TRAVERSE_IDLE_TIMEOUT_SECONDS = 60.0
 
 
 def _notes_suffix(notes: List[str]) -> str:
@@ -42,11 +47,54 @@ def sanitize_path_parts(rel_path: Path) -> Path:
     return result
 
 
+def _iter_with_timeout(iterator: Iterator[Any], timeout: float) -> Iterator[Any]:
+    """
+    为同步迭代器加无活动超时：后台线程消费迭代器并入队，
+    主线程带超时出队；超时未产出新项则停止遍历，避免 SDK 阻塞调用
+    拖垮整个同步任务
+
+    :param iterator: 同步迭代器
+    :param timeout: 单次出队超时（秒），超过即停止
+    :return: 产出原迭代器项的迭代器
+    """
+    out_queue: "queue.Queue[Optional[Any]]" = queue.Queue(maxsize=1)
+    sentinel = object()
+
+    def _producer() -> None:
+        try:
+            for item in iterator:
+                out_queue.put(item)
+        except Exception as e:  # noqa: BLE001
+            out_queue.put(e)
+        finally:
+            out_queue.put(sentinel)
+
+    producer = threading.Thread(
+        target=_producer, daemon=True, name="115-traverse-timeout"
+    )
+    producer.start()
+
+    while True:
+        try:
+            item = out_queue.get(timeout=timeout)
+        except queue.Empty:
+            logger.warning(
+                "115 目录遍历 %s 秒无新文件产出，停止遍历（可能被 SDK 阻塞）", timeout
+            )
+            return
+        if item is sentinel:
+            return
+        if isinstance(item, BaseException):
+            logger.warning("115 目录遍历异常: %s", item, exc_info=True)
+            return
+        yield item
+
+
 def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
     """
     递归遍历 115 目录下的所有文件（非目录）
 
-    使用 iter_files_with_path（Android API, proapi.115.com）替代 fs_files（webapi.115.com），
+    使用 iter_files（Android API, proapi.115.com）替代 fs_files（webapi.115.com），
     避免 webapi 域名被风控返回 405 的问题
     返回的 attr 已由 SDK 内部默认的 normalize_attr 完成字段规范化，直接产出即可，
     再包一层 normalize_attr 会因格式无法识别被当作 web 数据二次解析而 KeyError
@@ -54,14 +102,17 @@ def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
     :param client_wrapper: P115ClientWrapper 实例
     :param cid: 起始目录 ID
     """
-    from p115client.tool.iterdir import iter_files_with_path
+    from p115client.tool.iterdir import iter_files
 
     client = client_wrapper.client
     if client is None:
         return
-    yield from iter_files_with_path(
-        client, cid, type=99, cur=0, app="android",
-        cooldown=0.5, escape=None,
+    yield from _iter_with_timeout(
+        iter_files(
+            client, cid, type=99, cur=0, app="android",
+            cooldown=0.5, escape=None, with_path=True,
+        ),
+        timeout=SYNC_TRAVERSE_IDLE_TIMEOUT_SECONDS,
     )
 
 
