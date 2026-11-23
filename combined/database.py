@@ -1,15 +1,10 @@
 import sqlite3
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from _paths import DB_PATH
 from logger import logger
-
-if getattr(sys, "frozen", False):
-    _BASE_DIR = Path(sys.executable).parent
-else:
-    _BASE_DIR = Path(__file__).parent
 
 _SCHEMA_VERSION = 2
 
@@ -126,7 +121,7 @@ class Database:
     def __init__(self, db_path: str = None):
         self._local = threading.local()
         if db_path is None:
-            db_path = str(_BASE_DIR / "data" / "strm.db")
+            db_path = str(DB_PATH)
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

@@ -1,14 +1,9 @@
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
-if getattr(sys, "frozen", False):
-    _BASE_DIR = Path(sys.executable).parent
-else:
-    _BASE_DIR = Path(__file__).parent
+from _paths import LOG_DIR
 
-LOG_DIR = _BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "combined.log"
 

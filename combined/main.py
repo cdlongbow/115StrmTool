@@ -55,10 +55,18 @@ def signal_handler(sig, frame):
     _shutdown_event.set()
     _stop_emby()
     _stop_p115_redirect()
+    try:
+        from checkin_scheduler import checkin_scheduler
+        checkin_scheduler.stop()
+    except Exception as e:
+        logger.warning("停止签到调度器时出现异常: %s", e, exc_info=True)
     if ADMIN_SERVER:
-        ADMIN_SERVER.should_exit = True
-    # 给线程最多 3 秒退出，然后强制退出
-    for _ in range(30):
+        try:
+            ADMIN_SERVER.should_exit = True
+        except Exception as e:
+            logger.warning("停止管理界面服务时出现异常: %s", e, exc_info=True)
+    # 给线程最多 5 秒退出，然后强制退出
+    for _ in range(50):
         if not (EMBY_THREAD and EMBY_THREAD.is_alive()) and not (P115_REDIRECT_THREAD and P115_REDIRECT_THREAD.is_alive()):
             break
         time.sleep(0.1)

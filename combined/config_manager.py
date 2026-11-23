@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from enum import Enum
 from pathlib import Path
 from threading import RLock
@@ -15,13 +14,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from logger import logger
 
-if getattr(sys, "frozen", False):
-    _BASE_DIR = Path(sys.executable).parent
-else:
-    _BASE_DIR = Path(__file__).parent
+from _paths import _BASE_DIR, CONFIG_FILE, CONFIG_KEY_FILE, CONFIG_BACKUP_DIR  # noqa: F401
 
-CONFIG_FILE = _BASE_DIR / "config.json"
-CONFIG_BACKUP_DIR = _BASE_DIR / "config_backups"
 MAX_CONFIG_BACKUPS = 10
 CONFIG_BACKUP_MIN_INTERVAL = 3600.0
 
@@ -229,7 +223,7 @@ def _get_encryption_key() -> bytes:
     获取持久化的加密密钥，首次自动生成 32 字节随机密钥保存到 config.key
     密钥文件与 config.json 同目录，两者缺一则无法解密
     """
-    key_file = _BASE_DIR / "config.key"
+    key_file = CONFIG_KEY_FILE
     if not key_file.exists():
         key = os.urandom(32)
         key_file.write_bytes(key)

@@ -20,17 +20,15 @@ from xml.etree import ElementTree
 
 import httpx
 
+from _paths import _BASE_DIR, CHECKIN_STATE_FILE, CONFIG_FILE, CONFIG_BACKUP_DIR, CONFIG_KEY_FILE  # noqa: F401
 from app_metadata import APP_VERSION
-from config_manager import CONFIG_BACKUP_DIR, CONFIG_FILE, config_manager
+from config_manager import config_manager
 from exceptions import BadRequestError, NotFoundError, ServiceError
 from logger import logger
-
-_BASE_DIR = CONFIG_FILE.parent
 
 BACKUP_NAME_PREFIX = "115strmtool-backup-"
 BACKUP_NAME_SUFFIX = ".zip"
 BACKUP_NAME_RE = re.compile(r"^115strmtool-backup-\d{8}-\d{6}(-\d{1,2})?\.zip$")
-CHECKIN_STATE_FILE = _BASE_DIR / "checkin_state.json"
 BACKUP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _PROBE_NAME = "115strmtool-write-probe.tmp"
 _PROPFIND_BODY = (
@@ -634,7 +632,7 @@ class BackupService:
             ok, reason = self._verify_archive(tmp_archive)
             if not ok:
                 raise ServiceError("档案校验失败，已保持当前配置：" + reason)
-            key_file = _BASE_DIR / "config.key"
+            key_file = CONFIG_KEY_FILE
             with zipfile.ZipFile(tmp_archive) as zf:
                 names = zf.namelist()
                 new_config = zf.read("config.json")
