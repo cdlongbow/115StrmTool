@@ -6,10 +6,14 @@ websockets>=12.0
 # 装不上（如 CPython 版本无对应 wheel）时代码自动回退纯 Python 路径，无需在此声明
 qrcode>=7.4
 Pillow>=10.0
-p115cipher==0.0.5.4
-p115client==0.0.9.6.5.1
+call_sleep==0.0.1
+p115cipher>=0.0.6
+p115client==0.0.9.7.2
 p115pickcode==0.0.5.4
-# 上限钉死：0.1.9 将 threadpool_map 改名 thread_conmap，p115client 0.0.9.6.5.1 导入即崩；待升级 p115client 0.0.9.7.x 后移除
-python-concurrenttools<0.1.9
+# p115client 0.0.9.7.x 与 0.0.9.6.5.1 不兼容：iterdir 模块删约 29 符号（iter_files_with_path 等），
+# 迁移后 strm_generator.py 用 iter_files(..., with_path=True) 替代；已对照 DDSRem 7ddd3ec3 与 zkmydgth v2.7.19 适配 diff 核对
+# python-concurrenttools 0.1.9 将 threadpool_map 改名 thread_conmap，旧 p115client 导入即崩；
+# 升级 p115client 0.0.9.7.x 后解除 <0.1.9 上限，新版声明 >=0.1.9
+python-concurrenttools>=0.1.9
 # Windows 系统托盘（可选）: pip install pystray Pillow
 # 测试（可选）: pip install pytest pytest-asyncio

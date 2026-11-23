@@ -191,6 +191,10 @@ combined/wheels_backup_old/
 config.json
 combined/config.json
 combined/config_backups/
+combined/config.key
+
+# 本地 wheel 备份（升级换下来的旧版锁包，不入库）
+combined/wheels/_obsolete/
 
 # 构建期注入的版本号（由 CI 依据 tag 生成，不入库）
 combined/_build_version.py
