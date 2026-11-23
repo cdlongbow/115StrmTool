@@ -62,14 +62,15 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 所有回复与推理过程使用简体中文
 
 ### 115 SDK 依赖升级约束
-- Date: 2026-10-03
-- Context: Agent 在执行 zkmydgth 上游仓库借鉴分析时发现
+- Date: 2026-10-03（2026-11-23 迁移完成）
+- Context: Agent 在执行 zkmydgth 上游仓库借鉴分析时发现；本次已完成 p115client 0.0.9.7.2 迁移
 - Category: 环境配置
 - Instructions:
-  - p115client 禁止升级到 0.0.9.7.x：iterdir 大重构删除约 29 个符号（iter_file_list、iter_files_with_path_skim、traverse_tree_with_path 等），与本仓库 p115_client_wrapper 不兼容，上游同版本升级当天即回滚
-  - python-concurrenttools 必须 <0.1.9（0.1.9 将 threadpool_map 改名 thread_conmap，p115client 0.0.9.6.5.1 导入即崩）；requirements.txt 已钉上限
-  - 上游本地 wheels + --find-links 不防 pip 拉远端高版本，钉版必须写进 requirements 显式约束
-  - 2026-10-09 更新：两个上游已完成 p115client 0.0.9.7.2 适配（DDSRem `7ddd3ec3`、zkmydgth v2.7.19），本仓库 wrapper 迁移可对照其 diff 进行；在未完成迁移核对前，本仓库仍维持 0.0.9.6.5.1 钉版不动
+  - p115client 钉 `0.0.9.7.2`（已完成迁移，对照 DDSRem `7ddd3ec3` 与 zkmydgth v2.7.19 diff）；`iterdir` 模块已裁减，`iter_files_with_path` 改为 `iter_files(..., with_path=True)`，涉及 `combined/strm_generator.py` 两处（import + 调用）
+  - p115cipher 放宽至 `>=0.0.6`（0.7.2 要求 `>=0.0.6`，现装 `0.0.6`）；python-concurrenttools 解除 `<0.1.9` 上限，改钉 `>=0.1.9`
+  - 新增依赖 `call_sleep==0.0.1`；`combined/wheels/` 已同步替换 p115client/p115cipher/python_concurrenttools wheel 并新增 call_sleep 轮包（CI per-wheel 安装模式）
+  - 钉版必须写进 requirements 显式约束；上游本地 wheels + --find-links 不防 pip 拉远端高版本
+  - 沙箱 Python 3.11 不得 pip install 真实 SDK（setuptools>=77 需 3.12）；测试涉及 p115client 时用 patch.dict / conftest stub_modules 注入假模块；真实 SDK 冒烟改用 uv 3.14 venv，已于 2026-11-23 验证通过（289 个用例全绿）
 
 ### 发版流程与测试环境约束
 - Date: 2026-10-05
@@ -146,6 +147,9 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Instructions:
   - 沙箱重开不会自动装新版 Python：系统 `python3` 只读基础镜像且随重建漂移（已观察到 3.11 与 3.12 两种），会话内自装的 conda/uv 运行时、venv、`pip --break-system-packages` 包在重开后全部丢失，按下方步骤重装即可
   - 快速就绪（对齐 CI 3.14，含真实 SDK 与门禁工具）：`pip install --break-system-packages -q uv` → `uv python install 3.14` → `uv venv <dir>` → `uv pip install --python <dir>/bin/python -r combined/requirements.txt pytest pytest-asyncio`；uv venv 不含 pip，uv 托管解释器拒绝被直接修改，一律走 `uv pip install --python`；`full_strm_sync` 无 3.14 wheel 属预期 SKIP，桩测试不依赖它
+  - **uv venv 目录内没有 `uv` 与 `pip` 二进制**：后续安装必须调用系统 PATH 里的 `uv` 命令并带 `--python <venv>/bin/python`，调用 `<venv>/bin/uv` 会报 not found（2026-11-23 实测踩坑）
+  - **配方已固化为一键脚本 `scripts/setup_py314.sh`**：`bash scripts/setup_py314.sh [venv目录] [--test]`，默认 venv `/tmp/opencode/py314-venv`，`--test` 追加全量 pytest；内部对 `uv venv` 加 `--clear` 保证可重复执行（否则已存在 venv 时报错退出）；2026-11-23 实测通过
+  - 2026-11-23 实测：沙箱内按此配方完整复现成功——`uv python install 3.14` 下载 cpython 3.14.10 约 14 秒装好，81 个包（含真实 p115client==0.0.9.7.2 / p115cipher==0.0.6 / python-concurrenttools==0.1.9 / call_sleep==0.0.1）安装顺畅，真实 SDK 全量 289 用例全绿；沙箱重置后可直接照此重建 3.14 环境
   - 轻量就绪（仅跑门禁，容忍装不上真实 SDK 时）：照 2026-10-09 条目直接 pip 装 ruff/pytest 等纯 Python 工具即可
   - 会话善后：用户准备重启 Agent 或清空上下文前，`unset GH_TOKEN` 等会话内临时凭据变量；凭据值只在命令管道中传递，回复、日志、提交与文档必须保持空值或占位符
 
