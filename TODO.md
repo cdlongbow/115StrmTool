@@ -5,6 +5,8 @@
 ## 同步与风控类（来自 115-station / LitePan）
 
 - [x] 【已完成 2026-10-05】快速全量同步模式（规格 `.monkeycode/specs/fast-recursive-scan/`）：改用 115 递归整树端点把请求数从 O(目录数) 压到个位数——`webapi.115.com/files?cid=&show_dir=0` 一次拿子树全部文件（1150/页），配 `proapi.115.com/app/chrome/downfolders` 递归拿全部目录（5000/页，参数 pickcode 可由 cid 本地换算），两边内存拼完整路径；万级库约 10 次请求 vs 现在逐目录 DFS。downfolders 属未公开端点，必须带开关且失败自动降级回现有 DFS 模式（照搬 115-station fast115 的降级纪律）
+- [x] 【已完成 2026-11-25】目录级改名迁移与增量删除开关（八巡 115-station `d4251d00`）：增量按 pickcode 识别改名，目录级改名时整目录搬移（含字幕、NFO、剧照等侧车）并清理空父目录；目标目录已存在、目录内仍有未改名文件、一对多或多对一映射时退回逐文件迁移；增量删除改为受 `cleanup_deleted_strm` 开关控制，关闭时只提示不删除
+  - 验证：新增 5 个用例（目录搬移侧车、目标冲突回退、部分改名保护、目录+文件双改名、未开开关不删）；3.11 stub 与 3.14 真实 SDK 全量 297 用例全绿
 - [ ] 行为事件流增量同步（观察项，暂缓）：拉 `proapi.115.com/android/behavior/detail`（失败降级 `webapi.115.com/behavior/detail`，端点状态持久化），以单调递增事件 id 做游标 + 去重，事件自带 pick_code 时零遍历直推 STRM；已知盲区"回收站还原不产生新增事件"须靠低频全量校对兜底（参考 115-station life115/incr115 分层）。决策记录（2026-10-05）：复杂度最高（账户级事件流、目录改名级联、游标状态机），而快速整树扫描落地后"每 15 分钟约 10 个请求全库 diff"已足够便宜可靠，事件流收益缩水——待快速同步上线后按实际同步频率与风控数据再定是否启动。实施红线（115-station `4096552b`+`c96883ef` 两起现场事故背书）：删除类事件只有能定位到具体路径才允许删，推不出位置一律不删、漏删交给下轮全量校对；"台账/记录中同名唯一"不构成删除依据；路径前缀查询禁用未转义 LIKE（`_`/`%` 通配泄漏），改精确等值 + 字节区间
 - [ ] 115 开放平台 OpenAPI 通道评估：OAuth PKCE 设备码登录（authDeviceCode → 轮询扫码 → deviceCodeToToken → refreshToken 自动续期，access_token 约 2h），proapi `/open/*` 属官方授权接口、无 UA 指纹风控、错误码明确（770004 频繁 / 406 额度上限 / 401401xx 需刷新 token）；前提是在 open.115.com 申请个人 AppID 且有调用额度，建议先只覆盖列表/目录类只读接口试点，Cookie 通道保留兜底（实现参考 115-station open115.go 与 LitePan drivers/115_Open）
 - [ ] 缓存热度保持（可选低优先）：定时对近期播放的 STRM 目标文件做轻量 range 读（首块），保持 115CDN 边缘缓存热度、降低冷文件首播缓冲（参考 LitePan cacheretention：任务时间窗、配置指纹变更重排、与同步/整理类任务互斥调度）
@@ -27,9 +29,12 @@
   - 迁移触点（唯一破坏性改动）：`strm_generator.py` 的 `iter_files_with_path` 改为 `iter_files(..., with_path=True)`（import + 调用各 1 处）；wrapper 用到的 14 个实例方法与 `check_response`/`ID_TO_DIRNODE_CACHE`/`get_webapi_origin` 等符号全部零改动存活；`normalize_attr` 删除 `dict_cls` 参数对本仓库无影响
   - 验证：沙箱 3.11（stub 注入）与 uv 3.14 venv（真实 SDK）各跑全量 pytest，289 用例全绿；环境重建已固化为 `scripts/setup_py314.sh`
   - 后续观察：`full_strm_sync` 仍只有 cp312 wheel（exe 走纯 Python 路径），待上游发布 cp314 wheel 后替换入 wheels 目录即可恢复 Rust 加速（见下方条目）
+- [x] 【已完成 2026-11-25】p115client 升级 0.0.9.7.2→0.0.9.7.8.3（八巡 DDSRem `d20046b5` + `5eb564d2` 修补 wheel）：同步替换 `python-httpfile` 0.0.6.3、`python-http_request` 0.1.7.2、`python-dictattr` 0.0.5 四个 wheel（旧版移入 `combined/wheels/_obsolete/`）；兼容审计破坏点（`ensure_path` 位置参数、`fs_label_set` 改 `label_id`、`life_recent_operation_items` 默认值、顶层 fs 导出）本仓库均未命中
+  - 顺带修复附属文件下载丢弃 `P115URL.headers`：`strm_generator._download_aux_file` 现在把直链绑定头（UA/Cookie）随下载请求转发，避免 115 CDN 按直链 `f` 参数拒绝；新增 3 个用例覆盖 P115URL/dict/无头三种形态
+  - 验证：沙箱 3.11（stub 注入）与 uv 3.14 venv（真实 SDK，装的是 `combined/wheels/` 内实际 wheel）均 292 用例全绿，3.14 下逐文件 standalone 全绿
 - [x] 【已完成 2026-10-09】发版同日序号版本：现版本一致性校验要求 tag 与 CHANGELOG 顶部日期相等，日内二次发布无路可走；115-station `6f9264b9` 采用"日期版本 + 同日 `-N` 序号当正式版"写法。候选方案：release.yml 校验放行 `YYYYMMDD-N` tag（归一后比对日期部分），配套 CHANGELOG 同日多节或节内追加约定
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
-- [ ] full_strm_sync 恢复 Rust 加速（2026-11-03 升级 Python 3.14 的后置项）：CI/release 已切 3.14，`combined/wheels/` 仅有 cp312 ABI 的 full_strm_sync wheel，安装步骤已容错为 SKIP，exe 走纯 Python 生成路径（默认配置 `use_rust=False` 行为一致）；待上游 DDSRem 发布 cp314 wheel 后替换入 wheels 目录并验证 Rust 路径
+- [ ] full_strm_sync 恢复 Rust 加速（2026-11-03 升级 Python 3.14 的后置项）：CI/release 已切 3.14，`combined/wheels/` 仅有 cp312 ABI 的 full_strm_sync wheel，安装步骤已容错为 SKIP，exe 走纯 Python 生成路径（默认配置 `use_rust=False` 行为一致）；2026-11-25 八巡确认上游 DDSRem V2 wheels 已提供 `full_strm_sync 0.1.6` 的 cp314 ABI wheel（另含 share_strm_scan/txt_tree_storage），可复制对应平台 wheel 进 `combined/wheels/` 后验证 Rust 路径
 
 ## 部署与分发类
 
@@ -44,4 +49,4 @@
 
 ## 测试类
 
-- [ ] 变异测试套件（可选低优先）：参考上游 mutation 脚本"跳过即失败"收口模式；289 用例规模下性价比一般，用例规模明显增长后再评估
+- [ ] 变异测试套件（可选低优先）：参考上游 mutation 脚本"跳过即失败"收口模式；297 用例规模下性价比一般，用例规模明显增长后再评估

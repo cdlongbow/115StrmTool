@@ -8,10 +8,12 @@ qrcode>=7.4
 Pillow>=10.0
 call_sleep==0.0.1
 p115cipher>=0.0.6
-p115client==0.0.9.7.2
+p115client==0.0.9.7.8.3
 p115pickcode==0.0.5.4
 # p115client 0.0.9.7.x 与 0.0.9.6.5.1 不兼容：iterdir 模块删约 29 符号（iter_files_with_path 等），
 # 迁移后 strm_generator.py 用 iter_files(..., with_path=True) 替代；已对照 DDSRem 7ddd3ec3 与 zkmydgth v2.7.19 适配 diff 核对
+# 0.0.9.7.8.3 同步要求 python-httpfile>=0.0.6.3、python-http_request>=0.1.7.2，
+# 对应 wheel 已随 combined/wheels/ 一并升级（上游 DDSRem d20046b5 + 5eb564d2 修补版）
 # python-concurrenttools 0.1.9 将 threadpool_map 改名 thread_conmap，旧 p115client 导入即崩；
 # 升级 p115client 0.0.9.7.x 后解除 <0.1.9 上限，新版声明 >=0.1.9
 python-concurrenttools>=0.1.9

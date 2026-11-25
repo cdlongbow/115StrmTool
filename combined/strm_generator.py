@@ -90,6 +90,78 @@ def _iter_with_timeout(iterator: Iterator[Any], timeout: float) -> Iterator[Any]
         yield item
 
 
+def _download_headers_of(download_url: Any) -> Dict[str, str]:
+    """
+    提取 SDK 下载地址中与直链绑定的请求头
+
+    P115URL 除 URL 外还携带 headers（如 user-agent），115 CDN 会按直链的
+    f 参数校验请求头，下载时必须一并转发
+
+    :param download_url (Any): SDK download_url 返回值
+
+    :return Dict: 小写头名到值的映射，无可用头时返回空字典
+    """
+    getter = getattr(download_url, "get", None)
+    if not callable(getter):
+        return {}
+    try:
+        raw = getter("headers")
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key).lower(): str(value)
+        for key, value in raw.items()
+        if key and value
+    }
+
+
+def _is_strictly_under(path: Path, parent: Path) -> bool:
+    """
+    判断路径是否为父路径的严格子路径
+
+    :param path (Path): 待判断路径
+    :param parent (Path): 父路径
+
+    :return bool: path 位于 parent 之下且不相等时为 True
+    """
+    if path == parent:
+        return False
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _rename_root(old_dir: Path, new_dir: Path) -> Tuple[Path, Path]:
+    """
+    去掉新旧目录共同的结尾层级，返回实际发生改名的目录对
+
+    :param old_dir (Path): 旧本地目录
+    :param new_dir (Path): 新本地目录
+
+    :return Tuple: (旧目录根, 新目录根)
+    """
+    old_parts = old_dir.parts
+    new_parts = new_dir.parts
+    common = 0
+    while (
+        common < len(old_parts)
+        and common < len(new_parts)
+        and old_parts[-1 - common] == new_parts[-1 - common]
+    ):
+        common += 1
+    if not common:
+        return old_dir, new_dir
+    old_keep = len(old_parts) - common
+    new_keep = len(new_parts) - common
+    if old_keep <= 0 or new_keep <= 0:
+        return old_dir, new_dir
+    return Path(*old_parts[:old_keep]), Path(*new_parts[:new_keep])
+
+
 def _iter_files_115(client_wrapper: P115ClientWrapper, cid: int):
     """
     递归遍历 115 目录下的所有文件（非目录）
@@ -514,6 +586,10 @@ class StrmGenerator:
                 seen_pickcodes = set()
                 rust_items = []
                 files_by_pan_path: Dict[str, Tuple[Path, str, bool]] = {}
+                # 改名候选与附属文件下载都延后到扫描结束：
+                # 先按目录整体搬迁可保留侧车文件，避免提前在新目录下载造成目标目录已存在
+                renames: List[Tuple[Dict[str, Any], Path, Path]] = []
+                pending_aux: List[Tuple[str, str, str, str, str, str]] = []
                 # 所有映射的存量记录汇总后再统一判定删除，
                 # 避免前序映射扫描时把尚未轮到的兄弟目录文件误判为已删除
                 all_existing: Dict[str, Dict] = {}
@@ -554,9 +630,10 @@ class StrmGenerator:
                             pickcode = attr.get("pickcode", "")
                             pan_full_path = attr.get("path", "")
 
-                            self._try_download_aux(
-                                ext, pickcode, name, pan_full_path, pan_path, local_path
-                            )
+                            if self._auto_download_mediainfo and ext in self._download_mediaext:
+                                pending_aux.append(
+                                    (ext, pickcode, name, pan_full_path, pan_path, local_path)
+                                )
 
                             if ext not in self._rmt_mediaext:
                                 continue
@@ -651,8 +728,12 @@ class StrmGenerator:
                                 if local_strm_path_orig is None:
                                     continue
                                 local_strm_path = local_strm_path_orig.with_suffix(".strm")
-                                self._migrate_strm_file(
-                                    all_existing[pickcode], local_strm_path
+                                renames.append(
+                                    (
+                                        all_existing[pickcode],
+                                        local_strm_path,
+                                        Path(local_path),
+                                    )
                                 )
                                 all_new_files.append({
                                     "pickcode": pickcode,
@@ -686,17 +767,34 @@ class StrmGenerator:
                         if pc not in seen_pickcodes
                         and all_existing[pc]["root"] in scanned_roots
                     ]
-                    for pc in deleted_pickcodes:
-                        entry = all_existing[pc]
-                        strm_path = Path(entry["local_strm_path"])
-                        if strm_path.exists():
-                            try:
-                                strm_path.unlink()
-                                logger.info("已删除残留 STRM: %s", strm_path)
-                            except OSError as e:
-                                logger.warning("删除 STRM 文件失败 %s: %s", strm_path, e)
-                        db.mark_file_deleted(pc)
-                    total_deleted += len(deleted_pickcodes)
+                    if deleted_pickcodes and not self._cleanup_deleted:
+                        note = (
+                            f"检测到 {len(deleted_pickcodes)} 个残留 STRM，"
+                            "未开启「同步后清理残留」，已保留"
+                        )
+                        logger.info(note)
+                        if note not in self._sync_notes:
+                            self._sync_notes.append(note)
+                    else:
+                        for pc in deleted_pickcodes:
+                            entry = all_existing[pc]
+                            strm_path = Path(entry["local_strm_path"])
+                            if strm_path.exists():
+                                try:
+                                    strm_path.unlink()
+                                    logger.info("已删除残留 STRM: %s", strm_path)
+                                except OSError as e:
+                                    logger.warning(
+                                        "删除 STRM 文件失败 %s: %s", strm_path, e
+                                    )
+                            db.mark_file_deleted(pc)
+                        total_deleted += len(deleted_pickcodes)
+
+                    self._apply_renames(renames, all_existing)
+                    for aux_args in pending_aux:
+                        if self._cancel_flag.is_set():
+                            break
+                        self._try_download_aux(*aux_args)
 
                 if self._use_rust and rust_items and not self._cancel_flag.is_set():
                     self._process_rust_batch(rust_items, files_by_pan_path)
@@ -772,14 +870,16 @@ class StrmGenerator:
         """
         下载媒体附属文件（字幕、歌词等）到本地 STRM 目录
 
-        SDK 的 download_url 返回含 URL 字段的原始响应，先提取直链再流式下载，
-        先写 .part 临时文件成功后原子替换，避免中断留下半截文件
+        SDK 的 download_url 返回含 URL 字段的原始响应（P115URL 可能带与直链绑定的
+        headers），先提取直链与请求头再流式下载，先写 .part 临时文件成功后原子替换，
+        避免中断留下半截文件
 
         :param pickcode (str): 文件 pickcode
         :param name (str): 原始文件名，用于日志
         :param local_file_path (Path): 本地保存路径
         """
         result = self._client.download_url(pickcode)
+        request_headers = _download_headers_of(result)
         if isinstance(result, dict):
             file_url = result.get("url") or result.get("file_url")
         elif isinstance(result, str):
@@ -794,7 +894,13 @@ class StrmGenerator:
         try:
             import httpx
 
-            with httpx.stream("GET", file_url, follow_redirects=True, timeout=30) as resp:
+            with httpx.stream(
+                "GET",
+                file_url,
+                headers=request_headers or None,
+                follow_redirects=True,
+                timeout=30,
+            ) as resp:
                 resp.raise_for_status()
                 with open(tmp_path, "wb") as f:
                     for chunk in resp.iter_bytes():
@@ -807,6 +913,165 @@ class StrmGenerator:
             except OSError:
                 pass
             logger.warning("下载附属文件失败 %s: %s", name, e)
+
+    def _plan_dir_moves(
+        self,
+        renames: List[Tuple[Dict[str, Any], Path, Path]],
+        all_existing: Dict[str, Dict],
+    ) -> List[Tuple[Path, Path]]:
+        """
+        从文件级改名候选推导可整体搬移的目录对
+
+        只接受新旧目录都在同一本地根内、目标不是同步根、且旧目录下所有数据库
+        记录都参与改名的场景；一个旧目录对应多个新目录、多个旧目录并入同一新目录、
+        或存在未改名文件时退回逐文件迁移，避免把未改名的文件一起搬走
+
+        :param renames (List): (旧记录, 新 STRM 路径, 本地根) 三元组列表
+        :param all_existing (Dict): pickcode 到旧记录的映射
+
+        :return List: 可安全整体搬移的 (旧目录, 新目录) 列表
+        """
+        to_map: Dict[Path, Path] = {}
+        bad: set = set()
+        candidate_old = {str(entry["local_strm_path"]) for entry, _, _ in renames}
+
+        for entry, new_strm_path, local_root in renames:
+            old_strm_path = Path(entry["local_strm_path"])
+            old_dir = old_strm_path.parent
+            new_dir = new_strm_path.parent
+            if old_dir == new_dir:
+                continue
+            old_root, new_root = _rename_root(old_dir, new_dir)
+            if old_root == new_root or old_root == local_root:
+                continue
+            if not _is_strictly_under(old_root, local_root):
+                continue
+            if not _is_strictly_under(new_root, local_root):
+                continue
+            if _is_strictly_under(new_root, old_root) or _is_strictly_under(
+                old_root, new_root
+            ):
+                continue
+            previous = to_map.get(old_root)
+            if previous is not None and previous != new_root:
+                bad.add(old_root)
+            to_map[old_root] = new_root
+
+        dest_count: Dict[Path, int] = {}
+        for old_root, new_root in to_map.items():
+            if old_root not in bad:
+                dest_count[new_root] = dest_count.get(new_root, 0) + 1
+
+        moves = [
+            (old_root, new_root)
+            for old_root, new_root in to_map.items()
+            if old_root not in bad and dest_count[new_root] == 1
+        ]
+        moves.sort(key=lambda item: (len(item[0].parts), str(item[0])))
+
+        db_paths = [Path(entry["local_strm_path"]) for entry in all_existing.values()]
+        kept: List[Tuple[Path, Path]] = []
+        for old_root, new_root in moves:
+            if any(
+                _is_strictly_under(old_root, kept_old)
+                or _is_strictly_under(new_root, kept_new)
+                for kept_old, kept_new in kept
+            ):
+                continue
+            if any(
+                _is_strictly_under(db_path, old_root)
+                and str(db_path) not in candidate_old
+                for db_path in db_paths
+            ):
+                logger.info(
+                    "目录 %s 仍含未改名文件，退回逐文件迁移", old_root
+                )
+                continue
+            kept.append((old_root, new_root))
+        return kept
+
+    def _apply_renames(
+        self,
+        renames: List[Tuple[Dict[str, Any], Path, Path]],
+        all_existing: Dict[str, Dict],
+    ) -> None:
+        """
+        应用改名迁移：优先整目录搬移，失败或条件不足时逐文件迁移
+
+        :param renames (List): (旧记录, 新 STRM 路径, 本地根) 三元组列表
+        :param all_existing (Dict): pickcode 到旧记录的映射
+        """
+        if not renames:
+            return
+        moved_roots: List[Tuple[Path, Path]] = []
+        for old_root, new_root in self._plan_dir_moves(renames, all_existing):
+            if not old_root.is_dir() or old_root.is_symlink() or new_root.exists():
+                continue
+            try:
+                new_root.parent.mkdir(parents=True, exist_ok=True)
+                old_root.rename(new_root)
+            except OSError as e:
+                logger.warning(
+                    "目录级迁移失败 %s -> %s: %s", old_root, new_root, e
+                )
+                continue
+            moved_roots.append((old_root, new_root))
+            logger.info("已迁移目录: %s -> %s", old_root, new_root)
+
+        prune_starts: List[Tuple[Path, Path]] = []
+        for entry, new_strm_path, local_root in renames:
+            old_strm_path = Path(entry["local_strm_path"])
+            moved = next(
+                (
+                    (moved_old, moved_new)
+                    for moved_old, moved_new in moved_roots
+                    if _is_strictly_under(old_strm_path, moved_old)
+                ),
+                None,
+            )
+            if moved is not None:
+                moved_old, moved_new = moved
+                relocated = moved_new / old_strm_path.relative_to(moved_old)
+                if relocated != new_strm_path and relocated.exists():
+                    try:
+                        relocated.unlink()
+                        logger.info("已删除改名后残留 STRM: %s", relocated)
+                    except OSError as e:
+                        logger.warning(
+                            "删除改名后残留 STRM 失败 %s: %s", relocated, e
+                        )
+                if not new_strm_path.exists():
+                    self._ensure_strm_file(new_strm_path, entry.get("pickcode", ""))
+                continue
+            self._migrate_strm_file(entry, new_strm_path)
+            prune_starts.append((old_strm_path.parent, local_root))
+        for start, root in sorted(
+            prune_starts, key=lambda item: len(item[0].parts), reverse=True
+        ):
+            self._prune_empty_dirs(start, root)
+
+    def _prune_empty_dirs(self, start: Path, root: Path) -> None:
+        """
+        自下而上清理迁移后留下的空目录，止于本地同步根
+
+        :param start (Path): 起始目录
+        :param root (Path): 本地同步根，不会被删除
+        """
+        current = start
+        while _is_strictly_under(current, root):
+            try:
+                next(current.iterdir())
+                return
+            except StopIteration:
+                pass
+            except OSError:
+                return
+            try:
+                current.rmdir()
+            except OSError:
+                return
+            logger.info("已清理空目录: %s", current)
+            current = current.parent
 
     def _migrate_strm_file(self, old_entry: Dict[str, str], new_strm_path: Path):
         """

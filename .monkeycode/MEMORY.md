@@ -62,15 +62,18 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 所有回复与推理过程使用简体中文
 
 ### 115 SDK 依赖升级约束
-- Date: 2026-10-03（2026-11-23 迁移完成）
-- Context: Agent 在执行 zkmydgth 上游仓库借鉴分析时发现；本次已完成 p115client 0.0.9.7.2 迁移
+- Date: 2026-10-03（2026-11-23 迁移 0.0.9.7.2；2026-11-25 升级 0.0.9.7.8.3）
+- Context: Agent 在执行上游借鉴分析时发现；2026-11-25 按八巡 DDSRem `d20046b5`+`5eb564d2` 完成 0.0.9.7.8.3 升级
 - Category: 环境配置
 - Instructions:
-  - p115client 钉 `0.0.9.7.2`（已完成迁移，对照 DDSRem `7ddd3ec3` 与 zkmydgth v2.7.19 diff）；`iterdir` 模块已裁减，`iter_files_with_path` 改为 `iter_files(..., with_path=True)`，涉及 `combined/strm_generator.py` 两处（import + 调用）
+  - p115client 现钉 `0.0.9.7.8.3`（对照 DDSRem `d20046b5` 升级 + `5eb564d2` 修补 wheel，上游兼容审计确认 3.12/3.14 循环导入已修）；`iterdir` 模块已裁减，`iter_files_with_path` 改为 `iter_files(..., with_path=True)`，涉及 `combined/strm_generator.py` 两处（import + 调用）
+  - 0.0.9.7.8.3 同步要求并已随 wheels 升级：`python-httpfile 0.0.6.3`、`python-http_request 0.1.7.2`、`python-dictattr 0.0.5`；旧版四个 wheel 移入 `combined/wheels/_obsolete/`（.gitignore 已忽略）
+  - `download_url` 返回的 `P115URL` 携带与直链绑定的 `headers`（UA/Cookie，取决于直链 `f` 参数）；下载必须转发，`strm_generator._download_aux_file` 已修（`_download_headers_of` 提取）
   - p115cipher 放宽至 `>=0.0.6`（0.7.2 要求 `>=0.0.6`，现装 `0.0.6`）；python-concurrenttools 解除 `<0.1.9` 上限，改钉 `>=0.1.9`
-  - 新增依赖 `call_sleep==0.0.1`；`combined/wheels/` 已同步替换 p115client/p115cipher/python_concurrenttools wheel 并新增 call_sleep 轮包（CI per-wheel 安装模式）
+  - 新增依赖 `call_sleep==0.0.1`；`combined/wheels/` 已同步替换 p115client/httpfile/http_request/dictattr/p115cipher/python_concurrenttools 轮包（CI per-wheel 安装模式）
   - 钉版必须写进 requirements 显式约束；上游本地 wheels + --find-links 不防 pip 拉远端高版本
-  - 沙箱 Python 3.11 不得 pip install 真实 SDK（setuptools>=77 需 3.12）；测试涉及 p115client 时用 patch.dict / conftest stub_modules 注入假模块；真实 SDK 冒烟改用 uv 3.14 venv，已于 2026-11-23 验证通过（289 个用例全绿）
+  - 沙箱 Python 3.11 不得 pip install 真实 SDK（setuptools>=77 需 3.12）；测试涉及 p115client 时用 patch.dict / conftest stub_modules 注入假模块；真实 SDK 冒烟改用 uv 3.14 venv，2026-11-25 以 `combined/wheels/` 实际 wheel 装机验证 292 用例全绿、逐文件 standalone 全绿
+  - 升级踩坑记录：p115client 0.0.9.7.8.3 的 METADATA 把 `python-http_request` 下限提到 0.1.7.2，不能只换 p115client/httpfile 两个轮包
 
 ### 发版流程与测试环境约束
 - Date: 2026-10-05
@@ -110,6 +113,16 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 五巡决策结果：状态接口改为按需获取。`/api/status` 与 `/admin/api/p115/status` 默认 `include_remote=false`，只读本地统计并保留 `user_info`/`storage` 空字段；未来确需展示 115 用户或容量时才传 `include_remote=1` 触达远程接口
   - 2026-11-19 六巡：DDSRem main（V2 参考主线）与 feat/p115strmhelper-v3 分支自 11-07 基线后均无新提交（main 最新仍为 10-18 `3d8c5160`），11-12 的 pushed_at 来自 renovate 依赖自动化分支（sentry-sdk ~=2.75.0、uv v0.13.8），无借鉴价值；zkmydgth 仅 2 条 VarietyGuard v1.2.0/v1.3.0（综艺守护：候选阶段过滤+批次汇总通知、双接缝回落+失效一次性告警），非本仓库功能面；115-station 8 条（11-09~11-16）全在机器人/订阅/找资源生态（订阅改范围、洗版规则排序、mukaku JS 验证 Cookie 页、TG ed2k 高亮截断、TMDB 片名年份去除、挑资源汇总日志），已核对 8 条 commit 文件路径（botsub/subpick/mukaku/tgsearch/transferhub 等），无 115 端点与同步/清理类改动，不借鉴；LitePan 无新提交（最新仍为 2026-10-02）；无待用户决策项
   - 2026-11-19 七巡：DDSRem main 与 V3 分支、zkmydgth、LitePan 相对六巡均无新增提交；115-station 新增 4 条（11-17~11-18）：`cc02b003` 机器人支持批量提交 115 分享/磁力/ED2K 链接（botlinks/offline/sharestrmapi，本仓库无机器人与分享功能面）、`a8070c68` 全量同步支持选择本次同步的媒体库（fullscope/libsyncstat，依赖其多媒体库模型，本仓库为单网盘目录↔本地目录对配置，无对应场景，仅作知识记录）、`646d645a` 机器人单条订阅候选也需确认（botflow，机器人交互面）、`8c5f8b2b` RE0 站浏览器时区/语言/WebRTC 指纹与出口 IP 对齐（cloakgeo/re0web，站外分享风控对抗，与 115 端点无关）；按收窄口径均不借鉴，无待用户决策项
+  - 2026-11-25 八巡：DDSRem main 自 11-19 基线后约 40 条（11-24~11-25 集中提交），V2 p115strmhelper 2.8.79→2.8.80、V2 p115disk 0.2.33→0.2.34；`feat/p115strmhelper-v3` 分支无新提交，V3 改动直接进了 main 的 `plugins.v3/`。V2 实质项仅 3 条：
+    - `d20046b5` 升级 p115client 0.0.9.7.2→0.0.9.7.8.3 且 python_httpfile 0.0.6.1→0.0.6.3（同日先升后回滚再重升，`5eb564d2` 重打 wheel 修 3.12/3.14 类型-常量循环导入）；兼容审计破坏点：`tool/iterdir.ensure_path` 位置参数改为 `(client, attrs, cid=None)`、`fs_label_set(label=)` 改 `label_id=`、`life_recent_operation_items` 默认 browse_document→browse_image、顶层 `p115client` 不再导出 fs 子包名称、`normalize_attr` 新增 is_q/is_family_share、`iter_files/fs_files_iter` 新增 `app_api_suffix=1`。本仓库命中面：`iter_files(..., with_path=True)`、`fs_dir_getid`、`download_url`、`fs_storage_info`、`user_info`，均不在破坏清单，但升级要同步换 wheels、requirements 与 3.14 实测
+    - `ef63a90f` 下载鉴权头保留：`download_url` 返回的 `P115URL` 自带 `headers`（UA/Cookie 与直链 `f=1/3` 绑定），P115Disk 下载、媒体信息/字幕下载、备份恢复必须合并转发这些头；本仓库 `strm_generator._download_aux_file` 只取 URL 丢弃 headers 且 httpx 不发绑定 UA，附属字幕/媒体信息下载存在被 CDN 按 f 参数拒绝的风险；`_try_sdk_download_url` 同样丢 headers，但 302 场景无法向播放端转发，属既有 SDK 降级设计
+    - `56f4f848` 适配新客户端（移除 `check_for_relogin`、`fs_index_info(0)` 位置传参、fs.open 不传 headers）本仓库无对应调用不受影响；`1e5ad831` 是 HDHive 站点签到负积分判已完成，不是 115 每日签到，不适用；`7e017720` 分片上传复判秒传、`fa4e127f` DTS 音轨档位命名、`2044053a` python-dictattr、rust 依赖升级均无对应功能面
+    - V3-only 的 `cec64c10` 同步删除精确化（视频+外挂字幕、季/剧集、逐级清空目录）、`9cd0ec5a` 目录上传漏传巡检+文件名主干兜底、`d66c1bbd` 离线下载重试、`3beb138b` HIG 前端：本仓库无 Emby 删除回传、目录上传、离线下载功能面，不跟进
+  - 2026-11-25 八巡 115-station：新增 3 条（11-23~11-24）。`d4251d00` 媒体库目录单独同步 STRM 命中同步口径：按 fid 识别目录级改名→本地目录连同刮削产物整体搬移（不旁写一份）；搬不了的逐文件写新位置并删旧位置 STRM+集 NFO/剧照、逐级收空目录（守卫：仍有 STRM/台账行不动）；未遍历到的按失效 STRM 标记、用户确认后再删。对照本仓库：`_migrate_strm_file` 只搬 `.strm`，旧目录内 Emby 生成的 nfo/jpg 与空目录会残留；增量对未见到文件是直接 unlink（`cleanup_deleted_strm` 只作用于全量）。`ea68f2a4` 找资源查看链接、`663f2349` 媒体库多选重新整理属订阅/整理面，不借鉴
+  - 2026-11-25 八巡其余：zkmydgth 无新提交；LitePan 无新提交（最新仍 2026-10-02）
+  - 2026-11-25 八巡待用户决策项：A) 是否跟随升级 p115client 0.0.9.7.8.3（含 python_httpfile 0.0.6.3、换 wheels、3.14 回归）；B) 是否修复附属文件下载未转发 `P115URL.headers`；C) 是否引入目录级改名迁移（侧车文件+空目录清理）与孤儿 STRM 标记确认机制
+  - 2026-11-25 八巡决策结果：A、B 已落地——p115client 升级 0.0.9.7.8.3 并同步换 4 个轮包（httpfile 0.0.6.3、http_request 0.1.7.2、dictattr 0.0.5，旧版入 `_obsolete/`）；`_download_aux_file` 改为转发 `P115URL.headers`，新增 `test_aux_download_headers.py` 3 用例；3.11 stub 与 3.14 真实 SDK（实际 wheels）均 292 用例全绿、3.14 逐文件 standalone 全绿
+  - 2026-11-25 八巡决策结果（C）：C1/C2a 已落地——增量按 pickcode 识别目录级改名，整目录搬移（含字幕/NFO/剧照等侧车）并清理空父目录；目标已存在、目录内仍有未改名文件、一对多或多对一映射时退回逐文件迁移。增量删除改受 `cleanup_deleted_strm` 控制，关闭时只提示不删除。新增 5 用例，3.11 stub 与 3.14 真实 SDK 全量 297 用例全绿；C2b（失效标记+面板确认）仍暂缓
 
 [CI 构建运行时升级到 Python 3.14]
 - Date: 2026-11-03

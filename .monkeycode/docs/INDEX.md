@@ -79,7 +79,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（289 个用例）
+# 运行单元测试（297 个用例）
 cd combined && python -m pytest -q
 
 # 排查播放问题：先在管理面板「Emby 配置」开启「播放诊断日志」（立即生效），再在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
