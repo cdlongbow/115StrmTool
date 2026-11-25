@@ -336,8 +336,8 @@ function stopPolling(h) {
   </div>
   <div class="card" style="padding:12px 16px;font-size:13px;color:#888;line-height:1.8">
     <b>增量同步说明：</b><br>
-    基于上次同步记录对比 SHA1，仅处理新增/变更/删除的文件，跳过未变动文件。<br>
-    首次运行时会自动执行全量同步建立基准，之后每次只处理差异。
+    基于上次同步记录对比 SHA1，处理新增/变更文件，跳过未变动文件；开启「同步后清理残留」时才会删除网盘已不存在文件对应的 STRM。<br>
+    网盘内文件夹改名或移动时，本地目录会按条件整体搬移（含字幕、NFO、剧照）。首次运行会自动执行全量同步建立基准。
   </div>
   <div class="card"><h2>同步记录 <button class="btn-sm btn-outline" onclick="clearSyncHistory()" style="float:right;color:#ea4335">清空记录</button></h2><div id="syncHistory"><p>加载中...</p></div></div>
 </div>

@@ -790,7 +790,9 @@ class StrmGenerator:
                             db.mark_file_deleted(pc)
                         total_deleted += len(deleted_pickcodes)
 
-                    self._apply_renames(renames, all_existing)
+                    self._apply_renames(
+                        renames, all_existing, all_new_files, scanned_roots
+                    )
                     for aux_args in pending_aux:
                         if self._cancel_flag.is_set():
                             break
@@ -918,16 +920,19 @@ class StrmGenerator:
         self,
         renames: List[Tuple[Dict[str, Any], Path, Path]],
         all_existing: Dict[str, Dict],
+        all_new_files: List[Dict[str, Any]],
     ) -> List[Tuple[Path, Path]]:
         """
         从文件级改名候选推导可整体搬移的目录对
 
-        只接受新旧目录都在同一本地根内、目标不是同步根、且旧目录下所有数据库
-        记录都参与改名的场景；一个旧目录对应多个新目录、多个旧目录并入同一新目录、
-        或存在未改名文件时退回逐文件迁移，避免把未改名的文件一起搬走
+        只接受新旧目录都在同一本地根内、目标不是同步根、旧目录下所有数据库记录
+        都参与改名、且本轮没有新文件写在该旧目录下的场景；一个旧目录对应多个新目录、
+        多个旧目录并入同一新目录、存在未改名或新增文件、父子改名目标不一致时
+        退回逐文件迁移，避免把未参与改名的文件一起搬走
 
         :param renames (List): (旧记录, 新 STRM 路径, 本地根) 三元组列表
         :param all_existing (Dict): pickcode 到旧记录的映射
+        :param all_new_files (List): 本轮待写入数据库的文件记录
 
         :return List: 可安全整体搬移的 (旧目录, 新目录) 列表
         """
@@ -969,7 +974,23 @@ class StrmGenerator:
         ]
         moves.sort(key=lambda item: (len(item[0].parts), str(item[0])))
 
+        conflicting: set = set()
+        for old_root, new_root in moves:
+            for other_old, other_new in moves:
+                if old_root == other_old:
+                    continue
+                if not _is_strictly_under(other_old, old_root):
+                    continue
+                expected = new_root / other_old.relative_to(old_root)
+                if expected != other_new:
+                    conflicting.add(old_root)
+        if conflicting:
+            moves = [move for move in moves if move[0] not in conflicting]
+
         db_paths = [Path(entry["local_strm_path"]) for entry in all_existing.values()]
+        new_paths = [
+            Path(record["local_strm_path"]) for record in all_new_files
+        ]
         kept: List[Tuple[Path, Path]] = []
         for old_root, new_root in moves:
             if any(
@@ -987,6 +1008,11 @@ class StrmGenerator:
                     "目录 %s 仍含未改名文件，退回逐文件迁移", old_root
                 )
                 continue
+            if any(_is_strictly_under(path, old_root) for path in new_paths):
+                logger.info(
+                    "目录 %s 含本轮新增文件，退回逐文件迁移", old_root
+                )
+                continue
             kept.append((old_root, new_root))
         return kept
 
@@ -994,17 +1020,31 @@ class StrmGenerator:
         self,
         renames: List[Tuple[Dict[str, Any], Path, Path]],
         all_existing: Dict[str, Dict],
+        all_new_files: List[Dict[str, Any]],
+        scanned_roots: set,
     ) -> None:
         """
         应用改名迁移：优先整目录搬移，失败或条件不足时逐文件迁移
 
+        整目录搬移只对整根扫描成功的映射生效；扫描失败的根仍按文件迁移已确认
+        的改名，避免数据库记录与新 STRM 路径脱节
+
         :param renames (List): (旧记录, 新 STRM 路径, 本地根) 三元组列表
         :param all_existing (Dict): pickcode 到旧记录的映射
+        :param all_new_files (List): 本轮待写入数据库的文件记录
+        :param scanned_roots (set): 整根扫描成功的网盘根路径
         """
         if not renames:
             return
+        movable = [
+            rename
+            for rename in renames
+            if rename[0].get("root") in scanned_roots
+        ]
         moved_roots: List[Tuple[Path, Path]] = []
-        for old_root, new_root in self._plan_dir_moves(renames, all_existing):
+        for old_root, new_root in self._plan_dir_moves(
+            movable, all_existing, all_new_files
+        ):
             if not old_root.is_dir() or old_root.is_symlink() or new_root.exists():
                 continue
             try:

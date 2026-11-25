@@ -32,8 +32,13 @@ cd 115StrmTool
 # 安装运行时依赖
 pip install fastapi uvicorn "httpx[http2]" websockets qrcode Pillow
 
-# 安装 115 SDK（从 wheels 目录；包含 PyPI 上缺失的离线依赖）
-python -c "import subprocess, pathlib; [subprocess.run(['pip', 'install', str(f)], check=True) for f in sorted(pathlib.Path('combined/wheels').glob('*.whl'))]"
+# 安装发版锁包（不兼容当前 Python 的 wheel 会跳过）
+python - <<'PY'
+import subprocess, sys
+from pathlib import Path
+for wheel in sorted(Path('combined/wheels').glob('*.whl')):
+    subprocess.run([sys.executable, '-m', 'pip', 'install', str(wheel)])
+PY
 
 # （可选）安装桌面集成（仅 Windows）
 pip install pystray
@@ -110,7 +115,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（298 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（301 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 

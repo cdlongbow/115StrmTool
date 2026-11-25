@@ -79,7 +79,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（298 个用例）
+# 运行单元测试（301 个用例）
 cd combined && python -m pytest -q
 
 # 排查播放问题：先在管理面板「Emby 配置」开启「播放诊断日志」（立即生效），再在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
@@ -105,5 +105,5 @@ pip install -r combined/requirements.txt
 | `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试 + 逐文件独立执行校验） |
 | `.github/workflows/release.yml` | CI/CD 发布工作流（版本一致性校验 → 测试 → 注入构建版本号 → 打包 → Release） |
 | `combined/requirements.txt` | 运行时依赖 |
-| `combined/wheels/` | 发版构建锁包快照（45 个，含平台专用 wheel，勿整目录安装） |
+| `combined/wheels/` | 发版构建锁包快照（46 个，含平台专用 wheel，勿整目录安装） |
 | `combined/conftest.py` | 测试共享替身工具（sys.modules 重量级依赖集中定义） |

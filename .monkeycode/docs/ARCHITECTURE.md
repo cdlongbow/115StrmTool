@@ -65,7 +65,7 @@ MoviePilot-Windows/
 │   │   └── index.html          # 管理控制面板 SPA
 │   ├── requirements.txt        # 依赖清单
 │   ├── conftest.py             # 测试共享替身定义
-│   └── wheels/                 # 45 个锁包 Wheels（发版构建按平台挑选）
+│   └── wheels/                 # 46 个锁包 Wheels（发版构建按平台挑选）
 ├── .github/workflows/
 │   └── release.yml             # CI/CD 构建与发布
 └── .monkeycode/docs/           # 项目文档

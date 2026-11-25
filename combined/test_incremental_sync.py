@@ -350,6 +350,114 @@ class TestIncrementalSync:
         assert (new_dir / "ep3-renamed.strm").exists()
         assert not (new_dir / "ep3.strm").exists(), "旧文件名 STRM 不应残留"
 
+    def test_new_file_in_renamed_dir_skips_whole_dir_move(self, gen, db):
+        """旧目录同轮出现新增文件时不整目录搬移，避免新文件数据库路径失效"""
+        _reset_db(db)
+        old_dir = tmp_dir / "c1_newfile" / "A"
+        old_dir.mkdir(parents=True, exist_ok=True)
+        x = old_dir / "x.strm"
+        x.write_text("http://x/redirect?pickcode=newr001", encoding="utf-8")
+        sidecar = old_dir / "x.zh.srt"
+        sidecar.write_text("sub", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "newr001", "file_name": "x.mkv", "file_size": 100,
+            "file_type": ".mkv", "pan_path": "/test/c1_newfile/A/x.mkv",
+            "local_strm_path": str(x), "sha1": "sha_newr", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "x.mkv", "is_dir": False, "pickcode": "newr001",
+             "pick_code": "newr001", "sha1": "sha_newr", "id": 1, "parent_id": 0,
+             "size": 100, "path": "/test/c1_newfile/B/x.mkv"},
+            {"name": "y.mkv", "is_dir": False, "pickcode": "newr002",
+             "pick_code": "newr002", "sha1": "sha_newr2", "id": 2, "parent_id": 0,
+             "size": 100, "path": "/test/c1_newfile/A/y.mkv"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["changed"] == 1 and r["new"] == 1, f"r={r}"
+        new_dir = tmp_dir / "c1_newfile" / "B"
+        assert (new_dir / "x.strm").exists()
+        assert (old_dir / "y.strm").exists(), "同轮新增文件应留在旧目录"
+        assert sidecar.exists(), "含新增文件时不应整目录搬移"
+        rec_x = db.get_file_by_pickcode("newr001")
+        rec_y = db.get_file_by_pickcode("newr002")
+        assert Path(rec_x["local_strm_path"]).exists()
+        assert Path(rec_y["local_strm_path"]).exists()
+
+    def test_failed_root_rename_moves_file_only(self, gen, db):
+        """扫描失败的根仍逐文件迁移已确认改名，但不整目录搬移"""
+        _reset_db(db)
+        old_dir = tmp_dir / "c1_fail" / "A"
+        old_dir.mkdir(parents=True, exist_ok=True)
+        x = old_dir / "x.strm"
+        x.write_text("http://x/redirect?pickcode=fail001", encoding="utf-8")
+        sidecar = old_dir / "x.zh.srt"
+        sidecar.write_text("sub", encoding="utf-8")
+        db.batch_add_files([{
+            "pickcode": "fail001", "file_name": "x.mkv", "file_size": 100,
+            "file_type": ".mkv", "pan_path": "/test/c1_fail/A/x.mkv",
+            "local_strm_path": str(x), "sha1": "sha_fail", "parent_id": "/test",
+        }])
+        import strm_generator as sg
+
+        def _partial_then_fail(*a, **kw):
+            yield {
+                "name": "x.mkv", "is_dir": False, "pickcode": "fail001",
+                "pick_code": "fail001", "sha1": "sha_fail", "id": 1,
+                "parent_id": 0, "size": 100,
+                "path": "/test/c1_fail/B/x.mkv",
+            }
+            raise RuntimeError("scan failed")
+
+        sg._iter_files_115 = _partial_then_fail
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["failed"] == 1, f"r={r}"
+        assert (tmp_dir / "c1_fail" / "B" / "x.strm").exists()
+        assert sidecar.exists(), "扫描失败的根不应做整目录搬移"
+        rec = db.get_file_by_pickcode("fail001")
+        assert Path(rec["local_strm_path"]).exists()
+
+    def test_inconsistent_nested_rename_falls_back(self, gen, db):
+        """父子目录改名目标不一致时放弃父目录整搬，子目录仍可整体搬移"""
+        _reset_db(db)
+        parent = tmp_dir / "c1_nested" / "P"
+        child = parent / "Child"
+        child.mkdir(parents=True, exist_ok=True)
+        c = parent / "c.strm"
+        a = child / "a.strm"
+        sidecar = child / "a.zh.srt"
+        c.write_text("http://x/redirect?pickcode=nest001", encoding="utf-8")
+        a.write_text("http://x/redirect?pickcode=nest002", encoding="utf-8")
+        sidecar.write_text("sub", encoding="utf-8")
+        db.batch_add_files([
+            {"pickcode": "nest001", "file_name": "c.mkv", "file_size": 100,
+             "file_type": ".mkv", "pan_path": "/test/c1_nested/P/c.mkv",
+             "local_strm_path": str(c), "sha1": "sha_n1", "parent_id": "/test"},
+            {"pickcode": "nest002", "file_name": "a.mkv", "file_size": 100,
+             "file_type": ".mkv",
+             "pan_path": "/test/c1_nested/P/Child/a.mkv",
+             "local_strm_path": str(a), "sha1": "sha_n2", "parent_id": "/test"},
+        ])
+        import strm_generator as sg
+        sg._iter_files_115 = _build_fake_iter_files([
+            {"name": "c.mkv", "is_dir": False, "pickcode": "nest001",
+             "pick_code": "nest001", "sha1": "sha_n1", "id": 1, "parent_id": 0,
+             "size": 100, "path": "/test/c1_nested/Q/c.mkv"},
+            {"name": "a.mkv", "is_dir": False, "pickcode": "nest002",
+             "pick_code": "nest002", "sha1": "sha_n2", "id": 2, "parent_id": 0,
+             "size": 100, "path": "/test/c1_nested/Q/Child2/a.mkv"},
+        ])
+        r = gen.incremental_sync([{"from": "/test", "to": str(tmp_dir)}])
+        assert r["changed"] == 2, f"r={r}"
+        new_child = tmp_dir / "c1_nested" / "Q" / "Child2"
+        assert (tmp_dir / "c1_nested" / "Q" / "c.strm").exists()
+        assert (new_child / "a.strm").exists()
+        assert (new_child / "a.zh.srt").exists(), "子目录侧车应随子目录搬移"
+        rec_c = db.get_file_by_pickcode("nest001")
+        rec_a = db.get_file_by_pickcode("nest002")
+        assert Path(rec_c["local_strm_path"]).exists()
+        assert Path(rec_a["local_strm_path"]).exists()
+
     def test_cancel(self, gen, db):
         _reset_db(db)
         db.batch_add_files([{

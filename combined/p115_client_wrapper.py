@@ -136,7 +136,7 @@ class P115ClientWrapper:
         except ImportError:
             logger.error(
                 "p115client 导入失败（未安装或依赖版本冲突，"
-                "如需修复: pip install p115client==0.0.9.6.5.1）",
+                "如需修复: pip install p115client==0.0.9.7.8.3）",
                 exc_info=True,
             )
             self._client = None

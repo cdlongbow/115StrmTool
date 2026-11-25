@@ -41,7 +41,7 @@ Emby 客户端 → 反向代理 (:8097) → Emby 服务器 (:8096)
 托盘右键菜单：
 - **打开管理界面** — 默认浏览器打开管理页面
 - **全量同步** — 立即执行 STRM 全量同步
-- **增量同步** — 对比上次同步 SHA1，仅处理新增/变更/删除文件
+- **增量同步** — 对比上次同步 SHA1，处理新增/变更文件；开启「同步后清理残留」时删除已不存在文件
 - **立即签到** — 手动触发 115 每日签到
 - **打开日志目录** — 用资源管理器打开日志文件夹
 - **退出** — 停止所有服务并退出
@@ -58,14 +58,25 @@ Emby 客户端 → 反向代理 (:8097) → Emby 服务器 (:8096)
 
 ```bash
 cd combined
+
+# 先安装发版锁包（不兼容当前 Python 的 wheel 会跳过）
+python - <<'PY'
+import subprocess, sys
+from pathlib import Path
+for wheel in sorted(Path('wheels').glob('*.whl')):
+    subprocess.run([sys.executable, '-m', 'pip', 'install', str(wheel)])
+PY
+
+# 再安装运行时依赖
 pip install -r requirements.txt
+
 python main.py              # 控制台模式
 python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 ```
 
 `combined/wheels/` 是发布构建使用的锁包快照（含平台专用 wheel，不能整目录直接安装）；发版流水线会自动按平台挑选安装。
 
-运行单元测试（298 个用例，需 Python 3.12+ 环境）：
+运行单元测试（301 个用例，需 Python 3.12+ 环境）：
 
 ```bash
 cd combined
