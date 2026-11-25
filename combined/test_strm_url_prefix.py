@@ -77,6 +77,47 @@ class TestLaunchSyncGuard:
         assert resp["status"] == "error"
         assert "未配置" in resp["message"]
 
+    def test_launch_forces_use_rust_off(self):
+        with patch.dict("sys.modules", {
+            **stub_modules(API_HEAVY_DEPS),
+            **stub_modules(DB_HEAVY_DEPS),
+        }):
+            import api_routes
+            import strm_generator
+            gen = MagicMock()
+            gen.is_syncing.return_value = False
+            cm = MagicMock()
+            cm.get.return_value = {
+                "p115": {
+                    "strm_url_prefix": "http://h:3333",
+                    "use_rust": True,
+                    "fast_scan": True,
+                    "paths": [],
+                }
+            }
+            started = {}
+
+            class _Thread:
+                def __init__(self, target=None, daemon=None, name=None):
+                    self.target = target
+                    self.name = name
+
+                def start(self):
+                    started["name"] = self.name
+
+            with (
+                patch.object(api_routes, "get_client", return_value=MagicMock()),
+                patch.object(api_routes, "config_manager", cm),
+                patch.object(strm_generator, "get_strm_generator", return_value=gen),
+                patch.object(api_routes.threading, "Thread", _Thread),
+            ):
+                resp = api_routes._launch_sync("full")
+        assert resp["status"] == "started"
+        kwargs = gen.set_config.call_args.kwargs
+        assert kwargs["use_rust"] is False
+        assert kwargs["fast_scan"] is True
+        assert started["name"] == "sync-full"
+
     def test_valid_prefix_passes_guard(self):
         with patch.dict("sys.modules", {
             **stub_modules(API_HEAVY_DEPS),

@@ -28,13 +28,13 @@
 - [x] 【已完成 2026-11-23】p115 依赖升级路线：已对照 DDSRem `7ddd3ec3` + zkmydgth v2.7.19 适配 diff 完成迁移并推送——`p115client==0.0.9.7.2`、`p115cipher>=0.0.6`、解除 `python-concurrenttools<0.1.9` 上限（改钉 `>=0.1.9`）、新增 `call_sleep==0.0.1`；`combined/wheels/` 锁包已同步替换（新增 6 个 wheel，旧版 5 个移入 `_obsolete/` 本地备份，目录已加 .gitignore）
   - 迁移触点（唯一破坏性改动）：`strm_generator.py` 的 `iter_files_with_path` 改为 `iter_files(..., with_path=True)`（import + 调用各 1 处）；wrapper 用到的 14 个实例方法与 `check_response`/`ID_TO_DIRNODE_CACHE`/`get_webapi_origin` 等符号全部零改动存活；`normalize_attr` 删除 `dict_cls` 参数对本仓库无影响
   - 验证：沙箱 3.11（stub 注入）与 uv 3.14 venv（真实 SDK）各跑全量 pytest，289 用例全绿；环境重建已固化为 `scripts/setup_py314.sh`
-  - 后续观察：`full_strm_sync` 仍只有 cp312 wheel（exe 走纯 Python 路径），待上游发布 cp314 wheel 后替换入 wheels 目录即可恢复 Rust 加速（见下方条目）
+  - 后续观察：`full_strm_sync` 仍只有 cp312 wheel；2026-11-25 复核确认上游虽已提供 cp314 wheel，但 0.1.6 集成本身需先重写，见下方「full_strm_sync 恢复 Rust 加速」条目
 - [x] 【已完成 2026-11-25】p115client 升级 0.0.9.7.2→0.0.9.7.8.3（八巡 DDSRem `d20046b5` + `5eb564d2` 修补 wheel）：同步替换 `python-httpfile` 0.0.6.3、`python-http_request` 0.1.7.2、`python-dictattr` 0.0.5 四个 wheel（旧版移入 `combined/wheels/_obsolete/`）；兼容审计破坏点（`ensure_path` 位置参数、`fs_label_set` 改 `label_id`、`life_recent_operation_items` 默认值、顶层 fs 导出）本仓库均未命中
   - 顺带修复附属文件下载丢弃 `P115URL.headers`：`strm_generator._download_aux_file` 现在把直链绑定头（UA/Cookie）随下载请求转发，避免 115 CDN 按直链 `f` 参数拒绝；新增 3 个用例覆盖 P115URL/dict/无头三种形态
   - 验证：沙箱 3.11（stub 注入）与 uv 3.14 venv（真实 SDK，装的是 `combined/wheels/` 内实际 wheel）均 292 用例全绿，3.14 下逐文件 standalone 全绿
 - [x] 【已完成 2026-10-09】发版同日序号版本：现版本一致性校验要求 tag 与 CHANGELOG 顶部日期相等，日内二次发布无路可走；115-station `6f9264b9` 采用"日期版本 + 同日 `-N` 序号当正式版"写法。候选方案：release.yml 校验放行 `YYYYMMDD-N` tag（归一后比对日期部分），配套 CHANGELOG 同日多节或节内追加约定
 - [ ] 若未来新增数据库功能：备份 SQLite 时须用 `Connection.backup()` 或先 `wal_checkpoint(TRUNCATE)`，禁止直接复制 WAL 模式下的数据库文件
-- [ ] full_strm_sync 恢复 Rust 加速（2026-11-03 升级 Python 3.14 的后置项）：CI/release 已切 3.14，`combined/wheels/` 仅有 cp312 ABI 的 full_strm_sync wheel，安装步骤已容错为 SKIP，exe 走纯 Python 生成路径（默认配置 `use_rust=False` 行为一致）；2026-11-25 八巡确认上游 DDSRem V2 wheels 已提供 `full_strm_sync 0.1.6` 的 cp314 ABI wheel（另含 share_strm_scan/txt_tree_storage），可复制对应平台 wheel 进 `combined/wheels/` 后验证 Rust 路径
+- [ ] full_strm_sync 恢复 Rust 加速（2026-11-25 复核）：上游 DDSRem V2 wheels 已提供 `full_strm_sync 0.1.6` 的 cp314 ABI wheel，但 0.1.6 的配置与结果契约已变（Processor 需 10 字段配置，返回 `strm_results`/`download_results` 由调用方写盘），本仓库现有集成会在初始化时失败并回退纯 Python。恢复步骤：先重写集成（10 字段配置 + 按结果对象由 Python 写 STRM/附属下载）并用真实 wheel 做非 mock 冒烟，再复制 cp314 wheels 进 `combined/wheels/`；当前 UI 开关已隐藏，启动时固定 `use_rust=False`
 
 ## 部署与分发类
 
@@ -49,4 +49,4 @@
 
 ## 测试类
 
-- [ ] 变异测试套件（可选低优先）：参考上游 mutation 脚本"跳过即失败"收口模式；297 用例规模下性价比一般，用例规模明显增长后再评估
+- [ ] 变异测试套件（可选低优先）：参考上游 mutation 脚本"跳过即失败"收口模式；298 用例规模下性价比一般，用例规模明显增长后再评估

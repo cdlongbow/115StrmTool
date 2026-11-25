@@ -26,7 +26,7 @@
 - p115client — 115 网盘 SDK
 - p115cipher — RSA 加密/解密与 115 加解密
 - p115pickcode — pickcode 工具
-- full_strm_sync — STRM 生成 Rust 加速（可选，需在 115 设置中开启；不可用或批处理失败时自动用内置方式补写）
+- full_strm_sync — STRM 生成 Rust 加速（可选；上游 0.1.6 配置与结果契约变更，本仓库适配完成前固定关闭，始终使用内置生成方式）
 
 **可选 Windows 集成**
 - pystray — 系统托盘

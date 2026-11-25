@@ -123,6 +123,7 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 2026-11-25 八巡待用户决策项：A) 是否跟随升级 p115client 0.0.9.7.8.3（含 python_httpfile 0.0.6.3、换 wheels、3.14 回归）；B) 是否修复附属文件下载未转发 `P115URL.headers`；C) 是否引入目录级改名迁移（侧车文件+空目录清理）与孤儿 STRM 标记确认机制
   - 2026-11-25 八巡决策结果：A、B 已落地——p115client 升级 0.0.9.7.8.3 并同步换 4 个轮包（httpfile 0.0.6.3、http_request 0.1.7.2、dictattr 0.0.5，旧版入 `_obsolete/`）；`_download_aux_file` 改为转发 `P115URL.headers`，新增 `test_aux_download_headers.py` 3 用例；3.11 stub 与 3.14 真实 SDK（实际 wheels）均 292 用例全绿、3.14 逐文件 standalone 全绿
   - 2026-11-25 八巡决策结果（C）：C1/C2a 已落地——增量按 pickcode 识别目录级改名，整目录搬移（含字幕/NFO/剧照等侧车）并清理空父目录；目标已存在、目录内仍有未改名文件、一对多或多对一映射时退回逐文件迁移。增量删除改受 `cleanup_deleted_strm` 控制，关闭时只提示不删除。新增 5 用例，3.11 stub 与 3.14 真实 SDK 全量 297 用例全绿；C2b（失效标记+面板确认）仍暂缓
+  - 2026-11-25 决策（Rust 加速暂不可用）：full_strm_sync 0.1.6 配置与结果契约不兼容（Processor 需 10 字段配置，返回 strm_results/download_results 由调用方写盘），本仓库旧集成会初始化失败并回退纯 Python。处理：UI 开关隐藏、启动固定 `use_rust=False`（config 字段保留），README/架构/接口文档标注暂不可用；恢复需先重写集成再用 cp314 wheel 做非 mock 冒烟。新增 1 个启动强制关闭用例，全量 298 用例（3.11 stub + 3.14 真实 SDK）全绿
 
 [CI 构建运行时升级到 Python 3.14]
 - Date: 2026-11-03
