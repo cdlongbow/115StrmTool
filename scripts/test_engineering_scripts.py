@@ -172,7 +172,6 @@ def test_renovate_regenerates_locks_with_uv_after_requirements_updates() -> None
             "--python-version 3.12",
             "--generate-hashes",
             "--find-links combined/wheels",
-            "--emit-find-links",
         ):
             assert flag in command
         assert "--upgrade" not in command
@@ -186,6 +185,19 @@ def test_engineering_workflows_run_root_config_tests() -> None:
 
     for workflow_file in WORKFLOW_FILES:
         assert command in (ROOT / workflow_file).read_text(encoding="utf-8"), workflow_file
+
+
+def test_windows_tray_dependency_is_locked_and_checked() -> None:
+    """
+    Windows 托盘依赖应进入运行时声明、锁文件与发布前检查
+    """
+    requirements = (ROOT / "combined/requirements.txt").read_text(encoding="utf-8")
+    assert 'pystray>=0.19,<0.20; sys_platform == "win32"' in requirements
+    for lock_file in LOCK_FILES:
+        locked = (ROOT / lock_file).read_text(encoding="utf-8")
+        assert "pystray==0.19.5 ; sys_platform == 'win32'" in locked
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'python -c "import pystray; print(pystray.__version__)"' in release
 
 
 def test_frozen_smoke_checks_web_api_health_and_version(monkeypatch) -> None:

@@ -7,6 +7,7 @@ websockets>=12.0
 # 装不上（如 CPython 版本无对应 wheel）时代码自动回退纯 Python 路径，无需在此声明
 qrcode>=7.4
 Pillow>=10.0
+pystray>=0.19,<0.20; sys_platform == "win32"
 call_sleep==0.0.1
 p115cipher>=0.0.6
 p115client==0.0.9.7.8.3
@@ -18,5 +19,4 @@ p115pickcode==0.0.5.4
 # python-concurrenttools 0.1.9 将 threadpool_map 改名 thread_conmap，旧 p115client 导入即崩；
 # 升级 p115client 0.0.9.7.x 后解除 <0.1.9 上限，新版声明 >=0.1.9
 python-concurrenttools>=0.1.9
-# Windows 系统托盘（可选）: pip install pystray Pillow
 # 测试（可选）: pip install pytest pytest-asyncio

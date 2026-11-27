@@ -64,6 +64,9 @@ jobs:
       - name: Check dependency consistency
         run: python -m pip check
 
+      - name: Check Windows tray dependency
+        run: python -c "import pystray; print(pystray.__version__)"
+
       - name: Check real SDK contract
         run: python scripts/smoke_sdk_contract.py
 

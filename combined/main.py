@@ -554,7 +554,10 @@ def main():
 
     from windows_tray import run_tray, should_use_tray
 
-    use_tray = should_use_tray() and not args.no_tray
+    tray_available = should_use_tray()
+    use_tray = tray_available and not args.no_tray
+    if not args.no_tray and not tray_available:
+        logger.warning("系统托盘不可用，已回退管理服务模式；请确认 Windows 平台已安装 pystray")
 
     if use_tray:
         admin_thread = threading.Thread(target=_run_admin, daemon=True)

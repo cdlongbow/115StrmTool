@@ -32,11 +32,8 @@ cd 115StrmTool
 # 安装平台兼容的锁包
 python scripts/install_local_wheels.py combined/wheels
 
-# 安装带哈希锁定的运行时、测试与构建依赖
+# 安装带哈希锁定的运行时、测试与构建依赖（Windows 已包含 pystray）
 python -m pip install --require-hashes --find-links combined/wheels -r combined/requirements-dev.lock
-
-# 可选：安装桌面集成（仅 Windows）
-pip install pystray
 ```
 
 ### 运行

@@ -11,8 +11,8 @@ try:
     import pystray
     from PIL import Image, ImageDraw
     _HAS_PYSTRAY = True
-except ImportError:
-    pass
+except ImportError as e:
+    logger.warning("pystray 不可用，系统托盘已禁用: %s", e)
 
 
 def _create_icon():

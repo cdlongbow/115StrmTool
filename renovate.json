@@ -43,8 +43,8 @@
       ],
       "postUpgradeTasks": {
         "commands": [
-          "uv pip compile combined/requirements.txt --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --emit-find-links --output-file combined/requirements.lock",
-          "uv pip compile combined/requirements-dev.in --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --emit-find-links --output-file combined/requirements-dev.lock"
+          "uv pip compile combined/requirements.txt --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --output-file combined/requirements.lock",
+          "uv pip compile combined/requirements-dev.in --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --output-file combined/requirements-dev.lock"
         ],
         "fileFilters": [
           "combined/requirements.lock",
