@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["pip_requirements", "github-actions"],
+  "timezone": "Asia/Shanghai",
+  "schedule": ["before 6am on monday"],
+  "ignorePaths": [
+    "combined/requirements.lock",
+    "combined/requirements-dev.lock"
+  ],
+  "pip_requirements": {
+    "managerFilePatterns": [
+      "/(^|/)combined/requirements(-dev)?\\.(txt|in)$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Keep repository-vendored SDK wheels on manual coordinated upgrades",
+      "matchPackageNames": [
+        "/^(cachedict|call[-_]sleep|ed2k|errno2|full[-_]strm[-_]sync|glob[-_]pattern|http[-_]response|id2dirnode|integer[-_]tool|iter[-_]collect|iterdir|p115cipher|p115client|p115oss|p115pickcode|posixpatht|python[-_]argtools|python[-_]asynctools|python[-_]concurrenttools|python[-_]cookietools|python[-_]decotools|python[-_]dictattr|python[-_]dicttools|python[-_]download|python[-_]encode[-_]uri|python[-_]ensure|python[-_]filewrap|python[-_]hashtools|python[-_]http[-_]request|python[-_]httpfile|python[-_]iterutils|python[-_]property|python[-_]startfile|python[-_]temporary|python[-_]texttools|python[-_]undefined|qrcode[-_]terminal|socket[-_]keepalive|sqlitetools|urllib3[-_]future[-_]request)$/"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Group PyPI dependency updates",
+      "matchManagers": ["pip_requirements"],
+      "matchDatasources": ["pypi"],
+      "groupName": "Python dependencies",
+      "groupSlug": "python"
+    },
+    {
+      "description": "Group GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "groupSlug": "github-actions"
+    },
+    {
+      "description": "Regenerate uv locks after requirements input updates",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": [
+        "combined/requirements.txt",
+        "combined/requirements-dev.in"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "uv pip compile combined/requirements.txt --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --emit-find-links --output-file combined/requirements.lock",
+          "uv pip compile combined/requirements-dev.in --universal --python-version 3.12 --generate-hashes --find-links combined/wheels --emit-find-links --output-file combined/requirements-dev.lock"
+        ],
+        "fileFilters": [
+          "combined/requirements.lock",
+          "combined/requirements-dev.lock"
+        ],
+        "executionMode": "branch",
+        "installTools": {
+          "uv": {}
+        }
+      }
+    }
+  ]
+}

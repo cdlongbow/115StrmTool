@@ -47,6 +47,9 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      - name: Run engineering script tests
+        run: python -m pytest scripts/test_engineering_scripts.py -q
+
       - name: Run tests with coverage
         working-directory: combined
         run: |

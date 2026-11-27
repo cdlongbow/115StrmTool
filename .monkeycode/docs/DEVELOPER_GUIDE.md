@@ -83,7 +83,7 @@ python build_exe.py
 
 配置每次写盘后自动生成滚动快照（程序目录 `config_backups/`，保留最近 10 份、同一小时内去重）；管理面板"导出配置"按钮可下载当前配置文件（Cookie 保持 `#ENC#` 密文）。
 
-配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。
+配置文件中 115 Cookie 支持加密存储（`#ENC#` 前缀），管理界面读取配置时 Cookie 以掩码 `********` 显示，写回掩码值表示保持原值。旧版密文首次读取时会自动迁移为带 HMAC 的 `#ENC#v2:` 格式；迁移前会创建独立的 0600 备份，并通过 `config.key.meta` 校验密钥指纹。错误密钥、缺失密钥或旧 Cookie 结构校验失败会拒绝启动并保持文件不变。
 
 ### 管理访问令牌
 
@@ -110,7 +110,7 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（510 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（532 个） |
 | 覆盖率门禁 | `cd combined && python -m pytest --cov=. --cov-config=.coveragerc --cov-report=json:coverage.json && python ../scripts/check_coverage.py coverage.json` | 生产代码总覆盖率与关键模块阈值 |
 | 真实 SDK 契约 | `python scripts/smoke_sdk_contract.py` | 校验锁包安装后的关键符号与调用签名 |
 | 前端行为 | `python scripts/check_inline_js.py combined/web/index.html && node scripts/test_frontend.js` | 内联脚本语法与管理面板交互回归 |
@@ -118,6 +118,10 @@ python build_exe.py
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
 测试说明：日常 CI（`.github/workflows/ci.yml`）在 Python 3.12 与 3.14 矩阵上运行哈希锁定依赖安装、`pip check`、真实 SDK 契约、Ruff、Node 前端行为测试、覆盖率门禁、全量 pytest 和每个测试文件独立进程执行。发版流水线在 Windows 上重复关键门禁，冻结 exe 冒烟通过后上传 exe、SHA-256 校验文件和依赖清单，失败时保留诊断产物。测试的重量级依赖替身统一定义在 `combined/conftest.py`，仅替换确实缺失的模块，已安装或已导入的真实模块保持不变。需要真实 SDK 时执行 `bash scripts/setup_py314.sh /tmp/opencode/py314-venv --test`，脚本会按哈希安装 `combined/requirements-dev.lock` 并校验解释器版本与依赖一致性。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，Python 3.14 下预期跳过，程序走纯 Python 生成路径；恢复 Rust 加速需先完成上游 0.1.6 配置与结果契约适配，再用真实 wheel 做非 mock 冒烟。
+
+### 依赖自动升级
+
+`renovate.json` 按周汇总普通 PyPI 依赖与 GitHub Actions 更新，并在 requirements 输入变化后使用 `uv` 重新生成两把哈希锁文件。仓库 `combined/wheels/` 中的 115 SDK 及传递依赖列为手动协调升级，Renovate 不会把它们替换为 PyPI 构建。Renovate 实例需允许 `postUpgradeTasks`，执行环境需支持 `installTools.uv`；使用全局二进制模式时需预装 `uv`。
 
 ### 分支策略
 

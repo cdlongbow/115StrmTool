@@ -581,19 +581,23 @@ test("overview polling survives repeated failures and resumes on visibility and 
     {maxFailures: 0},
   );
   t.after(() => handle.stop());
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.ok(calls > 10, `expected more than 10 attempts, got ${calls}`);
+  const waitForCalls = async (previous, minimumIncrease = 1) => {
+    const deadline = Date.now() + 2000;
+    while (calls < previous + minimumIncrease && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.ok(calls >= previous + minimumIncrease, `expected at least ${minimumIncrease} new calls`);
+  };
+  await waitForCalls(0, 11);
   const beforeVisibility = calls;
   state.document.hidden = true;
   state.document.emit("visibilitychange");
   state.document.hidden = false;
   state.document.emit("visibilitychange");
-  await new Promise(resolve => setTimeout(resolve, 10));
-  assert.ok(calls > beforeVisibility);
+  await waitForCalls(beforeVisibility);
   const beforeOnline = calls;
   state.sandbox.emit("online");
-  await new Promise(resolve => setTimeout(resolve, 10));
-  assert.ok(calls > beforeOnline);
+  await waitForCalls(beforeOnline);
 });
 
 test("STRM next page follows page times page size", async () => {

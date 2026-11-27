@@ -8,6 +8,15 @@
 
 所有 `/api/*` 与 `/admin/api/*` 请求需携带 `X-Admin-Token`，与 `config.json` 的 `admin_token` 一致（恒定时间比较），否则返回 401。令牌为空时仅允许来自 `127.0.0.1` / `::1` 的请求，其余一律 401。自动接口文档 `/docs`、`/redoc`、`/openapi.json` 默认关闭；管理页面 SPA 与静态资源不走该中间件。
 
+### 健康检查
+
+```
+GET /health/live
+GET /health/ready
+```
+
+两个端点无需管理令牌，返回固定字段且不包含配置、路径、账号或外部服务地址。`/health/live` 表示进程可响应，始终返回 200；`/health/ready` 在管理应用完成初始化后返回 200，未就绪时返回 503。健康检查不会访问 115、Emby 或 WebDAV。
+
 ### 服务状态
 
 ```

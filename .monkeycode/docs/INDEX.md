@@ -79,7 +79,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（510 个用例）
+# 运行单元测试（532 个用例）
 cd combined && python -m pytest -q
 
 # 排查播放问题：先在管理面板「Emby 配置」开启「播放诊断日志」（立即生效），再在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
@@ -116,3 +116,4 @@ cd combined && python -m pytest --cov=. --cov-config=.coveragerc --cov-report=js
 | `combined/conftest.py` | 测试共享替身工具（sys.modules 重量级依赖集中定义） |
 | `scripts/smoke_sdk_contract.py` | 真实 115 SDK 契约冒烟 |
 | `scripts/check_coverage.py` | 生产代码覆盖率与关键模块阈值门禁 |
+| `renovate.json` | 依赖与 GitHub Actions 自动升级规则 |

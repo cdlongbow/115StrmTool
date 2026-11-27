@@ -1,5 +1,5 @@
 """
-冻结 exe 冒烟脚本：启动无托盘实例并校验 Web、API 与版本后清理进程
+冻结 exe 冒烟脚本：启动无托盘实例并校验 Web、API、健康检查与版本后清理进程
 """
 import argparse
 import json
@@ -45,7 +45,7 @@ def _request(url: str, token: str = "") -> Any:
 
 def _check_endpoints(base_url: str, token: str, version: str, timeout: float) -> None:
     """
-    轮询校验 Web 页面、管理 API 与版本号
+    轮询校验 Web 页面、管理 API、健康检查与版本号
 
     :param base_url (str): 管理服务基地址
     :param token (str): 管理令牌
@@ -68,11 +68,19 @@ def _check_endpoints(base_url: str, token: str, version: str, timeout: float) ->
                     raise ValueError(
                         f"API 版本不匹配: expected={version!r} actual={payload.get('version')!r}"
                     )
+            with _request(base_url + "/health/live") as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if response.status != 200 or payload.get("status") != "ok":
+                    raise ValueError("存活健康检查响应异常")
+            with _request(base_url + "/health/ready") as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if response.status != 200 or payload.get("status") != "ready":
+                    raise ValueError("就绪健康检查响应异常")
             return
         except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
             last_error = str(exc)
             time.sleep(0.3)
-    raise TimeoutError(f"Web/API/版本冒烟失败: {last_error}")
+    raise TimeoutError(f"Web/API/健康检查/版本冒烟失败: {last_error}")
 
 
 def _stop_process(process: subprocess.Popen) -> None:
@@ -126,7 +134,7 @@ def smoke_frozen_exe(exe_path: Path, data_dir: Path, version: str, timeout: floa
         base_url = f"http://{host}:{port}"
         token = str(config.get("admin_token") or "")
         _check_endpoints(base_url, token, version, timeout)
-        print(f"OK: Web/API/version {version}")
+        print(f"OK: Web/API/health/version {version}")
     finally:
         _stop_process(process)
 

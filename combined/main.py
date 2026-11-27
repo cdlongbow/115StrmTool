@@ -5,16 +5,15 @@ import socket
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from hmac import compare_digest
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from uvicorn import Config, Server
 
-from config_manager import config_manager
-from logger import logger
-from app_metadata import APP_VERSION
 from admin_api import (
     set_emby_status,
     set_emby_restart_callback,
@@ -22,6 +21,9 @@ from admin_api import (
     set_p115_restart_callback,
     set_p115_status,
 )
+from app_metadata import APP_VERSION
+from config_manager import config_manager
+from logger import logger
 
 EMBY_SERVER = None
 EMBY_THREAD = None
@@ -384,15 +386,31 @@ def _restart_p115() -> bool:
 
 
 def create_admin_app() -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """
+        管理应用启动与关闭期间维护就绪状态
+
+        :param app (FastAPI): 当前管理应用
+
+        :return AsyncIterator: 生命周期上下文
+        """
+        app.state.ready = False
+        try:
+            app.state.ready = True
+            yield
+        finally:
+            app.state.ready = False
+
     # 自动接口文档不在令牌中间件保护范围内，直接关闭避免接口结构外泄
     app = FastAPI(
         title="115网盘STRM生成与302工具",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
 
-    from fastapi.responses import JSONResponse
     from exceptions import ServiceError
 
     @app.exception_handler(ServiceError)
@@ -402,6 +420,26 @@ def create_admin_app() -> FastAPI:
             status_code=exc.status_code,
             content={"error": exc.message},
         )
+
+    @app.get("/health/live")
+    async def health_live() -> JSONResponse:
+        """
+        返回进程存活状态
+
+        :return JSONResponse: 仅包含固定状态字段的响应
+        """
+        return JSONResponse(content={"status": "ok"})
+
+    @app.get("/health/ready")
+    async def health_ready() -> JSONResponse:
+        """
+        返回管理应用初始化状态
+
+        :return JSONResponse: 初始化完成返回 200 未完成返回 503
+        """
+        if not getattr(app.state, "ready", False):
+            return JSONResponse(status_code=503, content={"status": "not_ready"})
+        return JSONResponse(content={"status": "ready"})
 
     @app.middleware("http")
     async def admin_token_gate(request, call_next):
