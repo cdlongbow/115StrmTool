@@ -197,7 +197,7 @@ def test_windows_tray_dependency_is_locked_and_checked() -> None:
         locked = (ROOT / lock_file).read_text(encoding="utf-8")
         assert "pystray==0.19.5 ; sys_platform == 'win32'" in locked
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert 'python -c "import pystray; print(pystray.__version__)"' in release
+    assert "import importlib.metadata, pystray; print(importlib.metadata.version('pystray'))" in release
 
 
 def test_frozen_smoke_checks_web_api_health_and_version(monkeypatch) -> None:

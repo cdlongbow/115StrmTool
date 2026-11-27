@@ -65,7 +65,7 @@ jobs:
         run: python -m pip check
 
       - name: Check Windows tray dependency
-        run: python -c "import pystray; print(pystray.__version__)"
+        run: python -c "import importlib.metadata, pystray; print(importlib.metadata.version('pystray'))"
 
       - name: Check real SDK contract
         run: python scripts/smoke_sdk_contract.py
