@@ -86,9 +86,10 @@ jobs:
       - name: Run each test file standalone
         working-directory: combined
         run: |
-          for f in test_*.py; do
-            python -m pytest "$f" -q || exit 1
-          done
+          Get-ChildItem -Path test_*.py | ForEach-Object {
+            python -m pytest $_.FullName -q
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Inject build version
         env:
