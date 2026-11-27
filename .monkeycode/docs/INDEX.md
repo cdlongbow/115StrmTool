@@ -79,7 +79,7 @@ REST API 端点、配置结构、STRM 文件格式和外部播放器列表。集
 # 开发运行
 python combined/main.py --no-tray
 
-# 运行单元测试（508 个用例）
+# 运行单元测试（510 个用例）
 cd combined && python -m pytest -q
 
 # 排查播放问题：先在管理面板「Emby 配置」开启「播放诊断日志」（立即生效），再在 logs/combined.log 检索「签发诊断」「流代理拒绝诊断」「流代理外发请求头诊断」
@@ -90,8 +90,13 @@ ruff check .
 # 构建 exe
 cd combined && python build_exe.py
 
-# 安装依赖（PyPI 全量可解析；wheels/ 为发版构建锁包快照，勿整目录安装）
-pip install -r combined/requirements.txt
+# 安装平台兼容锁包与哈希锁定依赖
+python scripts/install_local_wheels.py combined/wheels
+python -m pip install --require-hashes --find-links combined/wheels -r combined/requirements-dev.lock
+
+# 真实 SDK 契约与覆盖率门禁
+python scripts/smoke_sdk_contract.py
+cd combined && python -m pytest --cov=. --cov-config=.coveragerc --cov-report=json:coverage.json && python ../scripts/check_coverage.py coverage.json
 ```
 
 ### 重要文件
@@ -102,8 +107,12 @@ pip install -r combined/requirements.txt
 | `combined/proxy_app.py` | 反向代理核心 |
 | `combined/build_exe.py` | PyInstaller 构建脚本 |
 | `combined/app_metadata.py` | 应用版本号（发布构建由 CI 按 tag 注入 `_build_version`，本地回退 dev） |
-| `.github/workflows/ci.yml` | 日常 CI（push/PR 触发：ruff 静态检查 + 全量测试 + 逐文件独立执行校验） |
-| `.github/workflows/release.yml` | CI/CD 发布工作流（版本一致性校验 → 测试 → 注入构建版本号 → 打包 → Release） |
-| `combined/requirements.txt` | 运行时依赖 |
+| `.github/workflows/ci.yml` | 日常 CI（Python 3.12/3.14 矩阵、哈希锁定依赖、真实 SDK 契约、前端行为、覆盖率与逐文件测试） |
+| `.github/workflows/release.yml` | CI/CD 发布工作流（版本一致性校验 → 锁定依赖 → 测试 → 打包 → exe 冒烟 → Release） |
+| `combined/requirements.txt` | 运行时依赖声明 |
+| `combined/requirements.lock` | 跨平台运行时依赖锁（含 SHA-256） |
+| `combined/requirements-dev.lock` | 运行时、测试与构建依赖锁（含 SHA-256） |
 | `combined/wheels/` | 发版构建锁包快照（46 个，含平台专用 wheel，勿整目录安装） |
 | `combined/conftest.py` | 测试共享替身工具（sys.modules 重量级依赖集中定义） |
+| `scripts/smoke_sdk_contract.py` | 真实 115 SDK 契约冒烟 |
+| `scripts/check_coverage.py` | 生产代码覆盖率与关键模块阈值门禁 |

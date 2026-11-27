@@ -1,0 +1,9 @@
+[run]
+omit =
+    test_*.py
+    conftest.py
+    scripts/*
+
+[report]
+show_missing = True
+skip_covered = False

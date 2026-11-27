@@ -19,7 +19,7 @@
 
 ### 前置条件
 
-- Python 3.12+（日常 CI 与发版流水线固定 3.14，本地环境建议对齐）
+- Python 3.12+（日常 CI 覆盖 3.12/3.14，发版流水线固定 3.14，本地环境建议对齐）
 - Git
 - （可选）PyInstaller — 构建单文件 exe
 
@@ -29,18 +29,13 @@
 git clone https://github.com/cdlongbow/115StrmTool.git
 cd 115StrmTool
 
-# 安装运行时依赖
-pip install fastapi uvicorn "httpx[http2]" websockets qrcode Pillow
+# 安装平台兼容的锁包
+python scripts/install_local_wheels.py combined/wheels
 
-# 安装发版锁包（不兼容当前 Python 的 wheel 会跳过）
-python - <<'PY'
-import subprocess, sys
-from pathlib import Path
-for wheel in sorted(Path('combined/wheels').glob('*.whl')):
-    subprocess.run([sys.executable, '-m', 'pip', 'install', str(wheel)])
-PY
+# 安装带哈希锁定的运行时、测试与构建依赖
+python -m pip install --require-hashes --find-links combined/wheels -r combined/requirements-dev.lock
 
-# （可选）安装桌面集成（仅 Windows）
+# 可选：安装桌面集成（仅 Windows）
 pip install pystray
 ```
 
@@ -57,7 +52,7 @@ python combined/main.py --no-tray
 ### 构建 exe
 
 ```bash
-pip install pyinstaller
+# PyInstaller 已包含在 requirements-dev.lock
 cd combined
 python build_exe.py
 # 输出: combined/dist/115网盘STRM生成与302工具.exe
@@ -115,11 +110,14 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（508 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（510 个） |
+| 覆盖率门禁 | `cd combined && python -m pytest --cov=. --cov-config=.coveragerc --cov-report=json:coverage.json && python ../scripts/check_coverage.py coverage.json` | 生产代码总覆盖率与关键模块阈值 |
+| 真实 SDK 契约 | `python scripts/smoke_sdk_contract.py` | 校验锁包安装后的关键符号与调用签名 |
+| 前端行为 | `python scripts/check_inline_js.py combined/web/index.html && node scripts/test_frontend.js` | 内联脚本语法与管理面板交互回归 |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
-测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行 Ruff、全量 pytest、每个测试文件独立进程执行、内联 JavaScript 语法检查和 Node 前端行为测试；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止。测试的重量级依赖替身统一定义在 `combined/conftest.py`，仅替换确实缺失的模块，已安装或已导入的真实模块保持不变。每个测试文件必须能单独运行通过，不依赖其他文件先跑的模块导入泄漏。Python 3.11 本地环境使用替身运行门禁；需要真实 SDK 时执行 `bash scripts/setup_py314.sh /tmp/opencode/py314-venv --test`，脚本会安装仓库锁包并校验解释器版本与 `pip check`。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，Python 3.14 下预期跳过，程序走纯 Python 生成路径；恢复 Rust 加速需先完成上游 0.1.6 配置与结果契约适配，再用真实 wheel 做非 mock 冒烟。
+测试说明：日常 CI（`.github/workflows/ci.yml`）在 Python 3.12 与 3.14 矩阵上运行哈希锁定依赖安装、`pip check`、真实 SDK 契约、Ruff、Node 前端行为测试、覆盖率门禁、全量 pytest 和每个测试文件独立进程执行。发版流水线在 Windows 上重复关键门禁，冻结 exe 冒烟通过后上传 exe、SHA-256 校验文件和依赖清单，失败时保留诊断产物。测试的重量级依赖替身统一定义在 `combined/conftest.py`，仅替换确实缺失的模块，已安装或已导入的真实模块保持不变。需要真实 SDK 时执行 `bash scripts/setup_py314.sh /tmp/opencode/py314-venv --test`，脚本会按哈希安装 `combined/requirements-dev.lock` 并校验解释器版本与依赖一致性。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，Python 3.14 下预期跳过，程序走纯 Python 生成路径；恢复 Rust 加速需先完成上游 0.1.6 配置与结果契约适配，再用真实 wheel 做非 mock 冒烟。
 
 ### 分支策略
 

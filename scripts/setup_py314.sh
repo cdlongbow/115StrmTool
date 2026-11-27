@@ -29,14 +29,14 @@ uv python install 3.14
 # 目录内无 uv，后续一律用系统 uv + --python
 uv venv "$VENV_DIR" --clear --python 3.14
 
-# 安装项目依赖与测试工具，优先使用仓库锁包；full_strm_sync 无 cp314 wheel 属预期跳过
+# 安装锁定依赖与测试工具；full_strm_sync 无 cp314 wheel 属预期跳过
 uv pip install --python "$VENV_DIR/bin/python" \
     --find-links "$REPO_ROOT/combined/wheels" \
-    -r combined/requirements.txt \
-    pytest pytest-asyncio pip
+    --require-hashes \
+    -r combined/requirements-dev.lock
 
 "$VENV_DIR/bin/python" -c "import sys; assert sys.version_info[:2] == (3, 14), sys.version"
-"$VENV_DIR/bin/python" -m pip check
+uv pip check --python "$VENV_DIR/bin/python"
 
 echo
 echo "Python 3.14 环境已就绪: $VENV_DIR"

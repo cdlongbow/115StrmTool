@@ -57,26 +57,20 @@ Emby 客户端 → 反向代理 (:8097) → Emby 服务器 (:8096)
 ## 开发
 
 ```bash
+# 在仓库根目录安装平台兼容的锁包
+python scripts/install_local_wheels.py combined/wheels
+
+# 安装带哈希锁定的运行时、测试与构建依赖
+python -m pip install --require-hashes --find-links combined/wheels -r combined/requirements-dev.lock
+
 cd combined
-
-# 先安装发版锁包（不兼容当前 Python 的 wheel 会跳过）
-python - <<'PY'
-import subprocess, sys
-from pathlib import Path
-for wheel in sorted(Path('wheels').glob('*.whl')):
-    subprocess.run([sys.executable, '-m', 'pip', 'install', str(wheel)])
-PY
-
-# 再安装运行时依赖
-pip install -r requirements.txt
-
 python main.py              # 控制台模式
 python main.py --no-tray    # Windows 强制控制台模式（无系统托盘）
 ```
 
 `combined/wheels/` 是发布构建使用的锁包快照（含平台专用 wheel，不能整目录直接安装）；发版流水线会自动按平台挑选安装。
 
-运行单元测试（508 个用例，需 Python 3.12+ 环境）：
+运行单元测试（510 个用例，需 Python 3.12+ 环境）：
 
 ```bash
 cd combined

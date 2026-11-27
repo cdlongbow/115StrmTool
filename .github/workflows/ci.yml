@@ -12,38 +12,46 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python 3.14
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install local wheels (skip platform-incompatible)
         run: |
           python -m pip install -U pip
           python scripts/install_local_wheels.py combined/wheels
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --find-links combined/wheels -r combined/requirements.txt
-          python -m pip install pytest pytest-asyncio
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes --find-links combined/wheels -r combined/requirements-dev.lock
 
       - name: Check dependency consistency
         run: python -m pip check
 
+      - name: Check real SDK contract
+        run: python scripts/smoke_sdk_contract.py
+
       - name: Check inline JavaScript syntax
         run: python scripts/check_inline_js.py combined/web/index.html
 
-      - name: Lint
-        run: |
-          pip install ruff
-          ruff check .
+      - name: Run frontend behavior tests
+        run: node scripts/test_frontend.js
 
-      - name: Run tests
+      - name: Lint
+        run: ruff check .
+
+      - name: Run tests with coverage
         working-directory: combined
-        run: python -m pytest -q
+        run: |
+          python -m pytest -q --cov=. --cov-config=.coveragerc --cov-report=term --cov-report=json:coverage.json
+          python ../scripts/check_coverage.py coverage.json
 
       - name: Run each test file standalone
         working-directory: combined

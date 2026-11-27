@@ -3,6 +3,7 @@
 """
 import hashlib
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,28 @@ CHECKSUM_SPEC = importlib.util.spec_from_file_location(
 assert CHECKSUM_SPEC and CHECKSUM_SPEC.loader
 write_sha256 = importlib.util.module_from_spec(CHECKSUM_SPEC)
 CHECKSUM_SPEC.loader.exec_module(write_sha256)
+
+COVERAGE_SPEC = importlib.util.spec_from_file_location(
+    "check_coverage", SCRIPTS_DIR / "check_coverage.py"
+)
+assert COVERAGE_SPEC and COVERAGE_SPEC.loader
+check_coverage = importlib.util.module_from_spec(COVERAGE_SPEC)
+COVERAGE_SPEC.loader.exec_module(check_coverage)
+
+
+def _coverage_file(tmp_path: Path, total: float, module_percent: float) -> Path:
+    """写入最小 coverage JSON 夹具"""
+    path = tmp_path / "coverage.json"
+    payload = {
+        "totals": {"percent_covered": total},
+        "files": {
+            name: {"summary": {"percent_covered": module_percent}}
+            for name in check_coverage.THRESHOLDS
+            if name != "TOTAL"
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def test_incompatible_required_wheel_is_skipped(tmp_path, monkeypatch):
@@ -79,3 +102,17 @@ def test_write_sha256_supports_chinese_filename(tmp_path):
     assert checksum_path.read_text(encoding="utf-8") == (
         f"{hashlib.sha256(payload).hexdigest()}  {target.name}\n"
     )
+
+
+def test_check_coverage_accepts_thresholds(tmp_path, monkeypatch):
+    """达到全部阈值时覆盖率门禁应通过"""
+    path = _coverage_file(tmp_path, 80.0, 100.0)
+    monkeypatch.setattr(check_coverage.sys, "argv", ["check_coverage.py", str(path)])
+    assert check_coverage.main() == 0
+
+
+def test_check_coverage_rejects_below_threshold(tmp_path, monkeypatch):
+    """任一关键模块低于阈值时覆盖率门禁应失败"""
+    path = _coverage_file(tmp_path, 80.0, 10.0)
+    monkeypatch.setattr(check_coverage.sys, "argv", ["check_coverage.py", str(path)])
+    assert check_coverage.main() == 1
