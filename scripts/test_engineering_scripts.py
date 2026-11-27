@@ -5,6 +5,7 @@ Renovate 工程配置回归测试
 import importlib.util
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -237,3 +238,50 @@ def test_frozen_smoke_checks_web_api_health_and_version(monkeypatch) -> None:
     assert requests[1][1] == "admin-token"
     assert requests[2][1] == ""
     assert requests[3][1] == ""
+
+
+def test_inline_js_check_uses_temp_file_and_timeout(tmp_path, monkeypatch) -> None:
+    """
+    内联 JS 检查应通过临时文件调用 node 并设置超时
+    """
+    script_path = ROOT / "scripts" / "check_inline_js.py"
+    spec = importlib.util.spec_from_file_location("check_inline_js", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    html_path = tmp_path / "index.html"
+    html_path.write_text("<script>const value = 1;</script>", encoding="utf-8")
+    observed = {}
+
+    def fake_run(command, **_kwargs):
+        observed["command"] = command
+        observed["timeout"] = _kwargs["timeout"]
+        observed["source"] = Path(command[-1]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.check_inline_js(html_path) == 0
+    assert observed["command"][:2] == ["node", "--check"]
+    assert observed["timeout"] == 30
+    assert observed["source"] == "const value = 1;"
+
+
+def test_inline_js_check_times_out_cleanly(tmp_path, monkeypatch) -> None:
+    """
+    node 语法检查超时时返回失败而不是挂起
+    """
+    script_path = ROOT / "scripts" / "check_inline_js.py"
+    spec = importlib.util.spec_from_file_location("check_inline_js", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    html_path = tmp_path / "index.html"
+    html_path.write_text("<script>const value = 1;</script>", encoding="utf-8")
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("node", 30)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.check_inline_js(html_path) == 1

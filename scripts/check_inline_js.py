@@ -3,6 +3,7 @@ HTML 内联 JavaScript 语法检查器：逐段调用 node --check
 """
 import subprocess
 import sys
+import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List
@@ -49,18 +50,25 @@ def check_inline_js(html_path: Path) -> int:
     if not parser.scripts:
         print(f"No inline scripts found: {html_path}")
         return 0
-    for index, script in enumerate(parser.scripts, start=1):
-        result = subprocess.run(
-            ["node", "--check"],
-            input=script,
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            print(f"Syntax error in {html_path} script block {index}")
-            print(result.stdout)
-            print(result.stderr)
-            return result.returncode or 1
+    with tempfile.TemporaryDirectory(prefix="inline-js-check-") as temp_dir:
+        for index, script in enumerate(parser.scripts, start=1):
+            script_path = Path(temp_dir) / f"inline-{index}.js"
+            script_path.write_text(script, encoding="utf-8")
+            try:
+                result = subprocess.run(
+                    ["node", "--check", str(script_path)],
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"Syntax check timed out in {html_path} script block {index}")
+                return 1
+            if result.returncode != 0:
+                print(f"Syntax error in {html_path} script block {index}")
+                print(result.stdout)
+                print(result.stderr)
+                return result.returncode or 1
     print(f"OK: {len(parser.scripts)} inline script block(s)")
     return 0
 
