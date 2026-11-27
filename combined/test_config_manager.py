@@ -307,7 +307,8 @@ class TestCipherMigration:
         pre_migration = list(cm_mod.CONFIG_BACKUP_DIR.glob("pre-migration-config-*.json"))
         assert len(pre_migration) == 1
         assert pre_migration[0].read_bytes() == original
-        assert pre_migration[0].stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert pre_migration[0].stat().st_mode & 0o777 == 0o600
 
     def test_legacy_migration_is_idempotent(self, monkeypatch):
         import config_manager as cm_mod
@@ -487,7 +488,8 @@ class TestCipherMigration:
         pre_migration = list(cm_mod.CONFIG_BACKUP_DIR.glob("pre-migration-config-*.json"))
         assert len(pre_migration) == 1
         assert pre_migration[0].read_bytes() == original
-        assert pre_migration[0].stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert pre_migration[0].stat().st_mode & 0o777 == 0o600
         assert list(cm_mod.CONFIG_BACKUP_DIR.glob("config-*.json")) == [recent]
 
     def test_wrong_key_with_valid_utf8_is_rejected(self, monkeypatch):
