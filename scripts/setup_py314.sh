@@ -26,13 +26,17 @@ pip install --break-system-packages -q uv
 uv python install 3.14
 
 # 创建 venv（--clear 允许覆盖已存在的 venv，保证脚本可重复执行）；
-# 目录内无 pip/uv，后续一律用系统 uv + --python
-uv venv "$VENV_DIR" --clear
+# 目录内无 uv，后续一律用系统 uv + --python
+uv venv "$VENV_DIR" --clear --python 3.14
 
-# 安装项目依赖与测试工具（真实 SDK；full_strm_sync 无 cp314 wheel 属预期跳过）
+# 安装项目依赖与测试工具，优先使用仓库锁包；full_strm_sync 无 cp314 wheel 属预期跳过
 uv pip install --python "$VENV_DIR/bin/python" \
+    --find-links "$REPO_ROOT/combined/wheels" \
     -r combined/requirements.txt \
-    pytest pytest-asyncio
+    pytest pytest-asyncio pip
+
+"$VENV_DIR/bin/python" -c "import sys; assert sys.version_info[:2] == (3, 14), sys.version"
+"$VENV_DIR/bin/python" -m pip check
 
 echo
 echo "Python 3.14 环境已就绪: $VENV_DIR"

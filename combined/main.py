@@ -30,6 +30,9 @@ P115_REDIRECT_THREAD = None
 ADMIN_SERVER = None
 P115_CLIENT_WRAPPER = None
 _shutdown_event = threading.Event()
+_service_lock = threading.RLock()
+_SERVER_START_TIMEOUT = 10.0
+_SERVER_STOP_TIMEOUT = 5.0
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -48,6 +51,52 @@ def _port_in_use(host: str, port: int) -> bool:
             return s.connect_ex((probe_host, port)) == 0
     except OSError:
         return False
+
+
+def _wait_for_server_started(server, thread, timeout: float = _SERVER_START_TIMEOUT) -> bool:
+    """
+    等待服务线程完成真实绑定或提前退出
+
+    :param server: uvicorn Server 实例
+    :param thread (threading.Thread): 服务线程
+    :param timeout (float): 最大等待秒数
+
+    :return bool: Server.started 为真时返回 True
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if getattr(server, "started", False):
+            return True
+        if not thread.is_alive():
+            return False
+        time.sleep(0.05)
+    return bool(getattr(server, "started", False))
+
+
+def _stop_server(server, thread, service_name: str) -> bool:
+    """
+    停止服务线程，超时或异常时保留句柄
+
+    :param server: uvicorn Server 实例
+    :param thread (threading.Thread): 服务线程
+    :param service_name (str): 服务名称
+
+    :return bool: 确认停止时返回 True
+    """
+    if server is None and (thread is None or not thread.is_alive()):
+        return True
+    try:
+        if server is not None:
+            server.should_exit = True
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=_SERVER_STOP_TIMEOUT)
+            if thread.is_alive():
+                logger.warning("%s 服务线程在 %ss 超时内未能退出", service_name, _SERVER_STOP_TIMEOUT)
+                return False
+    except Exception as exc:
+        logger.warning("停止 %s 服务时出现异常: %s", service_name, exc, exc_info=True)
+        return False
+    return True
 
 
 def signal_handler(sig, frame):
@@ -73,43 +122,62 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def _stop_emby():
+def _stop_emby() -> bool:
+    """
+    停止 Emby 代理，停止失败时保留服务句柄
+
+    :return bool: 确认停止时返回 True
+    """
     global EMBY_SERVER, EMBY_THREAD
-    if EMBY_SERVER is not None:
-        try:
-            EMBY_SERVER.should_exit = True
-            if EMBY_THREAD and EMBY_THREAD.is_alive():
-                EMBY_THREAD.join(timeout=5.0)
-                if EMBY_THREAD.is_alive():
-                    logger.warning("Emby 服务线程在 5s 超时内未能退出")
-        except Exception as e:
-            logger.warning("停止 Emby 服务时出现异常: %s", e, exc_info=True)
+    with _service_lock:
+        if not _stop_server(EMBY_SERVER, EMBY_THREAD, "Emby"):
+            return False
         EMBY_SERVER = None
         EMBY_THREAD = None
         set_emby_status(False)
+        return True
 
 
-def _stop_p115_redirect():
-    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, P115_CLIENT_WRAPPER
-    if P115_REDIRECT_SERVER is not None:
+def _teardown_p115_client() -> None:
+    """
+    停止签到并清空所有 P115 客户端引用，使旧包装器失效
+    """
+    global P115_CLIENT_WRAPPER
+    from checkin_scheduler import checkin_scheduler
+    from api_routes import set_client
+
+    checkin_scheduler.stop()
+    set_client(None)
+    set_p115_client_ref(None)
+    wrapper = P115_CLIENT_WRAPPER
+    P115_CLIENT_WRAPPER = None
+    if wrapper is not None:
         try:
-            P115_REDIRECT_SERVER.should_exit = True
-            if P115_REDIRECT_THREAD and P115_REDIRECT_THREAD.is_alive():
-                P115_REDIRECT_THREAD.join(timeout=5.0)
-                if P115_REDIRECT_THREAD.is_alive():
-                    logger.warning("P115 Redirect 服务线程在 5s 超时内未能退出")
-        except Exception as e:
-            logger.warning("停止 P115 跳转服务时出现异常: %s", e, exc_info=True)
+            wrapper.close()
+        except Exception as exc:
+            logger.warning("关闭 P115 客户端时出现异常: %s", exc, exc_info=True)
+        finally:
+            try:
+                wrapper._client = None
+            except Exception as exc:
+                logger.warning("失效旧 P115 客户端时出现异常: %s", exc, exc_info=True)
+
+
+def _stop_p115_redirect() -> bool:
+    """
+    停止 P115 跳转服务并统一清理客户端，停止失败时保留句柄
+
+    :return bool: 确认停止时返回 True
+    """
+    global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD
+    with _service_lock:
+        if not _stop_server(P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, "P115 Redirect"):
+            return False
         P115_REDIRECT_SERVER = None
         P115_REDIRECT_THREAD = None
+        _teardown_p115_client()
         set_p115_status(False)
-    # 关闭并释放旧客户端，避免热重载 Cookie 时连接池泄漏
-    if P115_CLIENT_WRAPPER is not None:
-        try:
-            P115_CLIENT_WRAPPER.close()
-        except Exception as e:
-            logger.warning("关闭 P115 客户端时出现异常: %s", e, exc_info=True)
-        P115_CLIENT_WRAPPER = None
+        return True
 
 
 def _shutdown_for_tray_exit():
@@ -141,108 +209,178 @@ def _shutdown_for_tray_exit():
     os._exit(0)
 
 
-def _start_emby():
+def _start_emby() -> bool:
+    """
+    启动 Emby 代理并在真实绑定成功后发布运行状态
+
+    :return bool: 启动成功或未启用时返回 True
+    """
     global EMBY_SERVER, EMBY_THREAD
-    config = config_manager.get().get("emby", {})
-    if not config.get("enabled") or not config.get("emby_host"):
-        logger.warning("Emby 代理未启用或地址未配置，跳过")
-        return
+    with _service_lock:
+        if EMBY_SERVER is not None or (EMBY_THREAD and EMBY_THREAD.is_alive()):
+            return True
+        config = config_manager.get().get("emby", {})
+        if not config.get("enabled") or not config.get("emby_host"):
+            logger.warning("Emby 代理未启用或地址未配置，跳过")
+            set_emby_status(False)
+            return True
 
-    emby_host = config["emby_host"]
-    if not emby_host.startswith(("http://", "https://")):
-        emby_host = "http://" + emby_host
+        emby_host = config["emby_host"]
+        if not emby_host.startswith(("http://", "https://")):
+            emby_host = "http://" + emby_host
 
-    from proxy_app import create_app
-    from config_manager import config_manager as cm
+        from proxy_app import create_app
+        from config_manager import config_manager as cm
 
-    pin_rules = cm.parse_pin_rules(config.get("pin_rules", ""))
-    app = create_app(
-        emby_host=emby_host,
-        pin_rules=pin_rules,
-        external_player_url=config.get("external_player_url", False),
-        external_player_list=config.get("external_player_list", []),
-        playback_mode=config.get("playback_mode", "disabled"),
-    )
-    try:
-        if _port_in_use(config.get("proxy_host", "0.0.0.0"), int(config.get("proxy_port", 8097))):
-            raise OSError(f"端口 {config.get('proxy_port', 8097)} 已被占用")
-        uv_config = Config(
-            app=app,
-            host=config.get("proxy_host", "0.0.0.0"),
-            port=int(config.get("proxy_port", 8097)),
-            log_config=None,
+        pin_rules = cm.parse_pin_rules(config.get("pin_rules", ""))
+        app = create_app(
+            emby_host=emby_host,
+            pin_rules=pin_rules,
+            external_player_url=config.get("external_player_url", False),
+            external_player_list=config.get("external_player_list", []),
+            playback_mode=config.get("playback_mode", "disabled"),
         )
-        EMBY_SERVER = Server(uv_config)
-        EMBY_THREAD = threading.Thread(target=EMBY_SERVER.run, daemon=True)
-        EMBY_THREAD.start()
-        set_emby_status(True)
-        logger.info("Emby 代理已启动: %s:%s -> %s", config.get("proxy_host"), config.get("proxy_port"), emby_host)
-    except Exception as e:
-        logger.error("Emby 代理启动失败: %s", e, exc_info=True)
-        set_emby_status(False)
+        try:
+            if _port_in_use(config.get("proxy_host", "0.0.0.0"), int(config.get("proxy_port", 8097))):
+                raise OSError(f"端口 {config.get('proxy_port', 8097)} 已被占用")
+            uv_config = Config(
+                app=app,
+                host=config.get("proxy_host", "0.0.0.0"),
+                port=int(config.get("proxy_port", 8097)),
+                log_config=None,
+            )
+            server = Server(uv_config)
+            thread = threading.Thread(target=server.run, daemon=True)
+            EMBY_SERVER = server
+            EMBY_THREAD = thread
+            thread.start()
+            if not _wait_for_server_started(server, thread):
+                _stop_server(server, thread, "Emby")
+                EMBY_SERVER = None
+                EMBY_THREAD = None
+                set_emby_status(False)
+                logger.error("Emby 代理启动失败: 服务线程未完成绑定")
+                return False
+            set_emby_status(True)
+            logger.info(
+                "Emby 代理已启动: %s:%s -> %s",
+                config.get("proxy_host"),
+                config.get("proxy_port"),
+                emby_host,
+            )
+            return True
+        except Exception as e:
+            logger.error("Emby 代理启动失败: %s", e, exc_info=True)
+            if EMBY_SERVER is not None:
+                _stop_server(EMBY_SERVER, EMBY_THREAD, "Emby")
+            EMBY_SERVER = None
+            EMBY_THREAD = None
+            set_emby_status(False)
+            return False
 
 
-def _restart_emby():
-    logger.info("正在重启 Emby 代理...")
-    _stop_emby()
-    config_manager.load()
-    _start_emby()
+def _restart_emby() -> bool:
+    """
+    重启 Emby 代理，停止失败时不再启动新实例
+
+    :return bool: 重启成功时返回 True
+    """
+    with _service_lock:
+        logger.info("正在重启 Emby 代理...")
+        if not _stop_emby():
+            return False
+        config_manager.load()
+        return _start_emby()
 
 
-def _start_p115():
+def _start_p115() -> bool:
+    """
+    启动 P115 跳转服务并在真实绑定成功后发布运行状态
+
+    :return bool: 启动成功、未启用或未配置 Cookie 时返回 True
+    """
     global P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, P115_CLIENT_WRAPPER
-    config = config_manager.get().get("p115", {})
-    if not config.get("enabled"):
-        logger.warning("P115 STRM 助手未启用，跳过")
-        return
+    with _service_lock:
+        if P115_REDIRECT_SERVER is not None or (P115_REDIRECT_THREAD and P115_REDIRECT_THREAD.is_alive()):
+            return True
+        config = config_manager.get().get("p115", {})
+        cookie = str(config.get("cookie") or "").strip()
+        if not config.get("enabled") or not cookie:
+            logger.warning("P115 STRM 助手未启用或 Cookie 未配置，跳过 302 跳转服务")
+            _teardown_p115_client()
+            set_p115_status(False)
+            return True
 
-    cookie = config.get("cookie", "")
-    if not cookie:
-        logger.warning("P115 Cookie 未配置，跳过 302 跳转服务")
-        return
+        from p115_client_wrapper import P115ClientWrapper
+        from redirect_service import RedirectService
+        from api_routes import set_client
+        from app_ver import apply_app_ver_patch
 
-    from p115_client_wrapper import P115ClientWrapper
-    from redirect_service import RedirectService
-    from api_routes import set_client
-    from app_ver import apply_app_ver_patch
+        apply_app_ver_patch()
+        client = P115ClientWrapper(cookie)
+        P115_CLIENT_WRAPPER = client
+        set_client(client)
+        set_p115_client_ref(client)
 
-    apply_app_ver_patch()
-    client = P115ClientWrapper(cookie)
-    P115_CLIENT_WRAPPER = client
-    set_client(client)
-    set_p115_client_ref(client)
+        from checkin_scheduler import checkin_scheduler
+        checkin_scheduler.set_client(client)
+        checkin_scheduler.start()
 
-    # 启动签到调度器
-    from checkin_scheduler import checkin_scheduler
-    checkin_scheduler.set_client(client)
-    checkin_scheduler.start()
+        svc = RedirectService(client)
+        redirect_app = svc.create_app()
+        try:
+            if _port_in_use(config.get("redirect_host", "0.0.0.0"), int(config.get("redirect_port", 3333))):
+                raise OSError(f"端口 {config.get('redirect_port', 3333)} 已被占用")
+            uv_config = Config(
+                app=redirect_app,
+                host=config.get("redirect_host", "0.0.0.0"),
+                port=int(config.get("redirect_port", 3333)),
+                log_config=None,
+            )
+            server = Server(uv_config)
+            thread = threading.Thread(target=server.run, daemon=True)
+            P115_REDIRECT_SERVER = server
+            P115_REDIRECT_THREAD = thread
+            thread.start()
+            if not _wait_for_server_started(server, thread):
+                _stop_server(server, thread, "P115 Redirect")
+                P115_REDIRECT_SERVER = None
+                P115_REDIRECT_THREAD = None
+                _teardown_p115_client()
+                set_p115_status(False)
+                logger.error("P115 302 跳转服务启动失败: 服务线程未完成绑定")
+                return False
+            set_p115_status(True)
+            logger.info(
+                "P115 302 跳转服务已启动: %s:%s",
+                config.get("redirect_host"),
+                config.get("redirect_port"),
+            )
+            return True
+        except Exception as e:
+            logger.error("P115 302 跳转服务启动失败: %s", e, exc_info=True)
+            if P115_REDIRECT_SERVER is not None:
+                _stop_server(P115_REDIRECT_SERVER, P115_REDIRECT_THREAD, "P115 Redirect")
+            P115_REDIRECT_SERVER = None
+            P115_REDIRECT_THREAD = None
+            _teardown_p115_client()
+            set_p115_status(False)
+            return False
 
-    svc = RedirectService(client)
-    redirect_app = svc.create_app()
-    try:
-        if _port_in_use(config.get("redirect_host", "0.0.0.0"), int(config.get("redirect_port", 3333))):
-            raise OSError(f"端口 {config.get('redirect_port', 3333)} 已被占用")
-        uv_config = Config(
-            app=redirect_app,
-            host=config.get("redirect_host", "0.0.0.0"),
-            port=int(config.get("redirect_port", 3333)),
-            log_config=None,
-        )
-        P115_REDIRECT_SERVER = Server(uv_config)
-        P115_REDIRECT_THREAD = threading.Thread(target=P115_REDIRECT_SERVER.run, daemon=True)
-        P115_REDIRECT_THREAD.start()
-        set_p115_status(True)
-        logger.info("P115 302 跳转服务已启动: %s:%s", config.get("redirect_host"), config.get("redirect_port"))
-    except Exception as e:
-        logger.error("P115 302 跳转服务启动失败: %s", e, exc_info=True)
-        set_p115_status(False)
 
+def _restart_p115() -> bool:
+    """
+    重启 P115 服务，停止失败时不再启动新实例
 
-def _restart_p115():
-    logger.info("正在重启 P115 服务...")
-    _stop_p115_redirect()
-    config_manager.load()
-    _start_p115()
+    :return bool: 重启成功时返回 True
+    """
+    with _service_lock:
+        logger.info("正在重启 P115 服务...")
+        if not _stop_p115_redirect():
+            _teardown_p115_client()
+            return False
+        config_manager.load()
+        return _start_p115()
 
 
 def create_admin_app() -> FastAPI:
@@ -357,7 +495,8 @@ def main():
         from secrets import token_urlsafe
 
         admin_token = token_urlsafe(24)
-        config_manager.update({"admin_token": admin_token})
+        if not config_manager.update({"admin_token": admin_token}):
+            raise RuntimeError("管理令牌保存失败，请检查数据目录权限或磁盘空间")
     # 日志可通过管理接口读取，完整令牌不得落盘
     logger.info(
         "管理界面访问令牌已就绪（前 4 位 %s...），完整值见 config.json；"

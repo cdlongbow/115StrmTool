@@ -1,7 +1,7 @@
 from base64 import b64decode, b64encode, urlsafe_b64encode
 from re import IGNORECASE, compile as re_compile
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import Request
 
@@ -71,9 +71,19 @@ _RE_HOST_HEADER = re_compile(r"^(?:[A-Za-z0-9.\-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?
 
 ALLOWED_REDIRECT_SCHEMES = frozenset({
     "potplayer", "vlc", "vlc-x-callback", "iina", "infuse", "mpv-handler",
-    "nplayer", "nplayer-mac", "omniplayer", "figplayer", "senplayer",
-    "filebox", "stellar", "ddplay",
+    "nplayer", "nplayer-mac", "nplayer-http", "nplayer-https", "omniplayer",
+    "figplayer", "senplayer", "filebox", "stellar", "ddplay", "intent",
 })
+
+ALLOWED_INTENT_PACKAGES = frozenset({
+    "org.videolan.vlc",
+    "com.mxtech.videoplayer.ad",
+    "com.mxtech.videoplayer.pro",
+    "com.xyoye.dandanplay",
+})
+_INTENT_TARGET_RE = re_compile(r"^intent:(https?://[^#]+)#Intent;(.+);end$", IGNORECASE)
+_INTENT_PACKAGE_RE = re_compile(r"(?:^|;)package=([^;]+)", IGNORECASE)
+_INTENT_FALLBACK_RE = re_compile(r"(?:^|;)(?:S\.)?browser_fallback_url=", IGNORECASE)
 
 
 def is_safe_redirect_target(url: str, trusted_netloc: str) -> bool:
@@ -92,6 +102,23 @@ def is_safe_redirect_target(url: str, trusted_netloc: str) -> bool:
     except ValueError:
         return False
     scheme = (parsed.scheme or "").lower()
+    if scheme == "intent":
+        match = _INTENT_TARGET_RE.fullmatch(url)
+        if not match or not trusted_netloc:
+            return False
+        target = urlsplit(match.group(1))
+        extras = unquote(match.group(2))
+        package_match = _INTENT_PACKAGE_RE.search(extras)
+        if _INTENT_FALLBACK_RE.search(extras):
+            return False
+        return bool(
+            target.scheme in ("http", "https")
+            and target.netloc == trusted_netloc
+            and package_match
+            and package_match.group(1) in ALLOWED_INTENT_PACKAGES
+        )
+    if scheme in ("nplayer-http", "nplayer-https"):
+        return bool(trusted_netloc) and parsed.netloc == trusted_netloc
     if scheme in ALLOWED_REDIRECT_SCHEMES:
         return bool(parsed.netloc or parsed.path)
     if scheme in ("http", "https"):
@@ -143,7 +170,7 @@ def build_external_player_script(player_keys: list[str]) -> str | None:
     stellarplayer:'icon-StellarPlayer',mxplayer:'icon-MXPlayer',mxplayerpro:'icon-MXPlayer',
     ddplay:'icon-DDPlay'
   };
-  function makeBtn(p,url,title){
+  function makeBtn(p,url,title,label){
     var btn=document.createElement('button');
     btn.type='button';
     btn.className='detailButton emby-button emby-button-backdropfilter raised-backdropfilter detailButton-primary';
@@ -165,24 +192,25 @@ def build_external_player_script(player_keys: list[str]) -> str | None:
     }
     var span=document.createElement('span');
     span.className='button-text';
-    span.textContent=p.name;
+    span.textContent=label||p.name;
     content.appendChild(icon);
     content.appendChild(span);
     btn.appendChild(content);
     btn.addEventListener('click',function(){location.href=url;});
     return btn;
   }
-  function getPlayerUrl(item,key){
+  function getPlayerUrls(item,key){
     var arr=item&&item.ExternalUrls;
-    if(!Array.isArray(arr)) return null;
+    if(!Array.isArray(arr)) return [];
     var prefix=key+':';
+    var matches=[];
     for(var i=0;i<arr.length;i++){
       var it=arr[i];
       if(it&&typeof it.Name==='string'&&it.Name.indexOf(prefix)===0&&it.Url){
-        return {url:it.Url,title:it.Name.substring(prefix.length)};
+        matches.push({url:it.Url,title:it.Name.substring(prefix.length)});
       }
     }
-    return null;
+    return matches;
   }
   function showFlag(){
     return !!document.querySelector("div[is='emby-scroller']:not(.hide) .mediaInfo:not(.hide)");
@@ -194,10 +222,10 @@ def build_external_player_script(player_keys: list[str]) -> str | None:
     wrapper.id='ExternalPlayersBtns';
     wrapper.className='detailButtons flex align-items-flex-start flex-wrap-wrap detail-lineItem';
     PLAYERS.forEach(function(p){
-      var v=getPlayerUrl(item,p.key);
-      if(v&&v.url){
-        wrapper.appendChild(makeBtn(p,v.url,v.title));
-      }
+      var matches=getPlayerUrls(item,p.key);
+      matches.forEach(function(v){
+        wrapper.appendChild(makeBtn(p,v.url,v.title,v.title));
+      });
     });
     if(wrapper.childElementCount>0){
       anchor.insertAdjacentElement('afterend',wrapper);

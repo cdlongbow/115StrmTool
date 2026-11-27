@@ -24,12 +24,13 @@ def _sample_resp():
 @pytest.fixture
 def client():
     _client = MagicMock()
+    _client.is_ready.return_value = True
     _client.fs_files_app.return_value = _sample_resp()
     return _client
 
 
 @pytest.fixture
-def browse(client):
+def browse(client, monkeypatch):
     def _normalize_attr(info):
         """模拟 p115client.tool.attr.normalize_attr 对 Android API 字段的映射"""
         is_dir = int(info.get("fc", 1)) == 0
@@ -46,10 +47,15 @@ def browse(client):
     _client_mod = MagicMock()
     _client_mod.check_response = lambda resp: resp
 
+    config_module = MagicMock()
+    config_module.get.return_value = {
+        "p115": {"enabled": True, "cookie": "test-cookie"}
+    }
     with patch.dict(
         "sys.modules",
         {
             **stub_modules(API_HEAVY_DEPS),
+            "config_manager": config_module,
             "p115client": _client_mod,
             "p115client.tool": _tool_mod,
             "p115client.tool.attr": _attr_mod,
@@ -58,6 +64,8 @@ def browse(client):
         from api_routes import set_client
         import api_routes
 
+        monkeypatch.setattr(api_routes, "config_manager", config_module)
+        client._cookie = "test-cookie"
         set_client(client)
         yield api_routes.browse_directory
         set_client(None)

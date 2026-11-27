@@ -1,4 +1,5 @@
 import asyncio
+import queue
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -15,16 +16,30 @@ from p115_client_wrapper import P115ClientWrapper
 router = APIRouter(prefix="/api")
 
 _client: P115ClientWrapper = None
+_client_cookie: Optional[str] = None
+_sync_lock = threading.RLock()
+_sync_generator = None
+_sync_pending = False
+_sync_generation = 0
+_sync_cancel_requested = False
 
 
 def set_client(client: P115ClientWrapper):
-    global _client
-    _client = client
+    global _client, _client_cookie
+    with _sync_lock:
+        _client = client
+        _client_cookie = getattr(client, "_cookie", None) if client is not None else None
 
 
 def get_client() -> P115ClientWrapper:
+    p115_cfg = config_manager.get().get("p115", {})
+    configured_cookie = str(p115_cfg.get("cookie") or "").strip()
+    if not p115_cfg.get("enabled") or not configured_cookie:
+        raise ClientNotReadyError("P115 未启用或 Cookie 为空，请先完成配置")
     if _client is None:
         raise ClientNotReadyError("115 客户端未初始化，请先配置 Cookie")
+    if _client_cookie is not None and _client_cookie != configured_cookie:
+        raise ClientNotReadyError("115 客户端与当前 Cookie 配置不一致，请重启 P115 服务")
     if not _client.is_ready():
         raise ClientNotReadyError()
     return _client
@@ -42,49 +57,87 @@ async def select_directory() -> Dict:
 # 目录选择对话框超时（秒）。tkinter 在部分 Windows 环境下可能不弹窗或
 # 事件循环不转而永久阻塞，超时后返回空串，由前端回退到手动输入路径
 SELECT_DIRECTORY_TIMEOUT = 180.0
+_directory_requests: "queue.Queue[tuple[queue.Queue, threading.Event]]" = queue.Queue()
+_directory_worker_lock = threading.Lock()
+_directory_worker_thread: Optional[threading.Thread] = None
 
 
-def _select_directory_sync() -> str:
+def _directory_worker() -> None:
     """
-    在专用临时线程中打开目录选择对话框，带超时保护
+    在单一常驻线程中创建、使用和销毁 Tk 解释器
 
-    tkinter 的 Tk 解释器须在单一固定线程内创建与销毁，且不放入默认
-    线程池以免卡死的对话框占用公共工作线程；超时或异常时返回空串，
-    前端会回退到手动输入
-
-    :return str: 所选目录路径，取消 / 超时 / 异常时返回空串
+    :return None: 工作线程退出时返回
     """
-    holder: List[str] = []
-
-    def _run() -> None:
+    while True:
+        result_queue, cancel_event = _directory_requests.get()
         try:
             import tkinter
             from tkinter import filedialog
+
             root = tkinter.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
+
+            def _cancel_if_requested() -> None:
+                if cancel_event.is_set():
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                    return
+                root.after(50, _cancel_if_requested)
+
+            root.after(50, _cancel_if_requested)
             try:
                 path = filedialog.askdirectory(
                     title="选择 STRM 输出目录", parent=root
                 )
-                holder.append(path or "")
+                result_queue.put(path or "")
             finally:
-                root.destroy()
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("目录选择对话框异常: %s", e, exc_info=True)
-            holder.append("")
+            result_queue.put("")
+        finally:
+            _directory_requests.task_done()
 
-    worker = threading.Thread(
-        target=_run, daemon=True, name="select-directory"
-    )
-    worker.start()
-    worker.join(timeout=SELECT_DIRECTORY_TIMEOUT)
-    if worker.is_alive():
+
+def _ensure_directory_worker() -> None:
+    """
+    按需启动唯一的目录选择工作线程
+
+    :return None: 无返回值
+    """
+    global _directory_worker_thread
+    with _directory_worker_lock:
+        if _directory_worker_thread is None or not _directory_worker_thread.is_alive():
+            _directory_worker_thread = threading.Thread(
+                target=_directory_worker, daemon=True, name="select-directory"
+            )
+            _directory_worker_thread.start()
+
+
+def _select_directory_sync() -> str:
+    """
+    在常驻 Tk 工作线程中打开目录选择对话框，带超时保护
+
+    :return str: 所选目录路径，取消 / 超时 / 异常时返回空串
+    """
+    result_queue: "queue.Queue[str]" = queue.Queue(maxsize=1)
+    cancel_event = threading.Event()
+    _ensure_directory_worker()
+    _directory_requests.put((result_queue, cancel_event))
+    try:
+        return result_queue.get(timeout=SELECT_DIRECTORY_TIMEOUT)
+    except queue.Empty:
+        cancel_event.set()
         logger.warning(
             "目录选择对话框 %ss 内无响应，回退手动输入", SELECT_DIRECTORY_TIMEOUT
         )
         return ""
-    return holder[0] if holder else ""
 
 
 _STATUS_REMOTE_TTL = 30.0
@@ -205,6 +258,19 @@ def browse_directory(pid: str = "0", path: str = ""):
         raise ServiceError(f"浏览目录失败: {e}")
 
 
+def _set_sync_progress(generator, phase: str, message: str) -> None:
+    """
+    在生成器支持时写入同步终态
+
+    :param generator: STRM 生成器
+    :param phase (str): 进度阶段
+    :param message (str): 进度说明
+    """
+    setter = getattr(generator, "_set_progress", None)
+    if callable(setter):
+        setter(phase, message=message)
+
+
 def _launch_sync(sync_type: str) -> Dict[str, Any]:
     """
     启动同步任务：读取配置并在后台线程执行，立即返回，避免阻塞事件循环
@@ -217,6 +283,7 @@ def _launch_sync(sync_type: str) -> Dict[str, Any]:
 
     :return Dict: 启动结果，status 为 started 或 error
     """
+    global _sync_generator, _sync_pending, _sync_generation, _sync_cancel_requested
     try:
         client = get_client()
     except ClientNotReadyError as e:
@@ -228,37 +295,84 @@ def _launch_sync(sync_type: str) -> Dict[str, Any]:
         return {"status": "error", "message": "STRM 跳转地址未配置，请先在 P115 配置中填写服务地址"}
     from strm_generator import get_strm_generator
 
-    gen = get_strm_generator(client, p115_cfg.get("strm_url_prefix", ""))
-    if gen.is_syncing():
-        return {"status": "error", "message": "同步正在进行中"}
-    gen.set_config(
-        rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
-        download_mediaext=p115_cfg.get("download_mediaext", ""),
-        auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
-        overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
-        cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
-        use_rust=False,
-        fast_scan=p115_cfg.get("fast_scan", True),
-    )
-    sync_fn = gen.full_sync if sync_type == "full" else gen.incremental_sync
-    mappings = p115_cfg.get("paths", [])
+    with _sync_lock:
+        if _sync_pending:
+            return {"status": "error", "message": "同步任务正在启动"}
+        if _sync_generator is not None and _sync_generator.is_syncing():
+            return {"status": "error", "message": "同步正在进行中"}
+        gen = get_strm_generator(client, p115_cfg.get("strm_url_prefix", ""))
+        gen.set_config(
+            rmt_mediaext=p115_cfg.get("rmt_mediaext", ""),
+            download_mediaext=p115_cfg.get("download_mediaext", ""),
+            auto_download_mediainfo=p115_cfg.get("auto_download_mediainfo", False),
+            overwrite_mode=p115_cfg.get("overwrite_mode", "never"),
+            cleanup_deleted=p115_cfg.get("cleanup_deleted_strm", False),
+            use_rust=False,
+            fast_scan=p115_cfg.get("fast_scan", True),
+        )
+        sync_fn = gen.full_sync if sync_type == "full" else gen.incremental_sync
+        mappings = p115_cfg.get("paths", [])
+        _sync_generator = gen
+        _sync_pending = True
+        _sync_cancel_requested = False
+        _sync_generation += 1
+        generation = _sync_generation
 
-    def _runner():
+        def _runner():
+            global _sync_pending, _sync_cancel_requested
+            reset_cancel = getattr(gen, "reset_cancel", None)
+            had_instance_reset = "reset_cancel" in getattr(gen, "__dict__", {})
+            if reset_cancel is not None:
+                def _guarded_reset_cancel():
+                    reset_cancel()
+                    with _sync_lock:
+                        if generation == _sync_generation and _sync_cancel_requested:
+                            gen.cancel()
+
+                gen.reset_cancel = _guarded_reset_cancel
+            try:
+                with _sync_lock:
+                    if generation != _sync_generation or _sync_cancel_requested:
+                        return
+                sync_fn(mappings)
+            except Exception as e:
+                logger.error("同步线程异常: %s", e, exc_info=True)
+            finally:
+                if reset_cancel is not None:
+                    try:
+                        if had_instance_reset:
+                            gen.reset_cancel = reset_cancel
+                        else:
+                            delattr(gen, "reset_cancel")
+                    except Exception:
+                        logger.warning("恢复同步取消方法失败", exc_info=True)
+                with _sync_lock:
+                    if generation == _sync_generation:
+                        if _sync_cancel_requested:
+                            progress = gen.get_progress()
+                            if progress.get("phase") == "cancelling":
+                                _set_sync_progress(gen, "cancelled", "同步已取消")
+                        _sync_pending = False
+                        _sync_cancel_requested = False
+
         try:
-            sync_fn(mappings)
-        except Exception as e:
-            logger.error("同步线程异常: %s", e, exc_info=True)
-
-    threading.Thread(
-        target=_runner, daemon=True, name=f"sync-{sync_type}"
-    ).start()
+            threading.Thread(
+                target=_runner, daemon=True, name=f"sync-{sync_type}"
+            ).start()
+        except Exception as exc:
+            _sync_pending = False
+            _sync_cancel_requested = False
+            logger.error("同步线程启动失败: %s", exc, exc_info=True)
+            return {"status": "error", "message": "同步任务启动失败"}
     return {"status": "started", "message": "同步任务已启动"}
 
 
 @router.get("/sync/progress")
 def get_sync_progress() -> Dict[str, Any]:
-    from strm_generator import get_strm_generator
-    gen = get_strm_generator(_client, "")
+    with _sync_lock:
+        gen = _sync_generator
+    if gen is None:
+        return {"phase": "idle", "current": 0, "total": 0, "message": ""}
     return gen.get_progress()
 
 
@@ -274,10 +388,27 @@ def start_incremental_sync() -> Dict[str, Any]:
 
 @router.post("/sync/cancel")
 def cancel_sync() -> Dict[str, Any]:
-    from strm_generator import get_strm_generator
-    gen = get_strm_generator(_client)
-    gen.cancel()
+    global _sync_cancel_requested
+    with _sync_lock:
+        gen = _sync_generator
+        active = _sync_pending or (gen is not None and gen.is_syncing())
+        if not active:
+            return {"status": "idle", "message": "当前没有同步任务"}
+        _sync_cancel_requested = True
+        if gen is not None:
+            gen.cancel()
     return {"status": "cancelled"}
+
+
+def _ensure_sync_inactive() -> None:
+    """
+    确认当前没有启动中或运行中的同步任务
+
+    :raises ServiceError: 同步任务活跃时返回 409
+    """
+    with _sync_lock:
+        if _sync_pending or (_sync_generator is not None and _sync_generator.is_syncing()):
+            raise ServiceError("同步任务正在进行中，请等待完成后再执行", 409)
 
 
 @router.get("/sync/history")
@@ -287,14 +418,18 @@ def get_sync_history(limit: int = 20) -> List[Dict]:
 
 @router.post("/sync/history/clear")
 def clear_sync_history() -> Dict[str, Any]:
-    db.clear_sync_history()
+    with _sync_lock:
+        _ensure_sync_inactive()
+        db.clear_sync_history()
     return {"success": True}
 
 
 @router.post("/sync/reset-baseline")
 def reset_sync_baseline() -> Dict[str, Any]:
-    db.clear_all_files()
-    db.clear_sync_history()
+    with _sync_lock:
+        _ensure_sync_inactive()
+        db.clear_all_files()
+        db.clear_sync_history()
     return {"success": True}
 
 
@@ -330,10 +465,12 @@ def checkin_manual_exec() -> Dict:
 
 @router.post("/checkin/config")
 def checkin_save_config(data: dict) -> Dict:
-    config_manager.update({"checkin": {
+    updates = {"checkin": {
         "enabled": bool(data.get("enabled", False)),
         "time_range": str(data.get("time_range", "06:00-09:00")),
-    }})
+    }}
+    if not config_manager.update(updates):
+        raise ServiceError("配置保存失败，请检查数据目录权限或磁盘空间")
     return {"status": "ok", "message": "签到配置已保存"}
 
 
@@ -359,6 +496,10 @@ def check_qrcode(payload: dict) -> Dict:
     try:
         result = client.check_qrcode(payload)
         if result:
+            if result.get("status") == "success":
+                saved_cookie = config_manager.get().get("p115", {}).get("cookie") or ""
+                if result.get("cookie") and saved_cookie != result.get("cookie"):
+                    return {"status": "error", "message": "登录成功但配置保存失败，请重试"}
             return result
         return {"status": "pending"}
     except Exception as e:

@@ -4,7 +4,9 @@ WebDAV 远端配置备份模块
 档案打包/自检/上传/清理/列表/下载/恢复；依赖纪律：httpx（已捆绑）+标准库，
 协议错误统一收口 ServiceError 供 API 层转译
 """
+import copy
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -15,14 +17,19 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote, unquote, urljoin
+from urllib.parse import quote, unquote, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import httpx
 
 from _paths import _BASE_DIR, CHECKIN_STATE_FILE, CONFIG_FILE, CONFIG_BACKUP_DIR, CONFIG_KEY_FILE  # noqa: F401
 from app_metadata import APP_VERSION
-from config_manager import config_manager
+from config_manager import (
+    _decrypt_secrets_strict,
+    _set_posix_permissions,
+    _validate_config_strict,
+    config_manager,
+)
 from exceptions import BadRequestError, NotFoundError, ServiceError
 from logger import logger
 
@@ -39,6 +46,60 @@ _PROPFIND_BODY = (
 ).encode("utf-8")
 _MANIFEST_NAME = "manifest.json"
 _REQUIRED_MEMBERS = ("config.json", _MANIFEST_NAME)
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_MEMBER_BYTES = 16 * 1024 * 1024
+MAX_TOTAL_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 32
+MAX_COMPRESSION_RATIO = 1000
+
+
+def _is_loopback_host(host: str) -> bool:
+    """
+    判断主机名或 IP 是否指向本机回环地址
+
+    :param host (str): 主机名或 IP 文本
+
+    :return bool: 回环地址返回 True
+    """
+    normalized = (host or "").strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_webdav_url(url: str) -> None:
+    """
+    校验 WebDAV 地址，禁止非回环 HTTP 与 HTTPS 降级
+
+    :param url (str): 待校验 URL
+
+    :raises ServiceError: 协议或主机不符合安全要求
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ServiceError("WebDAV 地址必须以 http:// 或 https:// 开头并包含主机名")
+    if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        raise ServiceError("非回环 WebDAV 地址必须使用 HTTPS")
+
+
+def _validate_remote_rel(rel: str) -> str:
+    """
+    校验远端相对路径，拒绝目录穿越与 Windows 分隔符
+
+    :param rel (str): 远端相对路径
+
+    :return str: 校验通过的相对路径
+
+    :raises ServiceError: 路径包含非法成分
+    """
+    if not isinstance(rel, str) or "\x00" in rel or "\\" in rel:
+        raise ServiceError("远端路径包含非法字符")
+    if any(part in (".", "..") for part in rel.split("/")):
+        raise ServiceError("远端路径不能包含 . 或 ..")
+    return rel
 
 
 def _friendly_http_error(resp: httpx.Response, action: str) -> str:
@@ -92,15 +153,27 @@ class WebdavClient:
         :param password (str): 密码
         :param transport (httpx.BaseTransport): 注入的 httpx transport，测试替换真实网络
         """
-        if not base_url.startswith(("http://", "https://")):
-            raise ServiceError("WebDAV 地址必须以 http:// 或 https:// 开头")
+        _validate_webdav_url(base_url)
         self._base = base_url if base_url.endswith("/") else base_url + "/"
         auth = (username, password) if (username or password) else None
+
+        def _redirect_guard(response: httpx.Response) -> None:
+            if response.status_code not in (301, 302, 303, 307, 308):
+                return
+            location = response.headers.get("location")
+            if not location:
+                return
+            next_url = urljoin(str(response.request.url), location)
+            if response.request.url.scheme == "https" and urlsplit(next_url).scheme == "http":
+                raise ServiceError("拒绝 WebDAV HTTPS 请求降级为 HTTP")
+            _validate_webdav_url(next_url)
+
         self._client = httpx.Client(
             auth=auth,
             follow_redirects=True,
             timeout=BACKUP_TIMEOUT,
             transport=transport,
+            event_hooks={"response": [_redirect_guard]},
         )
 
     def close(self):
@@ -119,6 +192,7 @@ class WebdavClient:
 
         :return str: 完整 URL
         """
+        _validate_remote_rel(rel)
         return urljoin(self._base, quote(rel.lstrip("/"), safe="/"))
 
     def _request(self, method, rel, **kwargs):
@@ -167,7 +241,8 @@ class WebdavClient:
 
         :raises ServiceError: 某层创建被拒绝或网络失败
         """
-        parts = [p for p in (dir_rel or "").strip("/").split("/") if p and p != ".."]
+        _validate_remote_rel(dir_rel or "")
+        parts = [p for p in (dir_rel or "").strip("/").split("/") if p]
         for i in range(len(parts)):
             target = "/".join(parts[: i + 1]) + "/"
             resp = self._request("MKCOL", target)
@@ -235,23 +310,37 @@ class WebdavClient:
         if resp.status_code not in (200, 201, 204):
             raise ServiceError(_friendly_http_error(resp, "上传"))
 
-    def get(self, rel):
+    def get(self, rel, max_bytes: int = MAX_ARCHIVE_BYTES):
         """
-        下载单个对象
+        下载单个对象并限制读取字节数
 
         :param rel (str): 相对路径
+        :param max_bytes (int): 允许下载的最大字节数
 
         :return bytes: 对象内容
 
         :raises NotFoundError: 远端对象不存在
-        :raises ServiceError: 下载被拒绝或网络失败
+        :raises ServiceError: 下载被拒绝、网络失败或内容超限
         """
-        resp = self._request("GET", rel)
-        if resp.status_code == 404:
-            raise NotFoundError("远端对象不存在")
-        if resp.status_code != 200:
-            raise ServiceError(_friendly_http_error(resp, "下载"))
-        return resp.content
+        chunks = []
+        total = 0
+        try:
+            with self._client.stream("GET", self._url(rel)) as resp:
+                if resp.status_code == 404:
+                    raise NotFoundError("远端对象不存在")
+                if resp.status_code != 200:
+                    raise ServiceError(_friendly_http_error(resp, "下载"))
+                content_length = resp.headers.get("content-length")
+                if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+                    raise ServiceError("下载内容超过大小上限")
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ServiceError("下载内容超过大小上限")
+                    chunks.append(chunk)
+        except httpx.RequestError as exc:
+            raise ServiceError("网络不可达：" + str(exc))
+        return b"".join(chunks)
 
     def delete(self, rel):
         """
@@ -344,7 +433,10 @@ class BackupService:
         :return Optional: 子目录串
         """
         cfg = cfg or config_manager.get().get("webdav", {})
-        return (cfg.get("remote_subdir") or "").strip("/")
+        raw = (cfg.get("remote_subdir") or "").strip()
+        _validate_remote_rel(raw)
+        parts = [part for part in raw.strip("/").split("/") if part]
+        return "/".join(parts)
 
     @staticmethod
     def _keep_count(cfg: Optional[Dict[str, Any]] = None) -> int:
@@ -374,11 +466,19 @@ class BackupService:
         """
         if not CONFIG_FILE.exists():
             raise ServiceError("config.json 不存在，无法生成档案")
+        try:
+            config_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ServiceError("读取配置失败，无法生成档案：" + str(exc))
+        if not isinstance(config_data, dict):
+            raise ServiceError("配置顶层必须是 JSON 对象，无法生成档案")
+        config_data.pop("admin_token", None)
+        config_bytes = json.dumps(config_data, ensure_ascii=False, indent=2).encode("utf-8")
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         archive_path = staging_dir / f"{BACKUP_NAME_PREFIX}{ts}{BACKUP_NAME_SUFFIX}"
-        members: Dict[str, Path] = {"config.json": CONFIG_FILE}
+        members: Dict[str, bytes] = {"config.json": config_bytes}
         if CHECKIN_STATE_FILE.exists():
-            members["checkin_state.json"] = CHECKIN_STATE_FILE
+            members["checkin_state.json"] = CHECKIN_STATE_FILE.read_bytes()
         manifest = {
             "app_version": APP_VERSION,
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -386,7 +486,7 @@ class BackupService:
         }
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for arcname in sorted(members):
-                data = members[arcname].read_bytes()
+                data = members[arcname]
                 zf.writestr(arcname, data)
                 manifest["members"].append(
                     {"path": arcname, "size": len(data), "sha256": self._sha256_bytes(data)}
@@ -403,7 +503,23 @@ class BackupService:
         :return Tuple: (是否通过, 失败原因)
         """
         try:
+            if archive_path.stat().st_size > MAX_ARCHIVE_BYTES:
+                return False, "档案超过大小上限"
             with zipfile.ZipFile(archive_path) as zf:
+                infos = zf.infolist()
+                if len(infos) > MAX_ARCHIVE_MEMBERS:
+                    return False, "档案成员数量超过上限"
+                total_size = 0
+                for info in infos:
+                    total_size += info.file_size
+                    if info.file_size > MAX_MEMBER_BYTES:
+                        return False, f"成员超过大小上限: {info.filename}"
+                    if info.file_size > 1024 * 1024 and info.compress_size > 0:
+                        ratio = info.file_size / info.compress_size
+                        if ratio > MAX_COMPRESSION_RATIO:
+                            return False, f"成员压缩比异常: {info.filename}"
+                if total_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                    return False, "档案解压后总大小超过上限"
                 bad = zf.testzip()
                 if bad is not None:
                     return False, f"ZIP损坏条目: {bad}"
@@ -418,9 +534,14 @@ class BackupService:
                     manifest = json.loads(zf.read(_MANIFEST_NAME).decode("utf-8"))
                 except (ValueError, UnicodeDecodeError) as exc:
                     return False, "manifest.json 无法解析: " + str(exc)
+                if not isinstance(manifest, dict):
+                    return False, "manifest.json 顶层必须是对象"
+                manifest_members = manifest.get("members")
+                if not isinstance(manifest_members, list):
+                    return False, "manifest.json 成员清单格式错误"
                 declared = {
-                    item.get("path"): item for item in manifest.get("members", [])
-                    if isinstance(item, dict)
+                    item.get("path"): item for item in manifest_members
+                    if isinstance(item, dict) and isinstance(item.get("path"), str)
                 }
                 if not declared:
                     return False, "manifest.json 成员清单为空"
@@ -518,8 +639,8 @@ class BackupService:
             data = archive.read_bytes()
             client.put(rel, data)
             uploaded = client.get(rel)
-            if len(uploaded) != len(data):
-                raise ServiceError("上传后远端大小与本地不一致，本轮未做滚动清理")
+            if len(uploaded) != len(data) or self._sha256_bytes(uploaded) != self._sha256_bytes(data):
+                raise ServiceError("上传后远端内容与本地不一致，本轮未做滚动清理")
             pruned = self._prune(client, subdir, self._keep_count(cfg))
             self._record("backup", True, name=name, size=len(data), pruned=pruned)
             return self.last_result()
@@ -530,7 +651,10 @@ class BackupService:
             if staging is not None and staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
             if client is not None:
-                client.close()
+                try:
+                    client.close()
+                except Exception as exc:
+                    logger.warning("关闭 WebDAV 客户端失败: %s", exc, exc_info=True)
             self._task_lock.release()
 
     def _prune(self, client: WebdavClient, subdir: str, keep: int) -> int:
@@ -604,6 +728,7 @@ class BackupService:
         """
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         tmp.write_bytes(data)
+        _set_posix_permissions(tmp, 0o600)
         os.replace(tmp, path)
 
     def restore_backup(self, name: str) -> Dict[str, Any]:
@@ -625,7 +750,7 @@ class BackupService:
         staging: Optional[Path] = None
         try:
             client = self._build_client()
-            data = client.get(self._remote_rel(self._remote_dir(), name))
+            data = client.get(self._remote_rel(self._remote_dir(), name), max_bytes=MAX_ARCHIVE_BYTES)
             staging = Path(tempfile.mkdtemp(prefix="115strm-restore-"))
             tmp_archive = staging / name
             tmp_archive.write_bytes(data)
@@ -636,30 +761,67 @@ class BackupService:
             with zipfile.ZipFile(tmp_archive) as zf:
                 names = zf.namelist()
                 new_config = zf.read("config.json")
-                # 兼容旧档案：只有本机缺少密钥时才采用档案内附带的 config.key
                 new_key = zf.read("config.key") if "config.key" in names else None
                 new_state = zf.read("checkin_state.json") if "checkin_state.json" in names else None
-            # 与 ConfigManager._write 持同一把锁：防止恢复覆盖与面板保存并发交叉，
-            # 也保证随后的 load 读到的就是本轮恢复内容（RLock 同线程可重入）
+            try:
+                config_data = json.loads(new_config.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ServiceError("档案 config.json 无法解析，已保持当前配置：" + str(exc))
+            if not isinstance(config_data, dict):
+                raise ServiceError("档案 config.json 顶层必须是对象，已保持当前配置")
+            try:
+                _validate_config_strict(copy.deepcopy(config_data))
+            except Exception as exc:
+                raise ServiceError("档案 config.json 校验失败，已保持当前配置：" + str(exc))
             with config_manager._lock:
+                pre_config = config_manager.get()
+                current_token = pre_config.get("admin_token") or ""
+                config_data.pop("admin_token", None)
+                if current_token:
+                    config_data["admin_token"] = current_token
+                sanitized_config = json.dumps(config_data, ensure_ascii=False, indent=2).encode("utf-8")
                 pre_json = CONFIG_FILE.read_bytes() if CONFIG_FILE.exists() else None
                 pre_key = key_file.read_bytes() if key_file.exists() else None
-                guard_base = "restore-guard-" + datetime.now().strftime("%Y%m%d-%H%M%S")
-                CONFIG_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                if pre_json is not None:
-                    (CONFIG_BACKUP_DIR / f"{guard_base}.json").write_bytes(pre_json)
-                if pre_key is not None:
-                    (CONFIG_BACKUP_DIR / f"{guard_base}.key").write_bytes(pre_key)
+                pre_state = CHECKIN_STATE_FILE.read_bytes() if CHECKIN_STATE_FILE.exists() else None
+                adopted_key = pre_key if pre_key is not None else new_key
                 try:
-                    self._atomic_write_bytes(CONFIG_FILE, new_config)
-                    if new_key is not None and not key_file.exists():
-                        self._atomic_write_bytes(key_file, new_key)
+                    _decrypt_secrets_strict(copy.deepcopy(config_data), adopted_key)
+                except ValueError as exc:
+                    raise ServiceError("档案密钥无法解密配置，已保持当前配置：" + str(exc))
+                guard_base = "restore-guard-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                try:
+                    CONFIG_BACKUP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    _set_posix_permissions(CONFIG_BACKUP_DIR, 0o700)
+                    if pre_json is not None:
+                        guard_path = CONFIG_BACKUP_DIR / f"{guard_base}.json"
+                        guard_path.write_bytes(pre_json)
+                        _set_posix_permissions(guard_path, 0o600)
+                    if pre_key is not None:
+                        guard_path = CONFIG_BACKUP_DIR / f"{guard_base}.key"
+                        guard_path.write_bytes(pre_key)
+                        _set_posix_permissions(guard_path, 0o600)
+                    if pre_state is not None:
+                        guard_path = CONFIG_BACKUP_DIR / f"{guard_base}.state"
+                        guard_path.write_bytes(pre_state)
+                        _set_posix_permissions(guard_path, 0o600)
+                except OSError as exc:
+                    raise ServiceError("创建恢复快照失败，已保持当前配置：" + str(exc))
+                try:
+                    self._atomic_write_bytes(CONFIG_FILE, sanitized_config)
+                    if adopted_key is not None and pre_key is None:
+                        self._atomic_write_bytes(key_file, adopted_key)
                     if new_state is not None:
                         self._atomic_write_bytes(CHECKIN_STATE_FILE, new_state)
-                except OSError as exc:
-                    self._undo_pre(pre_json, pre_key, key_file)
+                    config_manager.load()
+                except Exception as exc:
+                    try:
+                        self._undo_pre(pre_json, pre_key, key_file, pre_state, CHECKIN_STATE_FILE)
+                    except Exception as rollback_exc:
+                        logger.error("恢复回滚失败: %s", rollback_exc, exc_info=True)
+                    config_manager._config = pre_config
+                    if isinstance(exc, ServiceError):
+                        raise
                     raise ServiceError("恢复中途失败，已还原到恢复前配置：" + str(exc))
-            config_manager.load()
             self._rotate_guards()
             self._record("restore", True, name=name, guard=guard_base)
             return self.last_result()
@@ -670,16 +832,28 @@ class BackupService:
             if staging is not None and staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
             if client is not None:
-                client.close()
+                try:
+                    client.close()
+                except Exception as exc:
+                    logger.warning("关闭 WebDAV 客户端失败: %s", exc, exc_info=True)
             self._task_lock.release()
 
     @staticmethod
-    def _undo_pre(pre_json: Optional[bytes], pre_key: Optional[bytes], key_file: Path) -> None:
+    def _undo_pre(
+        pre_json: Optional[bytes],
+        pre_key: Optional[bytes],
+        key_file: Path,
+        pre_state: Optional[bytes] = None,
+        state_file: Optional[Path] = None,
+    ) -> None:
         """
-        用恢复前内存副本把配置文件与密钥写回（还原兜底）
+        用恢复前内存副本把配置、密钥与签到状态写回
 
-        :param pre_json-pre_key (bytes): 恢复前 config.json 与 config.key 内容，None 表示原本不存在
+        :param pre_json (bytes): 恢复前 config.json 内容，None 表示原本不存在
+        :param pre_key (bytes): 恢复前 config.key 内容，None 表示原本不存在
         :param key_file (Path): 密钥路径
+        :param pre_state (bytes): 恢复前签到状态内容，None 表示原本不存在
+        :param state_file (Path): 签到状态路径
 
         :return None:
         """
@@ -691,18 +865,27 @@ class BackupService:
             BackupService._atomic_write_bytes(key_file, pre_key)
         else:
             key_file.unlink(missing_ok=True)
+        if state_file is not None:
+            if pre_state is not None:
+                BackupService._atomic_write_bytes(state_file, pre_state)
+            else:
+                state_file.unlink(missing_ok=True)
 
     @staticmethod
     def _rotate_guards() -> None:
         """
-        guard 快照仅保留最近 5 组，旧组成对清理
+        guard 快照仅保留最近 5 组，清理失败只记录日志
 
         :return None:
         """
-        guards = sorted(CONFIG_BACKUP_DIR.glob("restore-guard-*.json"))
-        for old in guards[:-5]:
-            old.unlink(missing_ok=True)
-            (CONFIG_BACKUP_DIR / (old.stem + ".key")).unlink(missing_ok=True)
+        try:
+            guards = sorted(CONFIG_BACKUP_DIR.glob("restore-guard-*.json"))
+            for old in guards[:-5]:
+                old.unlink(missing_ok=True)
+                (CONFIG_BACKUP_DIR / (old.stem + ".key")).unlink(missing_ok=True)
+                (CONFIG_BACKUP_DIR / (old.stem + ".state")).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("清理恢复快照失败: %s", exc, exc_info=True)
 
 
 backup_service = BackupService()

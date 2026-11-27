@@ -90,7 +90,7 @@ GET /api/sync/progress
   "progress": 0.65,
   "current": 650,
   "total": 1000,
-  "phase": "scanning|syncing|cleaning|done"
+  "phase": "idle|scanning|processing|completed|error|cancelled|cancelling"
 }
 ```
 
@@ -280,9 +280,9 @@ Content-Type: application/json
 - 读写 WebDAV 备份配置，密码加密落盘、读写均脱敏；提交掩码值表示保留旧密码
 - `test`：建目录→写探针→删探针→列表 四步连通性检查，返回 `{"ok", "message"}`
 - `status`：返回 `{"enabled", "last"}`，`last` 为最近一次备份/恢复结果摘要
-- `run`：打包 config.json + 签到状态（**不含** `config.key` 与本地 `config_backups/` 快照）→ 自检 → 上传 → 大小核对 → 按保留份数滚动清理；返回 `{ok, name, size, pruned}`，忙时 409
+- `run`：打包 config.json + 签到状态（**不含** `config.key`、本地 `config_backups/` 快照与 `admin_token`）→ 自检 → 上传 → SHA-256 核对 → 按保留份数滚动清理；返回 `{ok, name, size, pruned}`，忙时 409
 - `remote`：返回 `{"archives": [{name, size, modified}]}`；`download` 以附件流返回指定档案
-- `restore`：档案名白名单与完整性校验通过后覆盖当前配置（保留前自动保存恢复前快照，失败自动回滚），成功后自动重建 p115/Emby 服务使配置即时生效；旧档案若含 `config.key`，仅在本机缺密钥时采用，否则保留本机密钥
+- `restore`：档案名白名单、ZIP/摘要、配置 schema 与秘密字段可解密性校验通过后覆盖当前配置（保留前自动保存恢复前快照，失败自动回滚），成功后自动重建 p115/Emby 服务使配置即时生效；旧档案若含 `config.key`，仅在本机缺密钥时采用，否则保留本机密钥；恢复保留本机当前 `admin_token`
 
 ## 302 跳转服务
 
@@ -343,7 +343,7 @@ Emby 扫描到 `.strm` 文件后，读取此 URL 作为媒体源的 Path。
 
 ### 注入方式
 
-代理拦截 `/Users/{user_id}/Items/{item_id}` 响应，在响应顶层 `ExternalUrls` 数组中注入外部播放器条目。每个播放器对应一个 `{Name, Url, Description}` 条目，`Name` 前缀保留播放器 key 供前端匹配，URL 统一经 `/redirect2external?link=<base64>` 中转后 302 到自定义协议地址（如 `potplayer://...`、`vlc://...`）。
+代理拦截 `/Users/{user_id}/Items/{item_id}` 响应，在响应顶层 `ExternalUrls` 数组中注入外部播放器条目。每个 MediaSource 为每个播放器生成一个 `{Name, Url, Description}` 条目，多版本影片会显示多个带版本名的按钮；URL 统一经 `/redirect2external?link=<base64>` 中转后 302 到自定义协议地址（如 `potplayer://...`、`vlc://...`）。
 
 ## 配置结构
 

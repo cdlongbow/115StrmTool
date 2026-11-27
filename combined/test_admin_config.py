@@ -41,11 +41,11 @@ class TestP115CookieRestart:
         assert self._callback_called == 1
         self._cm.update.assert_called_once()
 
-    def test_no_cookie_no_restart(self):
+    def test_enabled_change_triggers_restart(self):
         with self._patch_config_manager():
             req = ConfigUpdateRequest(p115={"enabled": True})
             update_config(req)
-        assert self._callback_called == 0
+        assert self._callback_called == 1
 
     def test_no_callback_registered(self):
         set_p115_restart_callback(None)

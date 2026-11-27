@@ -115,11 +115,11 @@ python build_exe.py
 | 工具 | 命令 | 目的 |
 |------|------|------|
 | 静态检查 | `ruff check .`（仓库根目录） | 未定义名、未用导入、语法错误（规则集见根目录 `ruff.toml`，仅 F + E9） |
-| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（301 个） |
+| 单元测试 | `cd combined && python -m pytest -q` | 全量回归验证（508 个） |
 | Python 语法检查 | `python3 -c "import ast; ast.parse(open('combined/*.py').read())"` | 语法验证 |
 | 导入检查 | `python3 -c "import sys; sys.path.insert(0, 'combined'); import <module>"` | 模块导入验证 |
 
-测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行上述 ruff + pytest；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止，且流水线开头会校验发布号与 CHANGELOG 顶部条目标题一致，并在测试通过后、打包前把发布号写入 `combined/_build_version.py` 注入构建产物。测试的重量级依赖替身统一定义在 `combined/conftest.py`（`stub_modules` 生成 patch.dict 用的替身字典、`stub_missing` 按需注入未安装模块），配合 `patch.dict(sys.modules, ...)` 隔离，无需真实 Cookie 或网络即可运行，新增测试直接复用而不要再散建替身字典。每个测试文件必须能单独运行通过（`python -m pytest test_xxx.py -q`），不依赖其他文件先跑的模块导入泄漏，日常 CI 在跑完全量后会逐文件独立执行校验。115 生态 SDK 均为纯 Python wheel 但要求 Python 3.12+（`requires-python >=3.12,<4.0`），低版本本地环境装不上。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，日常 CI 与发版在 Python 3.14 上安装步骤对其预期 SKIP，程序走纯 Python 生成路径（与默认配置行为一致），上游发布适配 wheel 后替换 `combined/wheels/` 即可恢复（跟进项见 TODO）。
+测试说明：日常 CI（`.github/workflows/ci.yml`）在每次 push 到 main / 提 PR 时于 Linux 运行 Ruff、全量 pytest、每个测试文件独立进程执行、内联 JavaScript 语法检查和 Node 前端行为测试；发版流水线打包 exe 前会在 Windows 再跑一次全量测试，失败则构建中止。测试的重量级依赖替身统一定义在 `combined/conftest.py`，仅替换确实缺失的模块，已安装或已导入的真实模块保持不变。每个测试文件必须能单独运行通过，不依赖其他文件先跑的模块导入泄漏。Python 3.11 本地环境使用替身运行门禁；需要真实 SDK 时执行 `bash scripts/setup_py314.sh /tmp/opencode/py314-venv --test`，脚本会安装仓库锁包并校验解释器版本与 `pip check`。`full_strm_sync` 只带 cp312 ABI wheel 且未发布到 PyPI，Python 3.14 下预期跳过，程序走纯 Python 生成路径；恢复 Rust 加速需先完成上游 0.1.6 配置与结果契约适配，再用真实 wheel 做非 mock 冒烟。
 
 ### 分支策略
 
@@ -230,9 +230,9 @@ Co-authored-by: <AI Name> <email>
 
 ### 浏览器手工测试路径
 
-代码层由 ruff + pytest + `node --check`（各 script 块语法）把关，涉及管理面板交互的改动建议按下述路径点一遍：
+代码层由 Ruff、pytest、`python3 scripts/check_inline_js.py combined/web/index.html` 与 `node scripts/test_frontend.js` 把关，涉及管理面板交互的改动建议按下述路径点一遍：
 
-1. 启动 `python combined/main.py --no-tray`，从控制台日志复制令牌，浏览器打开 `http://127.0.0.1:8100/`，弹窗粘贴令牌。
+1. 启动 `python combined/main.py --no-tray`，从 `config.json` 的 `admin_token` 字段或托盘自动注入获取令牌，浏览器打开 `http://127.0.0.1:8100/`，弹窗粘贴令牌。
 2. 概览页两张状态卡在无需操作时应每 10 秒保持刷新；断网/杀进程后页面不崩溃，恢复后数字重新变化。
 3. P115 配置页点"扫码登录"，获取二维码后直接关闭弹窗，确认没有后台持续轮询（DevTools Network 停止刷屏）。
 4. Emby 配置页故意填错服务地址保存再点保存+重启组合，确认失败提示出现且不再触发重启调用。

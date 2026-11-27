@@ -5,26 +5,25 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _backup_config(monkeypatch, tmp_path):
-    """保存真实配置文件，用测试配置替换，测试后恢复；快照目录指向临时路径"""
+def _isolate_config(monkeypatch, tmp_path):
+    """将配置、密钥与快照全部隔离到临时目录"""
+    import _paths
+
+    config_file = tmp_path / "config.json"
+    key_file = tmp_path / "config.key"
+    backup_dir = tmp_path / "config_backups"
+    monkeypatch.setattr(_paths, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(_paths, "CONFIG_KEY_FILE", key_file)
+    monkeypatch.setattr(_paths, "CONFIG_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(_paths, "_BASE_DIR", tmp_path)
+
     import config_manager as cm_mod
-    monkeypatch.setattr(cm_mod, "CONFIG_BACKUP_DIR", tmp_path / "config_backups")
-    orig_config = None
-    if cm_mod.CONFIG_FILE.exists():
-        orig_config = cm_mod.CONFIG_FILE.read_bytes()
-    orig_key = None
-    key_file = cm_mod._BASE_DIR / "config.key"
-    if key_file.exists():
-        orig_key = key_file.read_bytes()
+
+    monkeypatch.setattr(cm_mod, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(cm_mod, "CONFIG_KEY_FILE", key_file)
+    monkeypatch.setattr(cm_mod, "CONFIG_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(cm_mod, "_BASE_DIR", tmp_path)
     yield
-    if orig_config is not None:
-        cm_mod.CONFIG_FILE.write_bytes(orig_config)
-    else:
-        cm_mod.CONFIG_FILE.unlink(missing_ok=True)
-    if orig_key is not None:
-        key_file.write_bytes(orig_key)
-    else:
-        key_file.unlink(missing_ok=True)
 
 
 class TestConfigManager:

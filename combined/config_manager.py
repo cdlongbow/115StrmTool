@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -12,9 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
-from logger import logger
-
 from _paths import _BASE_DIR, CONFIG_FILE, CONFIG_KEY_FILE, CONFIG_BACKUP_DIR  # noqa: F401
+from exceptions import ServiceError
+from logger import logger
 
 MAX_CONFIG_BACKUPS = 10
 CONFIG_BACKUP_MIN_INTERVAL = 3600.0
@@ -22,8 +23,20 @@ CONFIG_BACKUP_MIN_INTERVAL = 3600.0
 PIN_RULES_SEP = " => "
 
 _COOKIE_ENCRYPTED_PREFIX = "#ENC#"
+_COOKIE_ENCRYPTED_V2_PREFIX = "#ENC#v2:"
 COOKIE_MASK = "********"
 _SECRET_FIELDS: List[Tuple[str, str]] = [("p115", "cookie"), ("webdav", "password")]
+
+
+def _set_posix_permissions(path: Path, mode: int) -> None:
+    """
+    在 POSIX 平台收紧文件或目录权限
+
+    :param path (Path): 目标路径
+    :param mode (int): 八进制权限值
+    """
+    if os.name != "nt":
+        os.chmod(path, mode)
 
 
 def mask_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,6 +231,24 @@ def _validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         return RootConfig().model_dump(by_alias=True)
 
 
+def _validate_config_strict(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    严格解析并校验配置，校验失败时抛出异常
+
+    :param raw (Dict): 原始配置字典
+
+    :return Dict: 校验并合并后的配置字典
+
+    :raises ValueError: 配置顶层或字段结构非法
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("配置顶层必须是 JSON 对象")
+    _migrate_legacy_emby_fields(raw)
+    validated = RootConfig(**raw)
+    known = validated.model_dump(by_alias=True, exclude_unset=True)
+    return _deep_merge(raw, known)
+
+
 def _get_encryption_key() -> bytes:
     """
     获取持久化的加密密钥，首次自动生成 32 字节随机密钥保存到 config.key
@@ -226,10 +257,25 @@ def _get_encryption_key() -> bytes:
     key_file = CONFIG_KEY_FILE
     if not key_file.exists():
         key = os.urandom(32)
-        key_file.write_bytes(key)
+        try:
+            fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            key = key_file.read_bytes()
+        else:
+            with os.fdopen(fd, "wb") as f:
+                f.write(key)
     else:
         key = key_file.read_bytes()
+    _set_posix_permissions(key_file, 0o600)
     return key
+
+
+def _derive_key(key: bytes, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", key, salt, 100000)
+
+
+def _xor_bytes(data: bytes, derived: bytes) -> bytes:
+    return bytes([b ^ derived[i % len(derived)] for i, b in enumerate(data)])
 
 
 def _encrypt_cookie(plaintext: str) -> str:
@@ -237,22 +283,37 @@ def _encrypt_cookie(plaintext: str) -> str:
         return plaintext
     key = _get_encryption_key()
     salt = os.urandom(16)
-    derived = hashlib.pbkdf2_hmac("sha256", key, salt, 100000)
-    data = plaintext.encode("utf-8")
-    encrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(data)])
-    return _COOKIE_ENCRYPTED_PREFIX + base64.b64encode(salt + encrypted).decode("ascii")
+    derived = _derive_key(key, salt)
+    encrypted = _xor_bytes(plaintext.encode("utf-8"), derived)
+    mac = hmac.new(derived, salt + encrypted, hashlib.sha256).digest()
+    payload = base64.b64encode(salt + encrypted + mac).decode("ascii")
+    return _COOKIE_ENCRYPTED_V2_PREFIX + payload
 
 
-def _decrypt_cookie(encoded: str) -> str:
+def _decrypt_cookie(encoded: str, key: Optional[bytes] = None) -> str:
     if not encoded or not encoded.startswith(_COOKIE_ENCRYPTED_PREFIX):
         return encoded
-    key = _get_encryption_key()
-    raw = base64.b64decode(encoded[len(_COOKIE_ENCRYPTED_PREFIX):])
+    key = key if key is not None else _get_encryption_key()
+    if encoded.startswith(_COOKIE_ENCRYPTED_V2_PREFIX):
+        payload = encoded[len(_COOKIE_ENCRYPTED_V2_PREFIX):]
+        raw = base64.b64decode(payload, validate=True)
+        if len(raw) <= 48:
+            raise ValueError("加密数据长度非法")
+        salt = raw[:16]
+        encrypted = raw[16:-32]
+        mac = raw[-32:]
+        derived = _derive_key(key, salt)
+        expected = hmac.new(derived, salt + encrypted, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected):
+            raise ValueError("密钥错误或加密数据损坏")
+        return _xor_bytes(encrypted, derived).decode("utf-8")
+    raw = base64.b64decode(encoded[len(_COOKIE_ENCRYPTED_PREFIX):], validate=True)
+    if len(raw) <= 16:
+        raise ValueError("加密数据长度非法")
     salt = raw[:16]
     encrypted = raw[16:]
-    derived = hashlib.pbkdf2_hmac("sha256", key, salt, 100000)
-    decrypted = bytes([b ^ derived[i % len(derived)] for i, b in enumerate(encrypted)])
-    return decrypted.decode("utf-8")
+    derived = _derive_key(key, salt)
+    return _xor_bytes(encrypted, derived).decode("utf-8")
 
 
 def _encrypt_secrets(config: Dict[str, Any]) -> None:
@@ -266,7 +327,7 @@ def _encrypt_secrets(config: Dict[str, Any]) -> None:
         if not isinstance(target, dict):
             continue
         value = target.get(field)
-        if value:
+        if value and not value.startswith(_COOKIE_ENCRYPTED_PREFIX):
             target[field] = _encrypt_cookie(value)
 
 
@@ -286,6 +347,34 @@ def _decrypt_secrets(config: Dict[str, Any]) -> None:
                 target[field] = _decrypt_cookie(value)
             except Exception as e:
                 logger.warning("秘密字段解密失败，保留原始值: %s.%s - %s", section, field, e)
+
+
+def _decrypt_secrets_strict(config: Dict[str, Any], key: Optional[bytes]) -> None:
+    """
+    使用指定密钥试解密全部秘密字段，任一失败即抛出异常
+
+    :param config (Dict): 待校验配置字典，就地解密
+    :param key (bytes): 拟采用密钥，缺失时拒绝解密加密字段
+
+    :raises ValueError: 密钥缺失或秘密字段解密失败
+    """
+    errors = []
+    for section, field in _SECRET_FIELDS:
+        target = config.get(section)
+        if not isinstance(target, dict):
+            continue
+        value = target.get(field)
+        if not value or not value.startswith(_COOKIE_ENCRYPTED_PREFIX):
+            continue
+        if key is None:
+            errors.append(f"{section}.{field} 已加密但缺少密钥")
+            continue
+        try:
+            target[field] = _decrypt_cookie(value, key=key)
+        except Exception as exc:
+            errors.append(f"{section}.{field} 解密失败：{exc}")
+    if errors:
+        raise ValueError("；".join(errors))
 
 
 DEFAULT_CONFIG: Dict[str, Any] = RootConfig().model_dump(by_alias=True)
@@ -322,9 +411,24 @@ class ConfigManager:
 
     def update(self, new_config: Dict[str, Any]) -> bool:
         with self._lock:
+            previous = self._deep_copy(self._config)
             self._config = _deep_merge(self._config, new_config)
             self._config = _validate_config(self._config)
-        return self._write()
+            if not self._write():
+                self._config = previous
+                return False
+            return True
+
+    def update_or_raise(self, new_config: Dict[str, Any]) -> None:
+        """
+        更新配置并在写盘失败时抛出服务异常
+
+        :param new_config (Dict): 待合并的配置字典
+
+        :raises ServiceError: 配置保存失败
+        """
+        if not self.update(new_config):
+            raise ServiceError("配置保存失败，请检查数据目录权限或磁盘空间")
 
     def get_flag(self, key: str, default: bool = False) -> bool:
         """读取顶层布尔开关；热路径上避免复制整份配置。
@@ -371,11 +475,12 @@ class ConfigManager:
                 tmp_path = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{os.getpid()}.tmp")
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(config_to_write, f, ensure_ascii=False, indent=2)
+                _set_posix_permissions(tmp_path, 0o600)
                 os.replace(tmp_path, CONFIG_FILE)
             logger.info("配置已保存: %s", CONFIG_FILE.resolve())
             self._maybe_backup()
             return True
-        except OSError as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.error("配置保存失败: %s", e)
             if tmp_path is not None:
                 try:
@@ -392,13 +497,15 @@ class ConfigManager:
         把有效历史轮换掉；快照内容沿用磁盘形态（Cookie 为密文）
         """
         try:
-            CONFIG_BACKUP_DIR.mkdir(exist_ok=True)
+            CONFIG_BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
+            _set_posix_permissions(CONFIG_BACKUP_DIR, 0o700)
             backups = sorted(CONFIG_BACKUP_DIR.glob("config-*.json"))
             now = time()
             if backups and now - backups[-1].stat().st_mtime < CONFIG_BACKUP_MIN_INTERVAL:
                 return
             dest = CONFIG_BACKUP_DIR / f"config-{strftime('%Y%m%d-%H%M%S')}.json"
             shutil.copy2(CONFIG_FILE, dest)
+            _set_posix_permissions(dest, 0o600)
             stale = sorted(CONFIG_BACKUP_DIR.glob("config-*.json"))[:-MAX_CONFIG_BACKUPS]
             for old in stale:
                 old.unlink(missing_ok=True)

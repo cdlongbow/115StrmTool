@@ -3,7 +3,7 @@ from json import loads as json_loads
 from re import search as re_search
 from time import sleep
 from threading import Lock
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import Client, Limits, Timeout
@@ -63,6 +63,8 @@ class P115ClientWrapper:
         self._http_client: Optional[Client] = None
         self._cookie_lock = Lock()
         self._cooldown_lock = Lock()
+        self._copy_locks_guard = Lock()
+        self._copy_locks: Dict[int, Any] = {}
         self._limiters: Dict[str, RateLimiter] = {}
         self._cooldowns = dict(DEFAULT_ENDPOINT_COOLDOWNS)
         self._init_client()
@@ -297,11 +299,203 @@ class P115ClientWrapper:
             logger.error("获取/创建网盘目录失败: %s", e, exc_info=True)
             return None
 
+    def _copy_lock_for(self, pid: int):
+        guard = getattr(self, "_copy_locks_guard", None)
+        if guard is None:
+            guard = Lock()
+            self._copy_locks_guard = guard
+        locks = getattr(self, "_copy_locks", None)
+        if locks is None:
+            locks = {}
+            self._copy_locks = locks
+        with guard:
+            lock = locks.get(pid)
+            if lock is None:
+                lock = Lock()
+                locks[pid] = lock
+            return lock
+
+    @staticmethod
+    def _extract_copy_pickcode(
+        response: Any, source_pickcode: str
+    ) -> Optional[str]:
+        from p115pickcode import to_id, to_pickcode
+
+        def _valid(candidate: Any) -> Optional[str]:
+            if not isinstance(candidate, str) or not candidate:
+                return None
+            if candidate == source_pickcode:
+                return None
+            try:
+                candidate_id = to_id(candidate)
+                source_id = to_id(source_pickcode)
+                if (
+                    isinstance(candidate_id, int)
+                    and isinstance(source_id, int)
+                    and candidate_id == source_id
+                ):
+                    return None
+            except Exception:
+                pass
+            return candidate
+
+        def _walk(value: Any) -> Optional[str]:
+            if isinstance(value, dict):
+                if value.get("state") is False:
+                    return None
+                for key in ("pc", "pickcode", "pick_code", "pickCode"):
+                    candidate = _valid(value.get(key))
+                    if candidate:
+                        return candidate
+                for key in ("fid", "file_id", "fileId"):
+                    raw_id = value.get(key)
+                    if isinstance(raw_id, int) or (
+                        isinstance(raw_id, str) and raw_id.isdigit()
+                    ):
+                        try:
+                            candidate = _valid(to_pickcode(raw_id))
+                        except Exception:
+                            candidate = None
+                    else:
+                        candidate = _valid(raw_id)
+                    if candidate:
+                        return candidate
+                raw_id = value.get("id")
+                if isinstance(raw_id, int) or (
+                    isinstance(raw_id, str) and raw_id.isdigit()
+                ):
+                    try:
+                        candidate = _valid(to_pickcode(raw_id))
+                    except Exception:
+                        candidate = None
+                    if candidate:
+                        return candidate
+                for nested in value.values():
+                    candidate = _walk(nested)
+                    if candidate:
+                        return candidate
+            elif isinstance(value, list):
+                for nested in value:
+                    candidate = _walk(nested)
+                    if candidate:
+                        return candidate
+            return None
+
+        return _walk(response)
+
+    @staticmethod
+    def _normalize_file_identity(item: Dict[str, Any]) -> Dict[str, Any]:
+        identity: Dict[str, Any] = {}
+        name = item.get("name") or item.get("file_name") or item.get("n")
+        if name is not None:
+            identity["name"] = str(name)
+        size = item.get("size", item.get("file_size"))
+        if size is not None:
+            try:
+                identity["size"] = int(float(size))
+            except (TypeError, ValueError):
+                identity["size"] = str(size)
+        sha1 = item.get("sha1") or item.get("file_sha1")
+        if sha1:
+            identity["sha1"] = str(sha1)
+        return identity
+
+    def _get_file_identity(self, file_id: int) -> Dict[str, Any]:
+        try:
+            response = self._client.fs_file(file_id)
+        except Exception:
+            return {}
+        if not isinstance(response, dict):
+            return {}
+        data = response.get("data")
+        if isinstance(data, dict):
+            response = data
+        return self._normalize_file_identity(response)
+
+    def _list_copy_dir(self, pid: int) -> Optional[List[Dict[str, Any]]]:
+        items: List[Dict[str, Any]] = []
+        offset = 0
+        for _ in range(20):
+            payload = {
+                "cid": pid,
+                "o": "user_ptime",
+                "asc": 0,
+                "limit": 1150,
+                "offset": offset,
+            }
+            response = self._call_with_405_fallback(
+                primary_call=lambda: self._client.fs_files(payload),
+                fallback_call=lambda: self._client.fs_files_app(payload),
+                operation="查询多端播放副本",
+            )
+            if not isinstance(response, dict):
+                return None
+            page = response.get("data")
+            if not isinstance(page, list):
+                return None
+            page_items = [item for item in page if isinstance(item, dict)]
+            items.extend(page_items)
+            if len(page_items) < 1150:
+                return items
+            offset += len(page_items)
+        return items
+
+    @staticmethod
+    def _item_pickcode(item: Dict[str, Any]) -> Optional[str]:
+        pickcode = (
+            item.get("pc")
+            or item.get("pickcode")
+            or item.get("pick_code")
+            or item.get("pickCode")
+        )
+        if isinstance(pickcode, str) and pickcode:
+            return pickcode
+        file_id = item.get("fid") or item.get("file_id") or item.get("fileId")
+        if file_id:
+            try:
+                from p115pickcode import to_pickcode
+
+                pickcode = to_pickcode(file_id)
+            except Exception:
+                return None
+            if isinstance(pickcode, str) and pickcode:
+                return pickcode
+        return None
+
+    @staticmethod
+    def _item_key(item: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        file_id = item.get("fid") or item.get("file_id") or item.get("fileId")
+        if file_id is not None:
+            return "fid", str(file_id)
+        pickcode = (
+            item.get("pc")
+            or item.get("pickcode")
+            or item.get("pick_code")
+            or item.get("pickCode")
+        )
+        if isinstance(pickcode, str) and pickcode:
+            return "pc", pickcode
+        return None
+
+    @staticmethod
+    def _matches_file_identity(
+        item: Dict[str, Any], identity: Dict[str, Any]
+    ) -> bool:
+        if not identity:
+            return False
+        candidate = P115ClientWrapper._normalize_file_identity(item)
+        if not candidate:
+            return False
+        return all(candidate.get(key) == value for key, value in identity.items())
+
     def copy_pickcode(self, pickcode: str, pid: int) -> Optional[str]:
         """
         将文件复制到指定目录并返回副本的 pickcode
 
         115 对单文件并发下载有限制，多端同时播放时复制副本以规避
+        优先采用复制响应中的新文件标识；目录回退查询按目标目录互斥，
+        复制前保存目录快照，仅接受快照新增 key，并在源身份可用时校验
+        名称、大小与 SHA1，避免误取其他文件副本
 
         :param pickcode (str): 源文件 pickcode
         :param pid (int): 复制目标目录 ID
@@ -314,25 +508,63 @@ class P115ClientWrapper:
             from p115pickcode import to_id
 
             file_id = to_id(pickcode)
-            self._call_with_405_fallback(
-                primary_call=lambda: self._client.fs_copy(file_id, pid=pid),
-                fallback_call=lambda: self._client.fs_copy_app(file_id, pid=pid),
-                operation="复制多端播放文件",
-            )
-            payload = {"cid": pid, "o": "user_ptime", "asc": 0}
-            for attempt in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
-                resp = self._call_with_405_fallback(
-                    primary_call=lambda: self._client.fs_files(payload),
-                    fallback_call=lambda: self._client.fs_files_app(payload),
-                    operation="查询多端播放副本",
+            source_identity = self._get_file_identity(file_id)
+            with self._copy_lock_for(pid):
+                before_items = self._list_copy_dir(pid)
+                if before_items is None:
+                    logger.warning(
+                        "复制前无法获取目标目录快照，放弃复制: %s", pickcode
+                    )
+                    return None
+                before_keys = {
+                    key
+                    for item in before_items
+                    if (key := self._item_key(item)) is not None
+                }
+
+                copy_response = self._call_with_405_fallback(
+                    primary_call=lambda: self._client.fs_copy(file_id, pid=pid),
+                    fallback_call=lambda: self._client.fs_copy_app(file_id, pid=pid),
+                    operation="复制多端播放文件",
                 )
-                items = (resp or {}).get("data") or []
-                if items and items[0].get("pc"):
-                    return items[0]["pc"]
-                if attempt < len(_DOWNLOAD_RETRY_DELAYS):
-                    sleep(_DOWNLOAD_RETRY_DELAYS[attempt])
-            logger.warning("复制后未查询到副本 pickcode: %s", pickcode)
-            return None
+                copied = self._extract_copy_pickcode(copy_response, pickcode)
+                if copied:
+                    return copied
+
+                for attempt in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+                    items = self._list_copy_dir(pid)
+                    if items is None:
+                        return None
+                    candidates: List[str] = []
+                    for item in items:
+                        key = self._item_key(item)
+                        if key is None or key in before_keys:
+                            continue
+                        candidate = self._item_pickcode(item)
+                        if not candidate or candidate == pickcode:
+                            continue
+                        try:
+                            candidate_id = to_id(candidate)
+                            if (
+                                isinstance(file_id, int)
+                                and isinstance(candidate_id, int)
+                                and candidate_id == file_id
+                            ):
+                                continue
+                        except Exception:
+                            pass
+                        if source_identity and not self._matches_file_identity(
+                            item, source_identity
+                        ):
+                            continue
+                        candidates.append(candidate)
+                    unique_candidates = list(dict.fromkeys(candidates))
+                    if len(unique_candidates) == 1:
+                        return unique_candidates[0]
+                    if attempt < len(_DOWNLOAD_RETRY_DELAYS):
+                        sleep(_DOWNLOAD_RETRY_DELAYS[attempt])
+                logger.warning("复制后未查询到唯一新增副本 pickcode: %s", pickcode)
+                return None
         except Exception as e:
             logger.error("复制多端播放文件失败: %s", e, exc_info=True)
             return None

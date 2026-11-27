@@ -44,7 +44,12 @@ def _build_path_getter(
             return cache[cid]
         parts: List[str] = []
         cursor = cid
+        visited: set = set()
         while cursor != root:
+            if cursor in visited:
+                cache[cid] = None
+                return None
+            visited.add(cursor)
             node = dir_map.get(cursor)
             if node is None:
                 cache[cid] = None
@@ -94,21 +99,23 @@ def iter_files_fast(
     results: List[Dict[str, Any]] = []
     for entry in entries:
         pickcode = str(entry.get("pc") or "")
-        if not pickcode or pickcode.startswith("f"):
-            continue
         parent = str(entry.get("cid") or "")
+        name = str(entry.get("n") or "")
+        if not pickcode or pickcode.startswith("f"):
+            raise FastScanUnavailable("递归文件列表包含无效 pickcode，降级逐目录遍历")
+        if not parent or not name:
+            raise FastScanUnavailable("递归文件列表缺少 cid 或文件名，降级逐目录遍历")
         rel = path_of(parent)
         if rel is None:
             raise FastScanUnavailable(
                 f"目录映射缺失 cid={parent}，文件 {pickcode} 无法拼路径"
             )
-        name = str(entry.get("n") or "")
         results.append({
             "name": name,
             "size": _parse_size(entry.get("s")),
             "sha1": str(entry.get("sha1") or ""),
             "pickcode": pickcode,
-            "path": f"{root_prefix}{rel}/{name}" if name else "",
+            "path": f"{root_prefix}{rel}/{name}",
             "is_dir": False,
         })
     logger.info(
@@ -138,10 +145,10 @@ def _fetch_all_files(
     """
     collected: List[Dict[str, Any]] = []
     offset = 0
-    total = -1
+    declared_total: Optional[int] = None
     while True:
         if cancellation is not None and cancellation.is_set():
-            return collected, max(total, len(collected))
+            return collected, max(declared_total or 0, len(collected))
         data = _scan_get(
             client_wrapper,
             "files",
@@ -159,24 +166,44 @@ def _fetch_all_files(
         page = data.get("data")
         if not isinstance(page, list):
             raise FastScanUnavailable(f"递归文件列表结构异常: data={type(page).__name__}")
+        if "count" not in data:
+            raise FastScanUnavailable("递归文件列表缺少 count 字段")
         try:
-            total = int(data.get("count") or 0)
+            page_total = int(data.get("count"))
         except (TypeError, ValueError):
             raise FastScanUnavailable("递归文件列表 count 字段异常")
+        if page_total < 0:
+            raise FastScanUnavailable("递归文件列表 count 字段为负数")
+        if declared_total is None:
+            declared_total = page_total
+        elif page_total != declared_total:
+            raise FastScanUnavailable(
+                f"递归文件列表分页总数不一致: {declared_total} -> {page_total}"
+            )
         if not page:
-            if total > len(collected):
+            if declared_total > len(collected):
                 raise FastScanUnavailable(
-                    f"递归文件列表提前结束: 已收 {len(collected)}/{total}，"
+                    f"递归文件列表提前结束: 已收 {len(collected)}/{declared_total}，"
                     "结果不完整，降级逐目录遍历"
                 )
             break
-        collected.extend(item for item in page if isinstance(item, dict))
+        if any(not isinstance(item, dict) for item in page):
+            raise FastScanUnavailable("递归文件列表包含非对象条目")
+        if offset + len(page) > declared_total:
+            raise FastScanUnavailable(
+                f"递归文件列表超出声明总数: {offset + len(page)}/{declared_total}"
+            )
+        collected.extend(page)
         offset += len(page)
         if progress is not None:
-            progress(len(collected), total)
-        if total and len(collected) >= total:
+            progress(len(collected), declared_total)
+        if len(collected) >= declared_total:
             break
-    return collected, max(total, len(collected))
+    if declared_total is None or len(collected) != declared_total:
+        raise FastScanUnavailable(
+            f"递归文件列表不完整: 已收 {len(collected)}/{declared_total}"
+        )
+    return collected, declared_total
 
 
 def _fetch_dir_map(
@@ -212,14 +239,29 @@ def _fetch_dir_map(
         listing = payload.get("list")
         if not isinstance(listing, list):
             raise FastScanUnavailable("目录表 list 字段异常")
+        has_next_page = payload.get("has_next_page")
+        if not isinstance(has_next_page, bool):
+            raise FastScanUnavailable("目录表 has_next_page 字段异常")
+        if has_next_page and not listing:
+            raise FastScanUnavailable("目录表空页仍声明存在下一页")
         for item in listing:
             if not isinstance(item, dict):
-                continue
+                raise FastScanUnavailable("目录表包含非对象条目")
             fid = str(item.get("fid") or "")
-            if not fid or fid == str(root_cid):
+            if not fid:
+                raise FastScanUnavailable("目录表条目缺少 fid")
+            if fid == str(root_cid):
                 continue
-            dir_map[fid] = (str(item.get("fn") or ""), str(item.get("pid") or ""))
-        if not payload.get("has_next_page"):
+            name = str(item.get("fn") or "")
+            parent = str(item.get("pid") or "")
+            if not name or not parent:
+                raise FastScanUnavailable("目录表条目缺少 fn/pid")
+            previous = dir_map.get(fid)
+            current = (name, parent)
+            if previous is not None and previous != current:
+                raise FastScanUnavailable(f"目录表 cid={fid} 出现冲突映射")
+            dir_map[fid] = current
+        if not has_next_page:
             return dir_map
     raise FastScanUnavailable(f"目录表页数超过上限 {MAX_DIRS_PAGES}")
 
@@ -235,7 +277,10 @@ def _derive_root_pickcode(root_cid: int, entries: List[Dict[str, Any]]) -> str:
 
     :raises FastScanUnavailable: 无可用条目或换算库异常
     """
-    from p115pickcode import get_stable_point, id_to_pickcode
+    try:
+        from p115pickcode import get_stable_point, id_to_pickcode
+    except Exception as e:
+        raise FastScanUnavailable(f"pickcode 换算库不可用: {e}") from e
 
     for entry in entries:
         pc = str(entry.get("pc") or "")
@@ -270,8 +315,10 @@ def _scan_get(client_wrapper: Any, endpoint: str, params: Dict[str, str]) -> Dic
     if not isinstance(data, dict):
         raise FastScanUnavailable(f"{endpoint} 响应结构异常")
     state = data.get("state")
-    if state is False or state == "false":
-        raise FastScanUnavailable(f"{endpoint} 被拒绝: {str(data.get('error') or data)[:120]}")
+    if state is not True:
+        raise FastScanUnavailable(
+            f"{endpoint} 未返回成功状态: {str(data.get('error') or data)[:120]}"
+        )
     return data
 
 

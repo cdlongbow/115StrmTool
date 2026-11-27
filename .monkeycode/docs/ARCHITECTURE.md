@@ -205,7 +205,7 @@ sequenceDiagram
 
     User->>Admin: POST /api/sync/start（路径映射）
     Admin->>StrmGen: full_sync(path_mappings)
-    StrmGen->>P115: iter_files_with_path（Android API, proapi.115.com）
+    StrmGen->>P115: iter_files(..., with_path=True)（Android API, proapi.115.com）
     P115-->>StrmGen: 文件列表（含 pickcode）
     loop 每个媒体文件
         StrmGen->>FS: 写入 .strm 文件（含跳转 URL）

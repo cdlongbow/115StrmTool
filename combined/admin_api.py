@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
@@ -29,6 +30,69 @@ class ConfigUpdateRequest(BaseModel):
 _restart_emby_callback: Callable = None
 _emby_status = {"running": False}
 _restart_p115_callback: Callable = None
+_P115_RUNTIME_FIELDS = frozenset({"enabled", "cookie", "redirect_host", "redirect_port"})
+_EMBY_RUNTIME_FIELDS = frozenset(
+    {
+        "enabled",
+        "emby_host",
+        "proxy_host",
+        "proxy_port",
+        "pin_rules",
+        "external_player_url",
+        "external_player_list",
+        "playback_mode",
+    }
+)
+
+
+def _save_config_updates(updates: Dict[str, Any]) -> None:
+    """
+    保存配置并在失败时抛出服务异常
+
+    :param updates (Dict): 待合并的配置字典
+
+    :raises ServiceError: 配置写盘失败
+    """
+    if not config_manager.update(updates):
+        raise ServiceError("配置保存失败，请检查数据目录权限或磁盘空间")
+
+
+def _runtime_fields_changed(
+    before: Dict[str, Any],
+    section: str,
+    updates: Dict[str, Any],
+    runtime_fields: frozenset,
+) -> bool:
+    """
+    判断一次配置更新是否修改了服务运行时字段
+
+    :param before (Dict): 更新前配置
+    :param section (str): 配置段名称
+    :param updates (Dict): 待更新字段
+    :param runtime_fields (frozenset): 需要重启的运行时字段集合
+
+    :return bool: 任一运行时字段发生变化时返回 True
+    """
+    previous = before.get(section, {})
+    return any(
+        field in updates and previous.get(field) != updates[field]
+        for field in runtime_fields
+    )
+
+
+def _run_restart_callback(callback: Optional[Callable], service_name: str) -> None:
+    """
+    执行服务重启回调，失败时向调用方报告配置已保存但服务未重启
+
+    :param callback (Callable): 重启回调，None 表示未注册
+    :param service_name (str): 服务名称
+
+    :raises ServiceError: 重启回调明确返回失败
+    """
+    if callback is None:
+        return
+    if callback() is False:
+        raise ServiceError(f"配置已保存，但 {service_name} 服务重启失败，请检查服务状态")
 
 
 @router.get("/config")
@@ -51,6 +115,7 @@ def export_config() -> Response:
 
 @router.post("/config")
 def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
+    before = config_manager.get()
     updates = {}
     if req.emby is not None:
         emby_updates = {k: v for k, v in req.emby.items() if v is not None}
@@ -58,7 +123,6 @@ def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
             updates["emby"] = emby_updates
     if req.p115 is not None:
         p115_updates = {k: v for k, v in req.p115.items() if v is not None}
-        # 前端回传掩码值表示 Cookie 未修改，不覆盖已保存的真实 Cookie
         if p115_updates.get("cookie") == COOKIE_MASK:
             p115_updates.pop("cookie")
         if p115_updates:
@@ -66,11 +130,20 @@ def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
     if req.media_diag is not None:
         updates["media_diag"] = req.media_diag
     if updates:
-        config_manager.update(updates)
+        _save_config_updates(updates)
         logger.info("配置已更新: %s", mask_config(updates))
-    if "cookie" in updates.get("p115", {}) and _restart_p115_callback:
-        _restart_p115_callback()
-        logger.info("P115 Cookie 已更新，客户端已重建")
+    p115_changed = _runtime_fields_changed(
+        before, "p115", updates.get("p115", {}), _P115_RUNTIME_FIELDS
+    )
+    emby_changed = _runtime_fields_changed(
+        before, "emby", updates.get("emby", {}), _EMBY_RUNTIME_FIELDS
+    )
+    if p115_changed:
+        _run_restart_callback(_restart_p115_callback, "P115")
+        logger.info("P115 运行时配置已更新，服务已重建")
+    if emby_changed:
+        _run_restart_callback(_restart_emby_callback, "Emby")
+        logger.info("Emby 运行时配置已更新，服务已重建")
     return mask_config(config_manager.get())
 
 
@@ -116,23 +189,25 @@ def get_emby_config() -> Dict[str, Any]:
 
 @router.post("/emby/config")
 def update_emby_config(req: EmbyConfigRequest) -> Dict[str, Any]:
+    before = config_manager.get()
     updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
     legacy_redirect = updates.pop("redirect_mode", None)
     if legacy_redirect is not None and "playback_mode" not in updates:
         updates["playback_mode"] = "redirect" if legacy_redirect else "disabled"
     if updates:
-        config_manager.update({"emby": updates})
+        _save_config_updates({"emby": updates})
         logger.info("Emby 配置已更新: %s", updates)
-    if "playback_mode" in updates and _restart_emby_callback:
-        _restart_emby_callback()
-        logger.info("播放模式已更新，Emby 代理已按新配置重建")
+    if _runtime_fields_changed(before, "emby", updates, _EMBY_RUNTIME_FIELDS):
+        _run_restart_callback(_restart_emby_callback, "Emby")
+        logger.info("Emby 运行时配置已更新，代理已重建")
     return config_manager.get().get("emby", {})
 
 
 @router.post("/emby/restart")
 def restart_emby() -> Dict:
     if _restart_emby_callback:
-        _restart_emby_callback()
+        if _restart_emby_callback() is False:
+            return {"status": "error", "message": "Emby 代理重启失败，原服务可能仍在运行"}
         return {"status": "ok", "message": "Emby 代理已重启"}
     return {"status": "error", "message": "重启回调未注册"}
 
@@ -319,7 +394,11 @@ def _set_autostart(enable: bool):
         )
         if enable:
             _winreg.SetValueEx(
-                key, _AUTOSTART_NAME, 0, _winreg.REG_SZ, sys.executable
+                key,
+                _AUTOSTART_NAME,
+                0,
+                _winreg.REG_SZ,
+                subprocess.list2cmdline([sys.executable]),
             )
         else:
             try:
@@ -400,7 +479,8 @@ def save_backup_webdav_config(req: WebdavBackupConfigRequest) -> Dict[str, Any]:
     update = {k: v for k, v in req.model_dump(exclude_none=True).items()}
     if update.get("password") == COOKIE_MASK:
         update.pop("password")
-    config_manager.update({"webdav": update})
+    if update:
+        _save_config_updates({"webdav": update})
     masked_view = mask_config(config_manager.get()).get("webdav", {})
     return masked_view
 
@@ -505,8 +585,11 @@ def restore_from_backup(req: RestoreRequest) -> Dict[str, Any]:
 
     result = backup_service.restore_backup(req.name)
     if result.get("ok"):
+        restart_results = {}
         if _restart_p115_callback:
-            _restart_p115_callback()
+            restart_results["p115"] = _restart_p115_callback() is not False
         if _restart_emby_callback:
-            _restart_emby_callback()
+            restart_results["emby"] = _restart_emby_callback() is not False
+        if restart_results:
+            result["restart"] = restart_results
     return result

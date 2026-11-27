@@ -216,14 +216,27 @@ class Database:
         deleted: int,
         failed: int,
         error: str = "",
-    ):
+        status: Optional[str] = None,
+    ) -> None:
+        """
+        结束同步历史并写入明确终态
+
+        :param history_id (int): 同步历史 ID
+        :param total (int): 本轮处理总数
+        :param new_count (int): 新增或变更数量
+        :param deleted (int): 删除数量
+        :param failed (int): 失败数量
+        :param error (str): 错误信息，非空时默认记为 failed
+        :param status (str): 显式终态，传入时优先于错误信息推断
+        """
+        final_status = status or ("failed" if error else "completed")
         self.conn.execute(
             """UPDATE sync_history SET
                end_time=datetime('now','localtime'),
                total_files=?, new_files=?, deleted_files=?, failed_files=?,
                status=?, error_message=?
                WHERE id=?""",
-            (total, new_count, deleted, failed, "failed" if error else "completed", error, history_id),
+            (total, new_count, deleted, failed, final_status, error, history_id),
         )
         self.conn.commit()
 

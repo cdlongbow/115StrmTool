@@ -2,6 +2,7 @@
 WebDAV 远端备份测试：协议归类、档案自检、上传闭环、恢复闭环与 API 收口
 """
 import copy
+import io
 import json
 import zipfile
 from urllib.parse import unquote
@@ -109,7 +110,7 @@ def _client(fake):
     import webdav_backup as wb
 
     return wb.WebdavClient(
-        "http://dav.test/dav/", username="u", password="p",
+        "http://127.0.0.1/dav/", username="u", password="p",
         transport=httpx.MockTransport(fake.handler),
     )
 
@@ -125,9 +126,11 @@ def dav_env(monkeypatch, tmp_path):
     (tmp_path / "config.key").write_bytes(b"k" * 32)
     backup_dir = tmp_path / "config_backups"
     monkeypatch.setattr(cm, "CONFIG_FILE", conf)
+    monkeypatch.setattr(cm, "CONFIG_KEY_FILE", tmp_path / "config.key")
     monkeypatch.setattr(cm, "CONFIG_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(cm, "_BASE_DIR", tmp_path)
     monkeypatch.setattr(wb, "CONFIG_FILE", conf)
+    monkeypatch.setattr(wb, "CONFIG_KEY_FILE", tmp_path / "config.key")
     monkeypatch.setattr(wb, "CONFIG_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(wb, "_BASE_DIR", tmp_path)
     monkeypatch.setattr(wb, "CHECKIN_STATE_FILE", tmp_path / "checkin_state.json")
@@ -143,6 +146,50 @@ def dav_env(monkeypatch, tmp_path):
 class TestWebdavClient:
     def _names(self, items):
         return [one["name"] for one in items]
+
+    def test_rejects_non_loopback_http(self):
+        import webdav_backup as wb
+        from exceptions import ServiceError
+
+        with pytest.raises(ServiceError, match="HTTPS"):
+            wb.WebdavClient("http://dav.test/dav/")
+
+    def test_rejects_https_downgrade_redirect(self):
+        import webdav_backup as wb
+        from exceptions import ServiceError
+
+        def handler(request):
+            if request.url.path.endswith("/start"):
+                return httpx.Response(302, headers={"location": "http://dav.test/dav/target"})
+            return httpx.Response(200, content=b"ok")
+
+        client = wb.WebdavClient(
+            "https://dav.test/dav/",
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            with pytest.raises(ServiceError, match="降级"):
+                client.get("start")
+        finally:
+            client.close()
+
+    def test_rejects_remote_subdir_traversal(self):
+        import webdav_backup as wb
+        from exceptions import ServiceError
+
+        with pytest.raises(ServiceError, match=r"\.\."):
+            wb.BackupService._remote_dir({"remote_subdir": "../escape"})
+
+    def test_get_enforces_download_limit(self):
+        from exceptions import ServiceError
+        fake = FakeDav()
+        fake.files["bk/large.bin"] = b"1234567890"
+        client = _client(fake)
+        try:
+            with pytest.raises(ServiceError, match="大小上限"):
+                client.get("bk/large.bin", max_bytes=4)
+        finally:
+            client.close()
 
     def test_connection_ok_and_probe_cleanup(self):
         import webdav_backup as wb
@@ -305,6 +352,26 @@ class TestArchiveSelfCheck:
         assert not any(one.startswith("backups/") for one in declared)
         assert manifest["app_version"]
 
+    def test_archive_excludes_admin_token(self, dav_env):
+        wb, conf, backup_dir, tmp = dav_env
+        conf.write_text(json.dumps({"admin_token": "TOP-SECRET", "p115": {"cookie": "c"}}), encoding="utf-8")
+        staging = tmp / "staging"
+        staging.mkdir()
+        archive = wb.backup_service._create_archive(staging)
+        with zipfile.ZipFile(archive) as zf:
+            archived_config = zf.read("config.json")
+        assert b"TOP-SECRET" not in archived_config
+        assert "admin_token" not in json.loads(archived_config)
+
+    def test_verify_rejects_too_many_members(self, tmp_path, monkeypatch):
+        import webdav_backup as wb_mod
+        members, declared = _good_members()
+        monkeypatch.setattr(wb_mod, "MAX_ARCHIVE_MEMBERS", 1)
+        path = tmp_path / "115strmtool-backup-20261018-000006.zip"
+        path.write_bytes(_build_zip(members, declared))
+        ok, reason = wb_mod.backup_service._verify_archive(path)
+        assert ok is False and "成员数量" in reason
+
     def test_create_without_config_key_still_works(self, dav_env):
         """密钥只留本机，缺少密钥文件不应阻断备份"""
         wb, conf, backup_dir, tmp = dav_env
@@ -398,7 +465,7 @@ def wired(monkeypatch, dav_env):
     config_manager.update({
         "webdav": {
             "enabled": True,
-            "url": "http://dav.test/dav/",
+            "url": "http://127.0.0.1/dav/",
             "username": "u",
             "password": "p",
             "remote_subdir": "bk",
@@ -451,6 +518,19 @@ class TestBackupRestoreFlow:
         from exceptions import ServiceError
         _seed_old(fake, ["19700101-000001"])
         fake.get_override = b"short-mismatch"
+        with pytest.raises(ServiceError) as exc:
+            wb.backup_service.run_backup()
+        assert "不一致" in str(exc.value)
+        assert not any(m == "DELETE" for m, _ in fake.requests)
+        assert any("19700101-000001" in rel for rel in fake.files)
+
+    def test_upload_sha_mismatch_keeps_remote_intact(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from exceptions import ServiceError
+        _seed_old(fake, ["19700101-000001"])
+        result = wb.backup_service.run_backup()
+        uploaded = fake.files[f"bk/{result['name']}"]
+        fake.get_override = bytes([uploaded[0] ^ 1]) + uploaded[1:]
         with pytest.raises(ServiceError) as exc:
             wb.backup_service.run_backup()
         assert "不一致" in str(exc.value)
@@ -518,6 +598,115 @@ class TestBackupRestoreFlow:
         guards = list(backup_dir.glob("restore-guard-*.json"))
         assert len(guards) == 1
         assert (backup_dir / (guards[0].stem + ".key")).exists()
+
+    def test_restore_preserves_current_admin_token(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from config_manager import config_manager
+        config_manager.update({"admin_token": "BACKUP-TOKEN"})
+        result = wb.backup_service.run_backup()
+        with zipfile.ZipFile(io.BytesIO(fake.files[f"bk/{result['name']}"])) as zf:
+            archived = json.loads(zf.read("config.json"))
+        assert "admin_token" not in archived
+        config_manager.update({"admin_token": "CURRENT-TOKEN"})
+
+        restored = wb.backup_service.restore_backup(result["name"])
+
+        assert restored["ok"] is True
+        assert config_manager.get()["admin_token"] == "CURRENT-TOKEN"
+
+    def test_restore_ignores_legacy_archive_admin_token(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from config_manager import config_manager
+        config_manager.update({"admin_token": "CURRENT-TOKEN"})
+        config_bytes = json.dumps({"admin_token": "ARCHIVE-TOKEN", "p115": {"cookie": "plain"}}).encode()
+        manifest_members = [{"path": "config.json", "size": len(config_bytes), "sha256": _sha(config_bytes)}]
+        name = "115strmtool-backup-20261018-020000.zip"
+        fake.files[f"bk/{name}"] = _build_zip({"config.json": config_bytes}, manifest_members)
+
+        result = wb.backup_service.restore_backup(name)
+
+        assert result["ok"] is True
+        assert config_manager.get()["admin_token"] == "CURRENT-TOKEN"
+
+    def test_restore_rejects_invalid_config_without_changes(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from exceptions import ServiceError
+        config_bytes = b"{not-json"
+        manifest_members = [{"path": "config.json", "size": len(config_bytes), "sha256": _sha(config_bytes)}]
+        name = "115strmtool-backup-20261018-030000.zip"
+        fake.files[f"bk/{name}"] = _build_zip({"config.json": config_bytes}, manifest_members)
+        before = (conf.read_bytes(), (tmp / "config.key").read_bytes())
+
+        with pytest.raises(ServiceError, match="config.json"):
+            wb.backup_service.restore_backup(name)
+
+        assert (conf.read_bytes(), (tmp / "config.key").read_bytes()) == before
+
+    def test_restore_rejects_invalid_schema_without_changes(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from exceptions import ServiceError
+        config_bytes = json.dumps({"emby": {"proxy_port": "not-a-port"}}).encode()
+        manifest_members = [{"path": "config.json", "size": len(config_bytes), "sha256": _sha(config_bytes)}]
+        name = "115strmtool-backup-20261018-035000.zip"
+        fake.files[f"bk/{name}"] = _build_zip({"config.json": config_bytes}, manifest_members)
+        before = (conf.read_bytes(), (tmp / "config.key").read_bytes())
+
+        with pytest.raises(ServiceError, match="校验失败"):
+            wb.backup_service.restore_backup(name)
+
+        assert (conf.read_bytes(), (tmp / "config.key").read_bytes()) == before
+
+    def test_restore_rejects_wrong_key_without_changes(self, wired):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        from exceptions import ServiceError
+        result = wb.backup_service.run_backup()
+        (tmp / "config.key").write_bytes(b"x" * 32)
+        before = (conf.read_bytes(), (tmp / "config.key").read_bytes())
+
+        with pytest.raises(ServiceError, match="密钥"):
+            wb.backup_service.restore_backup(result["name"])
+
+        assert (conf.read_bytes(), (tmp / "config.key").read_bytes()) == before
+
+    def test_restore_write_failure_rolls_back_state(self, wired, monkeypatch):
+        wb, conf, backup_dir, tmp, fake, monkeypatch = wired
+        from exceptions import ServiceError
+        state_file = tmp / "checkin_state.json"
+        state_file.write_bytes(b'{"last_done_date": "2026-10-18"}')
+        result = wb.backup_service.run_backup()
+        state_file.write_bytes(b'{"last_done_date": "2026-10-27"}')
+        before = (conf.read_bytes(), (tmp / "config.key").read_bytes(), state_file.read_bytes())
+        original = wb.BackupService._atomic_write_bytes
+
+        def flaky_write(path, data):
+            if path == state_file:
+                raise OSError("simulated state write failure")
+            original(path, data)
+
+        monkeypatch.setattr(wb.BackupService, "_atomic_write_bytes", staticmethod(flaky_write))
+        with pytest.raises(ServiceError, match="还原"):
+            wb.backup_service.restore_backup(result["name"])
+
+        assert (conf.read_bytes(), (tmp / "config.key").read_bytes(), state_file.read_bytes()) == before
+
+    def test_guard_cleanup_failure_does_not_fail_restore(self, wired, monkeypatch):
+        wb, conf, backup_dir, tmp, fake, _ = wired
+        result = wb.backup_service.run_backup()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(6):
+            (backup_dir / f"restore-guard-20261018-00000{index}.json").write_bytes(b"{}")
+        original_unlink = type(conf).unlink
+
+        def flaky_unlink(path, *args, **kwargs):
+            if path.name.startswith("restore-guard-"):
+                raise OSError("simulated cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(type(conf), "unlink", flaky_unlink)
+
+        restored = wb.backup_service.restore_backup(result["name"])
+
+        assert restored["ok"] is True
 
     def test_restore_verify_failure_keeps_current(self, wired):
         wb, conf, backup_dir, tmp, fake, _ = wired

@@ -64,12 +64,20 @@ class TestSelectDirectory:
             ):
                 result = api_routes._select_directory_sync()
                 assert result == "", "卡死时应超时返回空串，触发前端手动输入兜底"
-                # 超时路径会遗留仍在运行的 daemon worker，须在桩模块还原前收口，
-                # 否则解释器 finalize 时撞上仍持有桩的线程（CPython 3.14 下会段错误）
                 unblock.set()
-                for t in threading.enumerate():
-                    if t.name == "select-directory":
-                        t.join(5)
+                tk.filedialog.askdirectory = MagicMock(return_value="D:/next")
+                assert api_routes._select_directory_sync() == "D:/next"
+
+    def test_reuses_single_worker(self, api_routes):
+        tk, _ = _fake_tkinter(askdirectory=MagicMock(return_value="D:/movies"))
+        with patch.dict(
+            sys.modules, {"tkinter": tk, "tkinter.filedialog": tk.filedialog}
+        ):
+            assert api_routes._select_directory_sync() == "D:/movies"
+            assert api_routes._select_directory_sync() == "D:/movies"
+        workers = [t for t in threading.enumerate() if t.name == "select-directory"]
+        assert len(workers) == 1
+        assert workers[0].is_alive()
 
     def test_tkinter_failure_returns_empty(self, api_routes):
         broken_tk = MagicMock()

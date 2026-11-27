@@ -95,7 +95,10 @@ def test_ensure_folder_root_returns_zero():
 
 def test_copy_pickcode_returns_copy_pc():
     wrapper = _bare_wrapper()
-    wrapper._client.fs_files.return_value = {"data": [{"pc": COPY_PC}]}
+    wrapper._client.fs_files.side_effect = [
+        {"data": []},
+        {"data": [{"pc": COPY_PC}]},
+    ]
     result = wrapper.copy_pickcode("a" * 17, 555)
     assert result == COPY_PC
     wrapper._client.fs_copy.assert_called_once()

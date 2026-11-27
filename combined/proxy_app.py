@@ -8,14 +8,15 @@ from asyncio import (
     gather,
     sleep,
     wait,
+    wait_for,
 )
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from ipaddress import ip_address
 from re import IGNORECASE, compile as re_compile, search as re_search, sub as re_sub
-from time import monotonic
+from time import monotonic, time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse, urlsplit
 
 from utils import (
     AsyncKeyLock,
@@ -78,6 +79,20 @@ STREAM_RESUME_MAX = 3
 STREAM_RESUME_TOTAL_MAX = 16
 STREAM_RESUME_BUDGET_SECONDS = 8.0
 STREAM_RESUME_BACKOFF_SECONDS = (0.3, 1.0, 2.0)
+STREAM_HEADER_TIMEOUT_SECONDS = 10.0
+STREAM_ERROR_BODY_MAX_BYTES = 4096
+STREAM_ERROR_BODY_TIMEOUT_SECONDS = 1.0
+MEDIA_UPSTREAM_REQUEST_HEADERS = frozenset(
+    {
+        "user-agent",
+        "range",
+        "if-range",
+        "if-match",
+        "if-unmodified-since",
+        "if-none-match",
+        "if-modified-since",
+    }
+)
 RESUME_DROP_REQUEST_HEADERS = frozenset(
     {
         "if-range",
@@ -227,25 +242,48 @@ async def _read_request_body_safe(request: Request) -> bytes | None:
         return None
 
 
-def _range_starts_at_zero(range_header: str) -> bool:
+def _parse_single_range(range_header: str) -> Optional[Tuple[int, Optional[int]]]:
     """
-    判断 Range 请求头是否从文件起始字节开始
+    解析单段字节 Range，返回起始偏移与可选的结束偏移
 
-    形如 bytes=0-/bytes=0-1023 的请求语义等价于整段内容，
-    上游返回 200 属于合法行为，不应触发换链重试
+    多段 Range、后缀 Range 与无法确定边界的格式返回 None
 
     :param range_header (str): 原始 Range 请求头
 
-    :return bool: 起始字节为 0 时返回 True，否则返回 False
+    :return Tuple: (起始偏移, 结束偏移)，结束偏移可为 None
     """
     value = range_header.strip()
     if not value.lower().startswith("bytes="):
-        return False
-    spec = value[len("bytes="):].split(",", 1)[0].strip()
-    if not spec:
-        return False
-    start = spec.split("-", 1)[0].strip()
-    return start == "0"
+        return None
+    spec = value[len("bytes=") :].strip()
+    if not spec or "," in spec or spec.count("-") != 1:
+        return None
+    start_text, end_text = (part.strip() for part in spec.split("-", 1))
+    if not start_text.isdigit():
+        return None
+    start = int(start_text)
+    if not end_text:
+        return start, None
+    if not end_text.isdigit():
+        return None
+    end = int(end_text)
+    if end < start:
+        return None
+    return start, end
+
+
+def _range_starts_at_zero(range_header: str) -> bool:
+    """
+    判断 Range 请求头是否从文件起始字节开始且未限定结束边界
+
+    形如 bytes=0- 的请求语义等价于整段内容，上游返回 200 属于合法行为
+
+    :param range_header (str): 原始 Range 请求头
+
+    :return bool: 起始字节为 0 且结束边界开放时返回 True
+    """
+    parsed = _parse_single_range(range_header)
+    return parsed is not None and parsed[0] == 0 and parsed[1] is None
 
 
 def _range_start_offset(range_header: str) -> int:
@@ -260,16 +298,8 @@ def _range_start_offset(range_header: str) -> int:
 
     :return int: 起始字节偏移，无法确定时为 0
     """
-    value = range_header.strip()
-    if not value.lower().startswith("bytes="):
-        return 0
-    spec = value[len("bytes="):].split(",", 1)[0].strip()
-    if not spec:
-        return 0
-    start = spec.split("-", 1)[0].strip()
-    if not start.isdigit():
-        return 0
-    return int(start)
+    parsed = _parse_single_range(range_header)
+    return parsed[0] if parsed is not None else 0
 
 
 def _content_range_start(content_range: str) -> int | None:
@@ -288,15 +318,19 @@ def _content_range_start(content_range: str) -> int | None:
     return int(match.group(1))
 
 
-def _build_resume_headers(headers: dict[str, str], start: int) -> dict[str, str]:
+def _build_resume_headers(
+    headers: dict[str, str], start: int, end: Optional[int] = None
+) -> dict[str, str]:
     """
     基于原转发头构建半身后断续传用的请求头
 
-    Range 改写为从断点偏移开放到底；条件类请求头描述的是已失效的旧链路条件，
-    保留会让 CDN 判成整段 200 或 412 从而中断续传，必须剥离
+    Range 改写为从断点偏移开始，并在原请求存在结束边界时保留该边界；
+    条件类请求头描述的是已失效的旧链路条件，保留会让 CDN 判成整段 200
+    或 412 从而中断续传，必须剥离
 
     :param headers (Dict): 原始转发请求头
     :param start (int): 续传起始字节偏移
+    :param end (int): 原请求的结束字节偏移，可为 None
 
     :return Dict: 改写 Range 并剥离条件头后的请求头
     """
@@ -305,7 +339,8 @@ def _build_resume_headers(headers: dict[str, str], start: int) -> dict[str, str]
         for k, v in headers.items()
         if k.lower() != "range" and k.lower() not in RESUME_DROP_REQUEST_HEADERS
     }
-    resumed["range"] = f"bytes={start}-"
+    range_value = f"bytes={start}-" if end is None else f"bytes={start}-{end}"
+    resumed["range"] = range_value
     return resumed
 
 
@@ -381,7 +416,7 @@ def _extract_rate_limit_code(resp: HttpxResponse) -> Optional[str]:
     兼容 error 为空只给编号、errno/errNo/error_code 大小写变体的兜底；
     非 JSON 或无可识别码时返回 None
 
-    :param resp: 上游 httpx 响应
+    :param resp (HttpxResponse): 上游 httpx 响应
     :return: 限频码字符串，或 None
     """
     try:
@@ -389,6 +424,42 @@ def _extract_rate_limit_code(resp: HttpxResponse) -> Optional[str]:
     except Exception:
         return None
     return _extract_rate_limit_code_from_dict(body)
+
+
+async def _read_error_body_limited(
+    resp: HttpxResponse,
+    limit: int = STREAM_ERROR_BODY_MAX_BYTES,
+    timeout: float = STREAM_ERROR_BODY_TIMEOUT_SECONDS,
+) -> bytes:
+    """
+    限时、限量读取上游错误正文，避免异常响应拖垮媒体代理
+
+    :param resp (HttpxResponse): 上游流式响应
+    :param limit (int): 最大读取字节数
+    :param timeout (float): 读取超时秒数
+    :return bytes: 已读取的错误正文片段
+    """
+    chunks: List[bytes] = []
+    total = 0
+
+    async def _read() -> None:
+        nonlocal total
+        async for chunk in resp.aiter_bytes(chunk_size=1024):
+            remaining = limit - total
+            if remaining <= 0:
+                break
+            chunk = chunk[:remaining]
+            if chunk:
+                chunks.append(chunk)
+                total += len(chunk)
+            if total >= limit:
+                break
+
+    try:
+        await wait_for(_read(), timeout=timeout)
+    except Exception:
+        pass
+    return b"".join(chunks)
 
 
 def _filter_response_headers(
@@ -579,6 +650,48 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
         if k.lower() not in HOP_BY_HOP_HEADERS
         and k.lower() not in ("host", "content-length")
     }
+
+
+def _build_media_upstream_headers(request: Request) -> dict[str, str]:
+    """
+    构建发往跳转服务与 CDN 的安全请求头，仅保留媒体协商所需字段
+
+    :param request: 当前请求
+    :return: 不含 Emby 认证、Cookie 与设备凭据的请求头字典
+    """
+    return {
+        k: v
+        for k, v in _build_forward_headers(request).items()
+        if k.lower() in MEDIA_UPSTREAM_REQUEST_HEADERS
+    }
+
+
+def _api_key_hash(api_key: str | None) -> str:
+    """
+    生成 Emby 查询令牌的稳定摘要，用于隔离缓存会话
+
+    :param api_key: Emby API Key，可为 None
+    :return: 十六进制摘要字符串
+    """
+    return sha256((api_key or "").encode("utf-8")).hexdigest()
+
+
+def _media_url_cache_ttl(url: str, default_ttl: float) -> float:
+    """
+    按 CDN 直链实际有效期裁剪缓存时间
+
+    :param url: CDN 直链
+    :param default_ttl: 直链缺少有效过期时间时使用的缓存时间
+    :return: 不大于默认值的剩余安全缓存秒数
+    """
+    try:
+        values = parse_qs(urlsplit(url).query).get("t", [])
+        expires_at = int(values[0]) if values else 0
+    except (TypeError, ValueError):
+        return default_ttl
+    if expires_at <= 0:
+        return default_ttl
+    return max(0.0, min(default_ttl, expires_at - int(time()) - 300))
 
 
 def _real_client_ip(request: Request) -> str:
@@ -875,7 +988,6 @@ def create_app(
         client: AsyncClient,
         url: str,
         headers: dict[str, str],
-        user_id: str | None = None,
     ) -> Tuple[str, bool]:
         """
         通过单次 HEAD 请求跟随 115 跳转，返回 CDN 直链
@@ -887,12 +999,9 @@ def create_app(
         :param client: httpx 客户端（建议 follow_redirects=False）
         :param url: 起始 URL
         :param headers: 请求头
-        :param user_id: Emby 用户 ID，可为 None
 
         :return Tuple: (最终 URL，是否成功解析)；失败时返回原始 url 并标记未解析
         """
-        if user_id:
-            headers = {**headers, "X-Emby-UserId": user_id}
         max_attempts = len(REDIRECT_RESOLVE_TIMEOUTS)
         for attempt, (connect_timeout, read_timeout) in enumerate(
             REDIRECT_RESOLVE_TIMEOUTS, 1
@@ -910,7 +1019,7 @@ def create_app(
                         return urljoin(str(resp.url), location), True
                     logger.warning(
                         "重定向响应缺少 Location 头 url=%s status=%s",
-                        url, resp.status_code,
+                        describe_media_url(url), resp.status_code,
                     )
                     return url, False
                 if resp.status_code >= 400:
@@ -921,14 +1030,14 @@ def create_app(
                 if attempt >= max_attempts:
                     logger.warning(
                         "解析重定向超时，使用原始 URL: %s (%s)",
-                        url,
+                        describe_media_url(url),
                         type(e).__name__,
                         exc_info=True,
                     )
                     return url, False
                 logger.info(
                     "解析重定向超时，准备重试: url=%s, attempt=%s/%s, connect=%ss, read=%ss, error=%s",
-                    url,
+                    describe_media_url(url),
                     attempt,
                     max_attempts,
                     connect_timeout,
@@ -936,7 +1045,11 @@ def create_app(
                     type(e).__name__,
                 )
             except Exception:
-                logger.warning("解析重定向失败，使用原始 URL: %s", url, exc_info=True)
+                logger.warning(
+                    "解析重定向失败，使用原始 URL: %s",
+                    describe_media_url(url),
+                    exc_info=True,
+                )
                 return url, False
         return url, False
 
@@ -993,7 +1106,13 @@ def create_app(
 
         # 第零级：播放会话级源地址缓存 — 同一播放会话内复用已解析直链，
         # 避免每次 Range/续传请求都重新查 Emby PlaybackInfo 与 115 重定向
-        session_key = (item_id, media_source_id, user_id or "")
+        session_key = (
+            item_id,
+            media_source_id,
+            user_id or "",
+            _header_hash(request),
+            _api_key_hash(api_key),
+        )
         session_cache = request.app.state.playback_session_cache
         async with session_cache.lock:
             session_entry = session_cache.get(session_key)
@@ -1004,7 +1123,7 @@ def create_app(
                 session_url, session_resolved = session_entry, True
             logger.debug(
                 "播放会话缓存命中: item_id=%s -> %s (resolved=%s)",
-                item_id, session_url, session_resolved,
+                item_id, describe_media_url(session_url), session_resolved,
             )
             return session_url, session_resolved
 
@@ -1013,6 +1132,7 @@ def create_app(
             media_source_id,
             user_id or "",
             _header_hash(request),
+            _api_key_hash(api_key),
         )
         cache = request.app.state.playback_url_cache
         key_lock = request.app.state.playback_url_key_lock
@@ -1033,7 +1153,7 @@ def create_app(
                         cached_url, cached_resolved = cached_entry, True
                     logger.debug(
                         "媒体地址缓存命中: item_id=%s -> %s (resolved=%s)",
-                        item_id, cached_url, cached_resolved,
+                        item_id, describe_media_url(cached_url), cached_resolved,
                     )
                     return cached_url, cached_resolved
 
@@ -1071,10 +1191,10 @@ def create_app(
                 async with strm_cache.lock:
                     sources_map = strm_cache.get(item_id)
                 if sources_map:
-                    if media_source_id and media_source_id in sources_map:
-                        http_path = sources_map[media_source_id]
+                    if media_source_id:
+                        http_path = sources_map.get(media_source_id)
                     else:
-                        http_path = next(iter(sources_map.values()))
+                        http_path = next(iter(sources_map.values()), None)
                     if http_path:
                         logger.debug("使用 STRM 源缓存: item_id=%s", item_id)
 
@@ -1095,7 +1215,7 @@ def create_app(
             # 解析重定向链：STRM 中的跳转 URL -> 115 CDN 直链
             # 使用 follow_redirects=False 避免实际请求 CDN
             client_no_follow = request.app.state.http_client_no_follow
-            fwd_headers = _build_forward_headers(request)
+            fwd_headers = _build_media_upstream_headers(request)
             # 换链/续传场景强制重新签发：否则 302 服务仍返回缓存里的旧地址，
             # 表现为连续 403「换新链」却始终换不到新链
             resolve_url = (
@@ -1104,22 +1224,35 @@ def create_app(
                 else http_path
             )
             final_url, resolved = await _resolve_redirect(
-                client_no_follow, resolve_url, fwd_headers, user_id
+                client_no_follow, resolve_url, fwd_headers
             )
 
             # 解析成功回写默认 TTL；解析失败在常规路径只做 5 秒短缓存
             # 避免坏 URL 长期驻留，换新链场景则不写回以免覆盖正常缓存
             async with cache.lock:
                 if resolved:
-                    cache.put(cache_key, (final_url, True), ttl=None)
+                    cache_ttl = _media_url_cache_ttl(
+                        final_url, PLAYBACK_URL_CACHE_TTL_SECONDS
+                    )
+                    if cache_ttl > 0:
+                        cache.put(cache_key, (final_url, True), ttl=cache_ttl)
                 elif not skip_final_url_cache:
                     cache.put(cache_key, (final_url, False), ttl=5)
 
-            logger.debug("媒体地址已解析: item_id=%s -> %s", item_id, final_url)
-            # 回写播放会话缓存，供同一会话内后续 Range/续传请求复用
+            logger.debug(
+                "媒体地址已解析: item_id=%s -> %s",
+                item_id,
+                describe_media_url(final_url),
+            )
             if resolved:
-                async with session_cache.lock:
-                    session_cache.put(session_key, (final_url, True), ttl=None)
+                session_ttl = _media_url_cache_ttl(
+                    final_url, PLAYBACK_SESSION_CACHE_TTL_SECONDS
+                )
+                if session_ttl > 0:
+                    async with session_cache.lock:
+                        session_cache.put(
+                            session_key, (final_url, True), ttl=session_ttl
+                        )
             return final_url, resolved
 
     async def _proxy_stream(
@@ -1137,6 +1270,8 @@ def create_app(
         （播放端暂停期间 CDN 空闲关链、直链时长到点等）由 stream() 在同一响应内
         按已交付字节换新链续传，受 STREAM_RESUME_* 常量约束；续传未成功时
         就此收尾响应体并记日志，由播放端按截断自行重新发起 Range 请求
+        单段有界 Range 续传保留原结束边界；多段、后缀与 multipart 响应
+        不进行响应内续传，读流中断时安全结束
 
         :param request (Request): 当前请求
         :param item_id (str): 媒体项 ID
@@ -1146,8 +1281,11 @@ def create_app(
         :return Response: 流式回传响应（白名单响应头）；重连耗尽返回 502 JSON
         """
         start = monotonic()
-        fwd_headers = _strip_accept_encoding(_build_forward_headers(request))
+        fwd_headers = _strip_accept_encoding(_build_media_upstream_headers(request))
         req_range = request.headers.get("range")
+        range_spec = _parse_single_range(req_range) if req_range is not None else None
+        range_end: Optional[int] = None
+        resume_allowed = req_range is None or range_spec is not None
         method = request.method
         client = request.app.state.http_client_no_follow
         api_key = extract_api_key(request)
@@ -1172,7 +1310,6 @@ def create_app(
                     last_error = "retry budget exceeded"
                     break
                 await sleep(backoff)
-                # 解析链异常不应拖垮整个请求
                 try:
                     new_url, cur_resolved = await _resolve_media_target(
                         item_id, api_key, request, skip_final_url_cache=True
@@ -1184,7 +1321,6 @@ def create_app(
                         item_id, attempt, exc_info=True
                     )
                     continue
-                # 换链解析耗时计入预算
                 if monotonic() - start >= STREAM_RETRY_BUDGET_SECONDS:
                     if new_url is not None:
                         cur_url = new_url
@@ -1212,11 +1348,17 @@ def create_app(
                     describe_headers(fwd_headers),
                 )
             try:
-                upstream = await client.send(
-                    client.build_request(
-                        method=method, url=cur_url, headers=fwd_headers
+                upstream = await wait_for(
+                    client.send(
+                        client.build_request(
+                            method=method, url=cur_url, headers=fwd_headers
+                        ),
+                        stream=True,
                     ),
-                    stream=True,
+                    timeout=min(
+                        STREAM_HEADER_TIMEOUT_SECONDS,
+                        STREAM_RETRY_BUDGET_SECONDS,
+                    ),
                 )
             except Exception:
                 last_error = "upstream connect error"
@@ -1227,8 +1369,10 @@ def create_app(
                 continue
 
             status = upstream.status_code
-            # 带 Range 得 200：可能是 CDN 返回整段内容（如回退到开头的 bytes=0-）
-            # 设计约定重试后仍 200 则原样转发，避免误判为不可用而返回 502
+            if (upstream.headers.get("content-type") or "").lower().startswith(
+                "multipart/"
+            ):
+                resume_allowed = False
             range_ignored = (
                 req_range is not None
                 and status == 200
@@ -1238,52 +1382,61 @@ def create_app(
             retryable = (
                 status in (403, 404)
                 or status >= 500
-                or 300 <= status < 400
+                or (300 <= status < 400 and status != 304)
                 or range_ignored
             )
             if retryable:
                 last_error = f"upstream status {status}"
-                # 响应体只能 read 一次：先取限频码，再供诊断日志使用
-                body_bytes = b""
                 try:
-                    body_bytes = await upstream.aread()
-                except Exception:
                     body_bytes = b""
-                body_text = (
-                    body_bytes.decode("utf-8", "replace")[:200]
-                    .replace("\r", " ")
-                    .replace("\n", " ")
-                )
-                rate_code = None
-                if body_bytes:
-                    try:
-                        rate_code = _extract_rate_limit_code_from_dict(
-                            json.loads(body_bytes)
+                    if status != 200:
+                        body_bytes = await _read_error_body_limited(
+                            upstream,
+                            limit=STREAM_ERROR_BODY_MAX_BYTES,
+                            timeout=STREAM_ERROR_BODY_TIMEOUT_SECONDS,
                         )
-                    except Exception:
-                        rate_code = None
-                if rate_code:
-                    rate_limited = True
-                    logger.warning(
-                        "流代理命中 115 限频码: item_id=%s attempt=%s status=%s code=%s url=%s",
-                        item_id, attempt, status, rate_code,
-                        describe_media_url(cur_url),
+                    body_text = (
+                        body_bytes.decode("utf-8", "replace")[:200]
+                        .replace("\r", " ")
+                        .replace("\n", " ")
                     )
-                if status in (403, 404) or status >= 500:
-                    if media_diag_enabled():
+                    rate_code = None
+                    if body_bytes:
+                        try:
+                            rate_code = _extract_rate_limit_code_from_dict(
+                                json.loads(body_bytes)
+                            )
+                        except Exception:
+                            rate_code = None
+                    if rate_code:
+                        rate_limited = True
                         logger.warning(
-                            "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
-                            item_id, attempt, status, describe_media_url(cur_url),
-                            (fwd_headers.get("user-agent") or "")[:80],
-                            "refresh=" in cur_url, body_text,
+                            "流代理命中 115 限频码: item_id=%s attempt=%s status=%s code=%s url=%s",
+                            item_id, attempt, status, rate_code,
+                            describe_media_url(cur_url),
                         )
-                await upstream.aclose()
+                    if status in (403, 404) or status >= 500:
+                        if media_diag_enabled():
+                            logger.warning(
+                                "流代理拒绝诊断: item_id=%s attempt=%s status=%s url=%s ua=%s refresh=%s body=%s",
+                                item_id, attempt, status, describe_media_url(cur_url),
+                                (fwd_headers.get("user-agent") or "")[:80],
+                                "refresh=" in cur_url, body_text,
+                            )
+                finally:
+                    await upstream.aclose()
                 logger.info(
                     "流代理上游不可用，准备换新链重试: item_id=%s attempt=%s status=%s",
                     item_id, attempt, status,
                 )
                 continue
 
+            if status == 304:
+                pairs = _filter_response_headers(
+                    upstream, drop=("content-encoding", "content-length")
+                )
+                await upstream.aclose()
+                return _with_raw_headers(Response(status_code=304), pairs)
             pairs = [
                 (k, v)
                 for k, v in upstream.headers.items()
@@ -1293,13 +1446,40 @@ def create_app(
                 await upstream.aclose()
                 return _with_raw_headers(Response(status_code=status), pairs)
 
-            # 断点偏移的绝对基准：Range 请求以首个响应的 Content-Range 为准
-            # （后缀区间 bytes=-N 无法从请求头取起点），无 Range 的整段请求从 0 计
-            first_start = _content_range_start(upstream.headers.get("content-range", ""))
-            if first_start is None:
-                first_start = _range_start_offset(req_range) if req_range else 0
+            content_range_start = (
+                _content_range_start(upstream.headers.get("content-range", ""))
+                if status == 206
+                else None
+            )
+            if content_range_start is not None:
+                first_start = content_range_start
+                range_end = range_spec[1] if range_spec is not None else None
+            else:
+                first_start = 0
+                range_end = None
+                if status == 206:
+                    resume_allowed = False
+            if (
+                status == 206
+                and content_range_start is not None
+                and range_end is not None
+                and first_start <= range_end
+            ):
+                max_body = range_end - first_start + 1
+                capped_pairs = []
+                for key, value in pairs:
+                    if key.lower() == "content-length":
+                        try:
+                            if int(value) > max_body:
+                                value = str(max_body)
+                        except ValueError:
+                            pass
+                    capped_pairs.append((key, value))
+                pairs = capped_pairs
 
-            async def resume_segment(next_offset: int) -> HttpxResponse | None:
+            async def resume_segment(
+                next_offset: int, end_offset: Optional[int]
+            ) -> HttpxResponse | None:
                 """
                 半身后断后换新直链，按断点偏移重新取一段可续传的流
 
@@ -1310,6 +1490,7 @@ def create_app(
                 避免向播放端重复喂已交付过的字节
 
                 :param next_offset (int): 播放端期望的下一个绝对字节偏移
+                :param end_offset (int): 原请求的结束字节偏移，可为 None
 
                 :return HttpxResponse: 可续传的流式响应，放弃时为 None
                 """
@@ -1344,7 +1525,9 @@ def create_app(
                             item_id, resume_attempt,
                         )
                         continue
-                    resume_headers = _build_resume_headers(fwd_headers, next_offset)
+                    resume_headers = _build_resume_headers(
+                        fwd_headers, next_offset, end_offset
+                    )
                     if media_diag_enabled():
                         logger.info(
                             "流代理续传外发请求头诊断: item_id=%s attempt=%s next=%s headers=%s",
@@ -1352,13 +1535,19 @@ def create_app(
                             describe_headers(resume_headers),
                         )
                     try:
-                        seg = await client.send(
-                            client.build_request(
-                                method="GET",
-                                url=resume_url,
-                                headers=resume_headers,
+                        seg = await wait_for(
+                            client.send(
+                                client.build_request(
+                                    method="GET",
+                                    url=resume_url,
+                                    headers=resume_headers,
+                                ),
+                                stream=True,
                             ),
-                            stream=True,
+                            timeout=min(
+                                STREAM_HEADER_TIMEOUT_SECONDS,
+                                STREAM_RESUME_BUDGET_SECONDS,
+                            ),
                         )
                     except Exception:
                         last_reason = "upstream connect error"
@@ -1386,9 +1575,6 @@ def create_app(
                                 (fwd_headers.get("user-agent") or "")[:80],
                                 "refresh=" in resume_url, next_offset,
                             )
-                    # 200 整段与偏移错位的 206 说明 CDN 给不出断点之后的字节，再试只会
-                    # 更早重复喂给播放端已交付过的内容；其余状态码（直链过期 403 等）
-                    # 属于新链可能修好的场景，按预算继续换新链
                     give_up = seg.status_code in (200, 206)
                     await seg.aclose()
                     if give_up:
@@ -1414,9 +1600,16 @@ def create_app(
                 while True:
                     try:
                         async for chunk in seg.aiter_bytes(chunk_size=65536):
+                            if range_end is not None:
+                                remaining = range_end - seg_next + 1
+                                if remaining <= 0:
+                                    return
+                                chunk = chunk[:remaining]
                             if chunk:
                                 seg_next += len(chunk)
-                            yield chunk
+                                yield chunk
+                            if range_end is not None and seg_next > range_end:
+                                return
                         return
                     except Exception:
                         logger.error(
@@ -1426,15 +1619,19 @@ def create_app(
                     finally:
                         await seg.aclose()
 
-                    # 走到这里说明读流已抛异常（取消与客户端断开属 BaseException，
-                    # 经 finally 关闭上游后原样上抛），只能在同一响应内续传
+                    if not resume_allowed:
+                        logger.warning(
+                            "流代理当前 Range 不支持响应内续传，安全结束: item_id=%s next=%s",
+                            item_id, seg_next,
+                        )
+                        return
                     if resumed >= STREAM_RESUME_TOTAL_MAX:
                         logger.error(
                             "流代理续传总次数越限，中断回传: item_id=%s resumed=%s",
                             item_id, resumed,
                         )
                         return
-                    seg = await resume_segment(seg_next)
+                    seg = await resume_segment(seg_next, range_end)
                     if seg is None:
                         logger.error(
                             "流代理续传未成功，中断回传: item_id=%s next=%s",
@@ -1482,7 +1679,11 @@ def create_app(
         if final_url is None or not resolved:
             return None
 
-        logger.debug("302 直链: item_id=%s -> %s", item_id, final_url)
+        logger.debug(
+            "302 直链: item_id=%s -> %s",
+            item_id,
+            describe_media_url(final_url),
+        )
         return _build_302_redirect(final_url)
 
     for route in MEDIA_ROUTES:
@@ -1592,7 +1793,10 @@ def create_app(
         except Exception as e:
             err_msg = str(e) or type(e).__name__
             logger.warning(
-                "System/Info 请求失败: %s — %s", target_url, err_msg, exc_info=True
+                "System/Info 请求失败: %s — %s",
+                describe_media_url(target_url),
+                err_msg,
+                exc_info=True,
             )
             return JSONResponse(
                 status_code=502,
@@ -1605,7 +1809,7 @@ def create_app(
             logger.warning(
                 "System/Info 后端返回非 200: status=%s, url=%s",
                 resp.status_code,
-                target_url,
+                describe_media_url(target_url),
             )
             return JSONResponse(
                 status_code=502,
@@ -1617,7 +1821,7 @@ def create_app(
         try:
             body = resp.json()
         except Exception:
-            logger.warning("System/Info 响应非 JSON: %s", target_url, exc_info=True)
+            logger.warning("System/Info 响应非 JSON: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(
                 status_code=502,
                 content={
@@ -1699,7 +1903,7 @@ def create_app(
                     timeout=60.0,
                 )
             except Exception:
-                logger.warning("PlaybackInfo HEAD 失败: %s", target_url, exc_info=True)
+                logger.warning("PlaybackInfo HEAD 失败: %s", describe_media_url(target_url), exc_info=True)
                 return JSONResponse(
                     status_code=502,
                     content={"error": "Bad Gateway"},
@@ -1718,7 +1922,7 @@ def create_app(
                 timeout=120.0,
             )
         except Exception:
-            logger.warning("PlaybackInfo 请求失败: %s", target_url, exc_info=True)
+            logger.warning("PlaybackInfo 请求失败: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(
                 status_code=502,
                 content={
@@ -1736,7 +1940,7 @@ def create_app(
         try:
             data = resp.json()
         except Exception:
-            logger.warning("PlaybackInfo 响应非 JSON: %s", target_url, exc_info=True)
+            logger.warning("PlaybackInfo 响应非 JSON: %s", describe_media_url(target_url), exc_info=True)
             return _with_raw_headers(
                 Response(content=resp.content, status_code=resp.status_code),
                 _resp_headers_from_httpx(resp),
@@ -1772,7 +1976,7 @@ def create_app(
                 strm_cache.put(item_id, strm_sources)
 
         if playback_mode_enum is PlaybackMode.REDIRECT:
-            fwd_headers = _build_forward_headers(request)
+            fwd_headers = _build_media_upstream_headers(request)
             client_no_follow = request.app.state.http_client_no_follow
             for ms in data.get("MediaSources", []):
                 if not isinstance(ms, dict):
@@ -1858,7 +2062,7 @@ def create_app(
                 timeout=120.0,
             )
         except Exception:
-            logger.warning("无法连接到 Emby: %s", target_url, exc_info=True)
+            logger.warning("无法连接到 Emby: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(
                 status_code=502,
                 content={
@@ -1935,7 +2139,7 @@ def create_app(
             )
             resp = await client.send(req, stream=True)
         except Exception:
-            logger.warning("无法连接到 Emby: %s", target_url, exc_info=True)
+            logger.warning("无法连接到 Emby: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(
                 status_code=502,
                 content={
@@ -1957,7 +2161,7 @@ def create_app(
                 async for chunk in resp.aiter_bytes(chunk_size=65536):
                     yield chunk
             except Exception:
-                logger.error("转发流中断: %s", target_url, exc_info=True)
+                logger.error("转发流中断: %s", describe_media_url(target_url), exc_info=True)
                 raise
             finally:
                 await resp.aclose()
@@ -2002,7 +2206,7 @@ def create_app(
         try:
             resp = await client.get(target_url, headers=headers, timeout=15)
         except Exception:
-            logger.warning("获取 basehtmlplayer.js 失败: %s", target_url, exc_info=True)
+            logger.warning("获取 basehtmlplayer.js 失败: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(status_code=502, content={"error": "Bad Gateway"})
 
         if resp.status_code != 200:
@@ -2056,7 +2260,7 @@ def create_app(
         try:
             resp = await client.get(target_url, headers=headers, timeout=15)
         except Exception:
-            logger.warning("获取 plugin.js 失败: %s", target_url, exc_info=True)
+            logger.warning("获取 plugin.js 失败: %s", describe_media_url(target_url), exc_info=True)
             return JSONResponse(status_code=502, content={"error": "Bad Gateway"})
 
         # 非 200 响应原样透传（错误页/重定向），避免把错误内容当 JS 修补
@@ -2131,7 +2335,7 @@ def create_app(
                     timeout=30.0,
                 )
             except Exception:
-                logger.warning("Items 请求失败: %s", target_url, exc_info=True)
+                logger.warning("Items 请求失败: %s", describe_media_url(target_url), exc_info=True)
                 return JSONResponse(
                     status_code=502,
                     content={"error": "Bad Gateway"},
@@ -2171,11 +2375,29 @@ def create_app(
                         item_id,
                     )
 
+            pairs = _filter_response_headers(
+                resp, drop=("content-encoding", "content-length")
+            )
+            drop_validators = RESPONSE_VALIDATOR_HEADERS | {
+                "cache-control",
+                "pragma",
+                "expires",
+            }
+            pairs = [
+                (key, value)
+                for key, value in pairs
+                if key.lower() not in drop_validators
+            ]
+            pairs.extend(
+                [
+                    ("cache-control", "private, no-cache, no-store, must-revalidate"),
+                    ("pragma", "no-cache"),
+                    ("expires", "0"),
+                ]
+            )
             return _with_raw_headers(
                 JSONResponse(content=data, status_code=200),
-                _filter_response_headers(
-                    resp, drop=("content-encoding", "content-length")
-                ),
+                pairs,
             )
 
         for _items_path in (
@@ -2210,7 +2432,10 @@ def create_app(
                 logger.warning("无效的 redirect2external link 参数")
                 return RedirectResponse(url="/", status_code=302)
             if not is_safe_redirect_target(decoded, request.url.netloc):
-                logger.warning("redirect2external 目标不在允许列表: %.120s", decoded)
+                logger.warning(
+                    "redirect2external 目标不在允许列表: %s",
+                    describe_media_url(decoded),
+                )
                 return RedirectResponse(url="/", status_code=302)
             return RedirectResponse(url=decoded, status_code=302)
 

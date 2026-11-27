@@ -34,6 +34,7 @@ class RedirectService:
         self._same_playback_dir_override = same_playback_dir
         self._copy_dir_pids: Dict[str, int] = {}
         self._pending_cleanup: Set[str] = set()
+        self._inflight_uas: Dict[str, Dict[str, int]] = {}
 
     def _get_same_playback(self) -> Tuple[bool, str]:
         """
@@ -172,6 +173,33 @@ class RedirectService:
                 content={"code": -1, "msg": "Missing or invalid pickcode", "data": None},
             )
 
+        ua_key = self._ua_hash(user_agent)
+        inflight = self._inflight_uas.setdefault(pickcode, {})
+        concurrent_other_ua = any(
+            key != ua_key and count > 0 for key, count in inflight.items()
+        )
+        inflight[ua_key] = inflight.get(ua_key, 0) + 1
+        try:
+            return await self._do_redirect_registered(
+                pickcode, request, client_ip, user_agent, concurrent_other_ua
+            )
+        finally:
+            remaining = inflight.get(ua_key, 0) - 1
+            if remaining > 0:
+                inflight[ua_key] = remaining
+            else:
+                inflight.pop(ua_key, None)
+            if not inflight:
+                self._inflight_uas.pop(pickcode, None)
+
+    async def _do_redirect_registered(
+        self,
+        pickcode: str,
+        request: Request,
+        client_ip: str,
+        user_agent: str,
+        concurrent_other_ua: bool,
+    ) -> Response:
         ckey = self._cache_key(pickcode, user_agent)
         # 流代理换链/续传带 refresh=1：直链过期时不能继续复用缓存里的旧地址
         force_refresh = request.query_params.get("refresh") in ("1", "true", "yes")
@@ -200,7 +228,7 @@ class RedirectService:
             if same_playback:
                 async with self._cache.lock:
                     other_ua = self._cache.count_prefix(f"{pickcode}:")
-                if other_ua > 0:
+                if concurrent_other_ua or other_ua > 0:
                     copied = await self._create_copy(pickcode, copy_dir)
                     if copied:
                         post_pickcode = copied

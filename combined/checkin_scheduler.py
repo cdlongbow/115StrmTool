@@ -1,7 +1,7 @@
 from json import dump as json_dump, load as json_load
 from random import uniform
 from re import fullmatch as re_fullmatch
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread, current_thread
 from time import sleep
 from typing import Dict, Optional, Tuple
 import os
@@ -13,6 +13,7 @@ CHECKIN_POLL_INTERVAL = 60
 CHECKIN_DEFAULT_WINDOW = "06:00-09:00"
 CHECKIN_MAX_RETRIES = 3
 CHECKIN_RETRY_DELAY = 3
+CHECKIN_STOP_TIMEOUT = 5.0
 
 # 定时与手动签到共用的非阻塞互斥锁：两个入口都会调用 run_p115_checkin_once，
 # 手动点击恰好撞上自动触发时会并发签到，用同一把锁保证同一时刻只有一个在执行
@@ -70,36 +71,75 @@ def run_p115_checkin_once(client) -> Tuple[bool, str]:
 class CheckinScheduler:
     def __init__(self):
         self._lock = Lock()
+        self._client_lock = RLock()
         self._state: Dict = self._load_state()
         self._client = None
         self._thread: Optional[Thread] = None
         self._running = False
         self._stop_event = Event()
+        self._generation = 0
 
     def set_client(self, client) -> None:
-        self._client = client
+        with self._client_lock:
+            self._client = client
 
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._running = True
-        self._stop_event.clear()
-        self._thread = Thread(target=self._loop, daemon=True)
-        self._thread.start()
+    def start(self) -> bool:
+        """
+        启动签到调度线程，旧线程因停止超时残留时创建新代次
+
+        :return bool: 调度线程已启动或正在运行时返回 True
+        """
+        with self._client_lock:
+            if self._running and self._thread and self._thread.is_alive():
+                return True
+            self._generation += 1
+            generation = self._generation
+            self._running = True
+            self._stop_event = Event()
+            self._thread = Thread(
+                target=self._loop,
+                args=(generation, self._stop_event),
+                daemon=True,
+            )
+            try:
+                self._thread.start()
+            except Exception as exc:
+                self._running = False
+                self._thread = None
+                logger.error("签到调度器启动失败: %s", exc, exc_info=True)
+                return False
         logger.info("签到调度器已启动")
+        return True
 
-    def stop(self) -> None:
-        self._running = False
-        self._stop_event.set()
+    def stop(self) -> bool:
+        """
+        停止签到调度并清空客户端引用
 
-    def _loop(self) -> None:
-        while self._running:
+        :return bool: 线程已退出时返回 True，超时残留时返回 False
+        """
+        with self._client_lock:
+            self._running = False
+            self._stop_event.set()
+            self._client = None
+            thread = self._thread
+        if thread and thread is not current_thread() and thread.is_alive():
+            thread.join(timeout=CHECKIN_STOP_TIMEOUT)
+            if thread.is_alive():
+                logger.warning("签到调度线程在 %ss 超时内未能退出", CHECKIN_STOP_TIMEOUT)
+                return False
+        with self._client_lock:
+            if self._thread is thread:
+                self._thread = None
+        return True
+
+    def _loop(self, generation: int, stop_event: Event) -> None:
+        while self._running and generation == self._generation:
             try:
                 self._tick()
             except Exception:
                 logger.error("签到调度异常", exc_info=True)
             sleep_secs = self._compute_sleep()
-            self._stop_event.wait(timeout=sleep_secs)
+            stop_event.wait(timeout=sleep_secs)
 
     def _compute_sleep(self) -> float:
         next_ts = self._state.get("next_run_ts")
@@ -118,7 +158,11 @@ class CheckinScheduler:
             from config_manager import config_manager
             cfg = config_manager.get().get("checkin", {})
             enabled = cfg.get("enabled", False)
-            if not enabled or not self._client:
+            with self._client_lock:
+                client = self._client
+            if not enabled or client is None:
+                return
+            if hasattr(client, "is_ready") and not client.is_ready():
                 return
 
             from datetime import datetime, timezone, timedelta
@@ -152,7 +196,7 @@ class CheckinScheduler:
                 logger.info("【115 签到】已有签到任务在执行，本次自动触发跳过")
                 return
             try:
-                ok, detail = run_p115_checkin_once(self._client)
+                ok, detail = run_p115_checkin_once(client)
             finally:
                 _CHECKIN_LOCK.release()
             if ok:
@@ -175,13 +219,15 @@ class CheckinScheduler:
 
         :return Tuple: (是否成功, 结果描述)
         """
-        if not self._client:
+        with self._client_lock:
+            client = self._client
+        if client is None or (hasattr(client, "is_ready") and not client.is_ready()):
             return False, "客户端未初始化"
         if not _CHECKIN_LOCK.acquire(blocking=False):
             logger.info("【115 签到】已有签到任务在执行，本次手动触发跳过")
             return False, "签到正在执行，请稍后重试"
         try:
-            ok, detail = run_p115_checkin_once(self._client)
+            ok, detail = run_p115_checkin_once(client)
             from datetime import datetime, timezone, timedelta
             now = datetime.now(timezone(timedelta(hours=8)))
             if ok:
@@ -286,7 +332,11 @@ class CheckinScheduler:
             tmp_path = CHECKIN_STATE_FILE.with_suffix(".json.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json_dump(self._state, f, ensure_ascii=False, indent=2)
+            if os.name != "nt":
+                os.chmod(tmp_path, 0o600)
             os.replace(tmp_path, CHECKIN_STATE_FILE)
+            if os.name != "nt":
+                os.chmod(CHECKIN_STATE_FILE, 0o600)
         except OSError as e:
             logger.error("签到状态保存失败: %s", e)
 
